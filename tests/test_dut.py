@@ -9,6 +9,7 @@ from pmpfuzz.dut import (
     parse_cascade_log,
     parse_chipyard_log,
     parse_spike_log,
+    parse_xiangshan_log,
     _subprocess_output_text,
 )
 
@@ -158,6 +159,21 @@ class DutAdapterTest(unittest.TestCase):
         self.assertIn("12345", command)
         self.assertIn("-i", command)
         self.assertIn("/tmp/case.elf", command)
+
+    def test_xiangshan_log_parser_distinguishes_good_bad_limit_and_no_marker(self):
+        self.assertEqual(parse_xiangshan_log("HIT GOOD TRAP at pc = 0x80000000", returncode=0).status, "pass")
+
+        bad = parse_xiangshan_log("HIT BAD TRAP at pc = 0x80000000", returncode=0)
+        self.assertEqual(bad.status, "fail")
+        self.assertEqual(bad.failure_class, "xiangshan_bad_trap")
+
+        limit = parse_xiangshan_log("EXCEEDING CYCLE/INSTR LIMIT at pc = 0x80000000", returncode=0)
+        self.assertEqual(limit.status, "infra_failure")
+        self.assertEqual(limit.failure_class, "infra_unadapted")
+
+        no_marker = parse_xiangshan_log("Guest cycle spent: 20,001", returncode=0)
+        self.assertEqual(no_marker.status, "infra_failure")
+        self.assertEqual(no_marker.failure_class, "infra_unadapted")
 
     def test_cascade_rocket_command_uses_simlen_and_binary_env(self):
         dut = CascadeRocketDut(binary=Path("/rocket/Vtop_tiny_soc"), simlen=5000)

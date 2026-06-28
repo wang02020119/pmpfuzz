@@ -179,21 +179,19 @@ class SpikeDut:
                 failure_class="timeout",
                 reason="spike timeout",
             )
-        status = "pass" if returncode == 0 else "fail"
-        code = failed_tohost_from_log(stdout)
-        decoded = decode_tohost_payload(code)
+        parsed = parse_spike_log(stdout, returncode or 0)
         return DutRunResult(
             dut=self.name,
-            status=status,
+            status=parsed.status,
             elapsed_seconds=time.monotonic() - start,
             returncode=returncode,
-            observed_code=code,
-            observed_tohost=code,
-            observed_mcause=decoded.observed_mcause if decoded else None,
-            observed_mtval=decoded.observed_mtval if decoded else None,
-            failure_class=classify_log_failure(stdout, returncode or 0, decoded) if status != "pass" else None,
+            observed_code=parsed.observed_code,
+            observed_tohost=parsed.observed_tohost,
+            observed_mcause=parsed.observed_mcause,
+            observed_mtval=parsed.observed_mtval,
+            failure_class=parsed.failure_class,
             log=str(log_path),
-            reason=None if status == "pass" else "spike returned non-zero",
+            reason=parsed.reason,
         )
 
 
@@ -394,6 +392,29 @@ def parse_cascade_log(text: str, returncode: int) -> ParsedDutLog:
     if observed_code == 1:
         return ParsedDutLog("pass", observed_code)
     return ParsedDutLog("fail", observed_code, f"cascade result code {observed_code}")
+
+
+def parse_spike_log(text: str, returncode: int) -> ParsedDutLog:
+    code = failed_tohost_from_log(text)
+    if code is not None:
+        decoded = decode_tohost_payload(code)
+        return ParsedDutLog(
+            "fail",
+            code,
+            "spike reported failed tohost",
+            failure_class=classify_log_failure(text, returncode, decoded),
+            observed_mcause=decoded.observed_mcause if decoded else None,
+            observed_mtval=decoded.observed_mtval if decoded else None,
+            observed_tohost=code,
+        )
+    if returncode != 0:
+        return ParsedDutLog(
+            "fail",
+            None,
+            "spike returned non-zero",
+            failure_class=classify_log_failure(text, returncode),
+        )
+    return ParsedDutLog("pass")
 
 
 def parse_chipyard_log(text: str, returncode: int) -> ParsedDutLog:

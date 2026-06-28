@@ -7,7 +7,7 @@ import os
 import shutil
 import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
@@ -119,6 +119,48 @@ def write_summary(*, config: RunnerConfig, results: list[CampaignResult]) -> Non
             buckets[key] = buckets.get(key, 0) + 1
         for (profile, status, expected_allowed, expected_cause), count in sorted(buckets.items()):
             writer.writerow([profile, status, int(expected_allowed), expected_cause if expected_cause is not None else "", count])
+
+
+def _run_indexed_work_with_budget(
+    indexed_work,
+    run_one,
+    *,
+    max_workers: int,
+    start_time: float,
+    time_budget_seconds: int,
+    time_fn=time.monotonic,
+):
+    results = []
+    work_iter = iter(indexed_work)
+    pending = {}
+
+    def submit_next(executor: ThreadPoolExecutor) -> bool:
+        if time_fn() - start_time >= time_budget_seconds:
+            return False
+        try:
+            index, item = next(work_iter)
+        except StopIteration:
+            return False
+        pending[executor.submit(run_one, index, item)] = (index, item)
+        return True
+
+    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
+        for _ in range(max(1, max_workers)):
+            if not submit_next(executor):
+                break
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                pending.pop(future)
+                results.append(future.result())
+            if time_fn() - start_time >= time_budget_seconds:
+                for future in pending:
+                    future.cancel()
+                break
+            while len(pending) < max(1, max_workers):
+                if not submit_next(executor):
+                    break
+    return results
 
 
 def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
@@ -322,19 +364,15 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
         )
         return result
 
-    results: list[CampaignResult] = []
     make_based_duts = {"rocket", "cva6", "cva6-clean", "rocket-clean", "boom-clean"}
     effective_jobs = 1 if config.dut in make_based_duts else max(1, config.jobs)
-    with ThreadPoolExecutor(max_workers=effective_jobs) as executor:
-        futures = []
-        for index, _scenario in indexed_scenarios:
-            if time.monotonic() - start >= config.time_budget_seconds:
-                break
-            futures.append(executor.submit(run_one, index, _scenario))
-        for future in as_completed(futures):
-            results.append(future.result())
-            if time.monotonic() - start >= config.time_budget_seconds:
-                break
+    results: list[CampaignResult] = _run_indexed_work_with_budget(
+        indexed_scenarios,
+        run_one,
+        max_workers=effective_jobs,
+        start_time=start,
+        time_budget_seconds=config.time_budget_seconds,
+    )
 
     results.sort(key=lambda result: result.name)
     write_summary(config=config, results=results)

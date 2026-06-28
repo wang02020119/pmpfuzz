@@ -163,6 +163,7 @@ class DutAdapterTest(unittest.TestCase):
 
     def test_default_xiangshan_emu_points_to_vanilla_tree(self):
         self.assertIn("/home/dubhe/wjs/xiangshan_vanilla/", DEFAULT_XIANGSHAN_EMU.as_posix())
+        self.assertNotIn("cascade", DEFAULT_XIANGSHAN_EMU.as_posix())
 
     def test_xiangshan_log_parser_distinguishes_good_bad_limit_and_no_marker(self):
         self.assertEqual(parse_xiangshan_log("HIT GOOD TRAP at pc = 0x80000000", returncode=0).status, "pass")

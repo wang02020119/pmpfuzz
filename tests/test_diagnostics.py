@@ -1,0 +1,36 @@
+import unittest
+
+from pmpfuzz.diagnostics import (
+    FailureClass,
+    classify_log_failure,
+    decode_tohost_payload,
+    encode_failure_payload,
+    encode_tohost_failure,
+)
+from pmpfuzz.dut import parse_chipyard_log
+
+
+class DiagnosticsTest(unittest.TestCase):
+    def test_tohost_failure_payload_round_trips_class_mcause_and_mtval(self):
+        payload = encode_failure_payload(FailureClass.WRONG_MCAUSE, mcause=13, mtval=0x80001234)
+        decoded = decode_tohost_payload(payload)
+
+        self.assertEqual(decoded.failure_class, "wrong_mcause")
+        self.assertEqual(decoded.observed_mcause, 13)
+        self.assertEqual(decoded.observed_mtval, 0x80001234)
+
+    def test_chipyard_parser_decodes_engineered_failure_payload(self):
+        raw_tohost = encode_tohost_failure(FailureClass.UNEXPECTED_NO_TRAP, mcause=9, mtval=0x44) >> 1
+        parsed = parse_chipyard_log(f"*** FAILED *** (tohost = {raw_tohost})", returncode=2)
+
+        self.assertEqual(parsed.status, "fail")
+        self.assertEqual(parsed.failure_class, "unexpected_no_trap")
+        self.assertEqual(parsed.observed_mcause, 9)
+        self.assertEqual(parsed.observed_mtval, 0x44)
+
+    def test_log_classifier_detects_pipeline_hang(self):
+        self.assertEqual(classify_log_failure("Assertion failed: Pipeline has hung.", 2), "pipeline_hung")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -25,7 +25,11 @@ class CapabilityModelTest(unittest.TestCase):
 
     def test_capability_schema_records_finish_protocol_and_diagnostic_depth(self):
         spike = capability_for_dut("spike", available=True)
-        xiangshan = capability_for_dut("xiangshan-clean", available=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            emu = Path(tmp) / "emu"
+            emu.write_text("", encoding="ascii")
+            (Path(tmp) / "VSimTop.mk").write_text("CXXFLAGS += -DDIFFTEST\n", encoding="ascii")
+            xiangshan = capability_for_dut("xiangshan-clean", path=emu, available=True)
 
         self.assertEqual(spike["schema_version"], DEFAULT_CAPABILITY_SCHEMA_VERSION)
         self.assertEqual(spike["finish_protocol"], "tohost")
@@ -33,6 +37,28 @@ class CapabilityModelTest(unittest.TestCase):
         self.assertEqual(spike["oracle_applicability"], "valid")
         self.assertEqual(xiangshan["finish_protocol"], "xiangshan-goodtrap")
         self.assertEqual(xiangshan["diagnostic_depth"], "pass_fail_only")
+        self.assertEqual(xiangshan["oracle_applicability"], "valid")
+
+    def test_xiangshan_no_difftest_emu_is_infra_unadapted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            emu = Path(tmp) / "emu"
+            emu.write_text("", encoding="ascii")
+            (Path(tmp) / "VSimTop.mk").write_text("CXXFLAGS += -DCONFIG_NO_DIFFTEST\n", encoding="ascii")
+
+            xiangshan = capability_for_dut("xiangshan-clean", path=emu, available=True)
+
+        self.assertEqual(xiangshan["path"], str(emu))
+        self.assertEqual(xiangshan["oracle_applicability"], "infra_unadapted")
+        self.assertTrue(any("CONFIG_NO_DIFFTEST" in note for note in xiangshan["notes"]))
+
+    def test_xiangshan_difftest_emu_is_valid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            emu = Path(tmp) / "emu"
+            emu.write_text("", encoding="ascii")
+            (Path(tmp) / "VSimTop.mk").write_text("CXXFLAGS += -DDIFFTEST\n", encoding="ascii")
+
+            xiangshan = capability_for_dut("xiangshan-clean", path=emu, available=True)
+
         self.assertEqual(xiangshan["oracle_applicability"], "valid")
 
     def test_case_schema_includes_required_capabilities_and_oracle_applicability(self):

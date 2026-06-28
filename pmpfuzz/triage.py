@@ -95,6 +95,13 @@ def render_markdown_report(run_dir: Path) -> str:
         f"- Profiles: {', '.join(sorted((coverage.get('profiles') or {}).keys())) or 'none'}",
         f"- Coverage tags: {', '.join(sorted((coverage.get('coverage_tags') or {}).keys())) or 'none'}",
         "",
+        "## Stateful Permission Verdict",
+        "",
+        f"- Stateful verdict: `{verdict['verdict']}`",
+        f"- Stateful sequences: {', '.join(sorted((coverage.get('stateful_sequences') or {}).keys())) or 'none'}",
+        f"- Mutations: {', '.join(sorted((coverage.get('stateful_mutations') or {}).keys())) or 'none'}",
+        f"- Fences: {', '.join(sorted((coverage.get('stateful_fences') or {}).keys())) or 'none'}",
+        "",
         "## Status Summary",
         "",
     ]

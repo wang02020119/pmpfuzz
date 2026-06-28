@@ -55,6 +55,7 @@ class PmpScenario:
     pmp_match_mode: str | None = None
     pte_permissions: dict[str, object] = field(default_factory=dict)
     security_focus: str | None = None
+    stateful_sequence: dict[str, object] | None = None
 
 
 class ScenarioGenerator:
@@ -85,6 +86,14 @@ class ScenarioGenerator:
             return self._generate_sv39_ptw_pmp_matrix(index)
         if self.profile == "boom-ptw-pmp-regression":
             return self._generate_boom_ptw_pmp_regression(index)
+        if self.profile == "pmp-side-effect":
+            return self._generate_pmp_side_effect(index)
+        if self.profile == "tlb-stale-pte":
+            return self._generate_tlb_stale_pte(index)
+        if self.profile == "tlb-stale-pmp":
+            return self._generate_tlb_stale_pmp(index)
+        if self.profile == "ptw-stale-pmp":
+            return self._generate_ptw_stale_pmp(index)
         if self.profile == "tlb-fence":
             return self._generate_sv39(index, deny_page_walk=False, sfence_vma=index % 2 == 0)
         if self.profile == "mixed-smepmp-mmu":
@@ -515,6 +524,189 @@ class ScenarioGenerator:
             security_focus=security_focus,
         )
 
+    def _generate_pmp_side_effect(self, index: int) -> PmpScenario:
+        allowed_control = index % 2 == 1
+        privilege = [Privilege.U, Privilege.S][(index // 2) % 2]
+        target = PmpEntry(
+            index=3,
+            address_mode=AddressMode.NAPOT,
+            pmpaddr=PmpEntry.encode_napot(base=TARGET_BASE, size=TARGET_SIZE),
+            read=True,
+            write=allowed_control,
+            execute=False,
+            locked=False,
+        )
+        expected_final = "store_side_effect" if allowed_control else "trap_no_side_effect"
+        return PmpScenario(
+            name=f"scenario_{index:04d}",
+            entries=self._mml_harness_entries() + [target],
+            privilege=privilege,
+            probe=AccessProbe(
+                access=Access.STORE,
+                physical_address=TARGET_BASE,
+                size=4,
+                offset_name="sentinel",
+            ),
+            mprv=False,
+            mpp=Privilege.M,
+            mseccfg=Mseccfg(),
+            profile="pmp-side-effect",
+            coverage_tags=("pmp", "side-effect", privilege.value, "store", expected_final),
+            pmp_match_mode="side-effect-target",
+            security_focus="memory-side-effect",
+            stateful_sequence=self._stateful_sequence(
+                kind="pmp-side-effect",
+                warmup=False,
+                mutation="none",
+                fence="none",
+                expected_final=expected_final,
+                expected_cause=7 if not allowed_control else None,
+                stale_failure_class=None,
+            ),
+        )
+
+    def _generate_tlb_stale_pte(self, index: int) -> PmpScenario:
+        fence = "with-sfence" if index % 2 == 0 else "no-fence-experimental"
+        privilege = [Privilege.U, Privilege.S][(index // 2) % 2]
+        pte = PageTableEntry(read=True, write=False, execute=False, user=privilege == Privilege.U, accessed=True, dirty=False)
+        return self._generate_stateful_sv39(
+            index=index,
+            profile="tlb-stale-pte",
+            privilege=privilege,
+            pte=pte,
+            mutation="pte-deny-leaf",
+            fence=fence,
+            expected_cause=13,
+            stale_failure_class="STALE_TLB_PERMISSION",
+            tags=("stale-pte", fence),
+        )
+
+    def _generate_tlb_stale_pmp(self, index: int) -> PmpScenario:
+        fence = "with-sfence" if index % 2 == 0 else "no-fence-experimental"
+        privilege = [Privilege.U, Privilege.S][(index // 2) % 2]
+        pte = PageTableEntry(read=True, write=False, execute=False, user=privilege == Privilege.U, accessed=True, dirty=False)
+        return self._generate_stateful_sv39(
+            index=index,
+            profile="tlb-stale-pmp",
+            privilege=privilege,
+            pte=pte,
+            mutation="pmpcfg-deny-target",
+            fence=fence,
+            expected_cause=5,
+            stale_failure_class="STALE_PMP_PERMISSION",
+            tags=("stale-pmp", fence),
+        )
+
+    def _generate_ptw_stale_pmp(self, index: int) -> PmpScenario:
+        fence = "with-sfence" if index % 2 == 0 else "no-fence-experimental"
+        privilege = [Privilege.U, Privilege.S][(index // 2) % 2]
+        pte = PageTableEntry(read=True, write=False, execute=False, user=privilege == Privilege.U, accessed=True, dirty=False)
+        return self._generate_stateful_sv39(
+            index=index,
+            profile="ptw-stale-pmp",
+            privilege=privilege,
+            pte=pte,
+            mutation="pmpcfg-deny-ptw",
+            fence=fence,
+            expected_cause=5,
+            stale_failure_class="STALE_PTW_PERMISSION",
+            tags=("stale-ptw-pmp", fence),
+        )
+
+    def _generate_stateful_sv39(
+        self,
+        *,
+        index: int,
+        profile: str,
+        privilege: Privilege,
+        pte: PageTableEntry,
+        mutation: str,
+        fence: str,
+        expected_cause: int,
+        stale_failure_class: str,
+        tags: tuple[str, ...],
+    ) -> PmpScenario:
+        mapping = self._target_mapping(pte)
+        entries = self._mml_harness_entries()
+        entries.append(
+            PmpEntry(
+                index=3,
+                address_mode=AddressMode.OFF,
+                pmpaddr=0,
+                read=False,
+                write=False,
+                execute=False,
+                locked=False,
+            )
+        )
+        entries.append(
+            PmpEntry(
+                index=4,
+                address_mode=AddressMode.NAPOT,
+                pmpaddr=PmpEntry.encode_napot(base=PAGE_TABLE_BASE, size=PAGE_TABLE_SIZE),
+                read=True,
+                write=False,
+                execute=False,
+                locked=False,
+            )
+        )
+        entries.append(
+            PmpEntry(
+                index=5,
+                address_mode=AddressMode.NAPOT,
+                pmpaddr=PmpEntry.encode_napot(base=TARGET_BASE, size=TARGET_SIZE),
+                read=True,
+                write=False,
+                execute=False,
+                locked=False,
+            )
+        )
+
+        sequence = self._stateful_sequence(
+            kind=profile,
+            warmup=True,
+            mutation=mutation,
+            fence=fence,
+            expected_final="trap_after_mutation",
+            expected_cause=expected_cause,
+            stale_failure_class=stale_failure_class,
+        )
+        if mutation == "pmpcfg-deny-target":
+            sequence.update(self._pmp_mutation_sequence(entries, deny_target=True, deny_ptw=False))
+        if mutation == "pmpcfg-deny-ptw":
+            sequence.update(self._pmp_mutation_sequence(entries, deny_target=False, deny_ptw=True))
+        if mutation == "pte-deny-leaf":
+            sequence["pte_after"] = "0x0"
+
+        return PmpScenario(
+            name=f"scenario_{index:04d}",
+            entries=entries,
+            privilege=privilege,
+            probe=AccessProbe(
+                access=Access.LOAD,
+                physical_address=TARGET_BASE,
+                virtual_address=TARGET_VA,
+                size=4,
+                offset_name="inside",
+            ),
+            mprv=False,
+            mpp=Privilege.M,
+            mseccfg=Mseccfg(),
+            translation=TranslationMode.SV39,
+            sv39=mapping,
+            profile=profile,
+            sum_enabled=privilege == Privilege.S,
+            mxr=False,
+            sfence_vma=True,
+            coverage_tags=("sv39", "stateful", "load", privilege.value, *tags),
+            ptw_fault_level="L1" if mutation == "pmpcfg-deny-ptw" else None,
+            preload_mode="warmup",
+            pmp_match_mode=mutation,
+            pte_permissions=self._pte_permission_metadata(pte),
+            security_focus=profile,
+            stateful_sequence=sequence,
+        )
+
     def _mml_harness_entries(self) -> list[PmpEntry]:
         return [
             PmpEntry(
@@ -595,6 +787,73 @@ class ScenarioGenerator:
         write = access == Access.STORE
         execute = access == Access.FETCH
         return PmpEntry(entry.index, entry.address_mode, entry.pmpaddr, read, write, execute, entry.locked)
+
+    def _stateful_sequence(
+        self,
+        *,
+        kind: str,
+        warmup: bool,
+        mutation: str,
+        fence: str,
+        expected_final: str,
+        expected_cause: int | None,
+        stale_failure_class: str | None,
+    ) -> dict[str, object]:
+        return {
+            "kind": kind,
+            "warmup": warmup,
+            "mutation": mutation,
+            "fence": fence,
+            "final_probe": "repeat",
+            "sentinel": {
+                "physical_address": f"0x{TARGET_BASE:x}",
+                "initial": "0x11223344",
+                "store": "0x5a5a5a5a",
+            },
+            "expected_final": expected_final,
+            "expected_cause": expected_cause,
+            "stale_failure_class": stale_failure_class,
+        }
+
+    def _pmp_mutation_sequence(
+        self,
+        entries: list[PmpEntry],
+        *,
+        deny_target: bool,
+        deny_ptw: bool,
+    ) -> dict[str, object]:
+        after = list(entries)
+        writes: list[dict[str, object]] = []
+        if deny_target:
+            after = [
+                PmpEntry(entry.index, entry.address_mode, entry.pmpaddr, False, False, entry.execute, entry.locked)
+                if entry.index == 5
+                else entry
+                for entry in after
+            ]
+        if deny_ptw:
+            deny_base = (PAGE_TABLE_BASE + 0x3000) & ~0xFFF
+            deny_entry = PmpEntry(
+                index=3,
+                address_mode=AddressMode.NAPOT,
+                pmpaddr=PmpEntry.encode_napot(base=deny_base, size=0x1000),
+                read=False,
+                write=False,
+                execute=False,
+                locked=False,
+            )
+            after = [deny_entry if entry.index == 3 else entry for entry in after]
+            writes.append({"index": 3, "pmpaddr": f"0x{deny_entry.pmpaddr:x}"})
+        return {
+            "pmpaddr_writes": writes,
+            "pmpcfg0_after": f"0x{self._pmpcfg0(after):x}",
+        }
+
+    def _pmpcfg0(self, entries: list[PmpEntry]) -> int:
+        cfg0 = 0
+        for entry in entries:
+            cfg0 |= entry.cfg_byte() << (entry.index * 8)
+        return cfg0
 
     def _sv39_coverage_tags(
         self,

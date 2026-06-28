@@ -11,6 +11,7 @@ from .scenario import PmpScenario
 
 
 SCHEMA_VERSION = 2
+STATEFUL_SCHEMA_VERSION = 3
 
 
 def write_json(path: Path, data: dict[str, Any] | list[dict[str, Any]]) -> None:
@@ -36,8 +37,21 @@ def pmp_entry_to_dict(entry: PmpEntry) -> dict[str, Any]:
 
 def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> dict[str, Any]:
     outcome = evaluate_scenario(scenario)
+    expected_allowed = outcome.allowed
+    expected_cause = int(outcome.trap_cause) if outcome.trap_cause is not None else None
+    expected_stage = outcome.stage
+    expected_reason = outcome.reason
+    expected_pa = f"0x{outcome.physical_address:x}" if outcome.physical_address is not None else None
+    if scenario.stateful_sequence is not None:
+        final = scenario.stateful_sequence.get("expected_final")
+        final_cause = scenario.stateful_sequence.get("expected_cause")
+        expected_allowed = final == "store_side_effect"
+        expected_cause = int(final_cause) if final_cause is not None else None
+        expected_stage = "stateful_final"
+        expected_reason = f"stateful final outcome: {final}"
+        expected_pa = f"0x{scenario.probe.physical_address:x}"
     data: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": STATEFUL_SCHEMA_VERSION if scenario.stateful_sequence else SCHEMA_VERSION,
         "name": scenario.name,
         "seed": seed,
         "index": index,
@@ -62,11 +76,11 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
         "pte_permissions": scenario.pte_permissions,
         "security_focus": scenario.security_focus,
         "expected": {
-            "allowed": outcome.allowed,
-            "trap_cause": int(outcome.trap_cause) if outcome.trap_cause is not None else None,
-            "stage": outcome.stage,
-            "reason": outcome.reason,
-            "physical_address": f"0x{outcome.physical_address:x}" if outcome.physical_address is not None else None,
+            "allowed": expected_allowed,
+            "trap_cause": expected_cause,
+            "stage": expected_stage,
+            "reason": expected_reason,
+            "physical_address": expected_pa,
         },
     }
     if scenario.sv39 is not None:
@@ -77,6 +91,8 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
             "walk_addresses": [f"0x{address:x}" for address in scenario.sv39.walk_addresses],
             "pte": asdict(scenario.sv39.pte),
         }
+    if scenario.stateful_sequence is not None:
+        data["stateful_sequence"] = scenario.stateful_sequence
     return data
 
 

@@ -39,6 +39,9 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         "preload_modes": {},
         "pte_permissions": {},
         "security_focus": {},
+        "stateful_sequences": {},
+        "stateful_mutations": {},
+        "stateful_fences": {},
         "statuses": {},
         "failure_classes": {},
     }
@@ -56,6 +59,10 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
             _bump(coverage["coverage_tags"], tag)
         pte_permissions = case.get("pte_permissions") or {}
         _bump(coverage["pte_permissions"], pte_permissions.get("rwx"))
+        sequence = case.get("stateful_sequence") or {}
+        _bump(coverage["stateful_sequences"], sequence.get("kind"))
+        _bump(coverage["stateful_mutations"], sequence.get("mutation"))
+        _bump(coverage["stateful_fences"], sequence.get("fence"))
 
     for result in results:
         _bump(coverage["statuses"], result.get("status"))

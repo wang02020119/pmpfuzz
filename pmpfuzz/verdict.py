@@ -18,6 +18,12 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
         boom = by_dut.get("boom-clean")
         spike = by_dut.get("spike")
         rocket = by_dut.get("rocket-clean")
+        stateful = _stateful_verdict_evidence(name, case, results)
+        if stateful:
+            if stateful["kind"] == "experimental_no_fence_observation":
+                related.append(stateful)
+            else:
+                evidence.append(stateful)
         if _is_confirmed_boom_ptw_hang(case, spike, rocket, boom):
             evidence.append(
                 {
@@ -38,6 +44,27 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
                 }
             )
 
+    side_effect = [item for item in evidence if item.get("kind") == "confirmed_side_effect_failure"]
+    stale = [item for item in evidence if item.get("kind") == "confirmed_stale_permission_failure"]
+    experimental = [item for item in related if item.get("kind") == "experimental_no_fence_observation"]
+    if side_effect:
+        return {
+            "verdict": "confirmed_side_effect_failure",
+            "has_vulnerability": True,
+            "impact": "forbidden_memory_side_effect",
+            "expected": "trap without memory side effect",
+            "evidence": side_effect,
+            "related_evidence": related,
+        }
+    if stale:
+        return {
+            "verdict": "confirmed_stale_permission_failure",
+            "has_vulnerability": True,
+            "impact": "stale_permission_reuse",
+            "expected": "post-mutation access must trap after required fence",
+            "evidence": stale,
+            "related_evidence": related,
+        }
     if evidence:
         return {
             "verdict": "confirmed_new_failure_mode",
@@ -46,6 +73,15 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
             "expected": "load access fault",
             "evidence": evidence,
             "related_evidence": related,
+        }
+    if experimental:
+        return {
+            "verdict": "experimental_no_fence_observation",
+            "has_vulnerability": False,
+            "impact": None,
+            "expected": "no-fence behavior is recorded but not treated as confirmed vulnerability",
+            "evidence": [],
+            "related_evidence": experimental,
         }
     if related:
         return {
@@ -64,6 +100,56 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
         "evidence": [],
         "related_evidence": [],
     }
+
+
+def _stateful_verdict_evidence(
+    name: str,
+    case: dict[str, Any],
+    results: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    sequence = case.get("stateful_sequence")
+    if not sequence:
+        return None
+    failing = [result for result in results if result.get("failure_class") in _STATEFUL_FAILURE_CLASSES]
+    if not failing:
+        return None
+    if sequence.get("fence") == "no-fence-experimental":
+        return {
+            "kind": "experimental_no_fence_observation",
+            "case": name,
+            "profile": case.get("profile"),
+            "failure_classes": sorted({result.get("failure_class") for result in failing}),
+            "reason": "no-fence stateful stale result is recorded as experimental observation",
+        }
+    spike_passed = any(result.get("dut") == "spike" and result.get("status") == "pass" for result in results)
+    non_spike_failures = [result for result in failing if result.get("dut") != "spike"]
+    if not spike_passed or not non_spike_failures:
+        return None
+    side_effect_classes = {"forbidden_side_effect", "missing_expected_side_effect"}
+    if any(result.get("failure_class") in side_effect_classes for result in non_spike_failures):
+        return {
+            "kind": "confirmed_side_effect_failure",
+            "case": name,
+            "profile": case.get("profile"),
+            "failure_classes": sorted({result.get("failure_class") for result in non_spike_failures}),
+            "reason": "reference passed while DUT reported forbidden or missing memory side effect",
+        }
+    return {
+        "kind": "confirmed_stale_permission_failure",
+        "case": name,
+        "profile": case.get("profile"),
+        "failure_classes": sorted({result.get("failure_class") for result in non_spike_failures}),
+        "reason": "reference passed while DUT reused stale permission after mutation/fence",
+    }
+
+
+_STATEFUL_FAILURE_CLASSES = {
+    "forbidden_side_effect",
+    "missing_expected_side_effect",
+    "stale_pmp_permission",
+    "stale_tlb_permission",
+    "stale_ptw_permission",
+}
 
 
 def _cases_by_name(run_dir: Path) -> dict[str, dict[str, Any]]:

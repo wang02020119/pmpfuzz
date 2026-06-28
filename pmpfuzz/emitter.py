@@ -24,9 +24,63 @@ from .scenario import (
 
 class AssemblyEmitter:
     def emit(self, scenario: PmpScenario, backend: str = "tohost") -> str:
+        if scenario.stateful_sequence is not None:
+            return self._emit_stateful(scenario, backend)
         if scenario.profile.startswith("legacy") and scenario.translation == TranslationMode.BARE:
             return self._emit_legacy(scenario, backend)
         return self._emit_structured(scenario, backend)
+
+    def _emit_stateful(self, scenario: PmpScenario, backend: str) -> str:
+        phase = 0 if scenario.stateful_sequence and scenario.stateful_sequence.get("warmup") else 1
+        probe_address = None
+        if scenario.translation == TranslationMode.SV39 and scenario.privilege != Privilege.M:
+            probe_address = PROBE_VA
+
+        lines = [
+            "    .option norvc",
+            "    .option norelax",
+            "    .section .text",
+            "    .globl _start",
+            "_start:",
+            "    la sp, stack_top",
+            "    la t0, stateful_trap_handler",
+            "    csrw mtvec, t0",
+            "    csrw medeleg, zero",
+            "    csrw mideleg, zero",
+            "    csrw satp, zero",
+            "    sfence.vma",
+            "    la t0, stateful_phase",
+            f"    li t1, {phase}",
+            "    sw t1, 0(t0)",
+            "    la t0, sentinel_word",
+            "    li t1, 0x11223344",
+            "    sw t1, 0(t0)",
+        ]
+        lines.extend(self._emit_pmp_setup(scenario))
+        lines.extend(self._emit_satp_setup(scenario))
+        lines.extend(
+            [
+                "enter_stateful_probe:",
+            ]
+        )
+        lines.extend(self._emit_privilege_setup(scenario))
+        if probe_address is None:
+            lines.append("    la t0, stateful_probe")
+        else:
+            lines.append(f"    li t0, 0x{probe_address:x}")
+        lines.extend(
+            [
+                "    csrw mepc, t0",
+                "    mret",
+            ]
+        )
+        lines.extend(self._emit_stateful_trap_handler(scenario, backend))
+        lines.extend(self._emit_stateful_m_data())
+        lines.extend(self._emit_stateful_su_probe(scenario))
+        lines.extend(self._emit_stateful_target_region())
+        if scenario.translation == TranslationMode.SV39:
+            lines.extend(self._emit_sv39_tables(scenario))
+        return "\n".join(lines) + "\n"
 
     def _emit_legacy(self, scenario: PmpScenario, backend: str) -> str:
         decision = PmpModel(scenario.entries, scenario.mseccfg).check(
@@ -292,6 +346,167 @@ class AssemblyEmitter:
             "    ecall",
         ]
 
+    def _emit_stateful_trap_handler(self, scenario: PmpScenario, backend: str) -> list[str]:
+        if scenario.stateful_sequence is None:
+            raise ValueError("stateful trap handler requires sequence metadata")
+        expected_cause = scenario.stateful_sequence.get("expected_cause")
+        expected_final = scenario.stateful_sequence.get("expected_final")
+        stale_failure_class = scenario.stateful_sequence.get("stale_failure_class")
+        ecall_cause = {
+            Privilege.U: int(TrapCause.ECALL_FROM_U),
+            Privilege.S: int(TrapCause.ECALL_FROM_S),
+            Privilege.M: int(TrapCause.ECALL_FROM_M),
+        }[scenario.privilege]
+
+        lines = [
+            "stateful_trap_handler:",
+            "    csrr t2, mcause",
+            "    csrr t3, mtval",
+            "    la t0, result",
+            "    sd t2, 0(t0)",
+            "    sd t3, 8(t0)",
+            "    la t0, stateful_phase",
+            "    lw t5, 0(t0)",
+            "    beqz t5, stateful_handle_warmup",
+            "    j stateful_handle_final",
+            "stateful_handle_warmup:",
+            f"    li t1, {ecall_cause}",
+            "    beq t2, t1, apply_stateful_mutation",
+        ]
+        lines.extend(emit_failure_tohost_lines("UNEXPECTED_TRAP"))
+        lines.extend(
+            [
+                "    j finish",
+                "apply_stateful_mutation:",
+            ]
+        )
+        lines.extend(self._emit_stateful_mutation(scenario))
+        lines.extend(
+            [
+                "    la t0, stateful_phase",
+                "    li t1, 1",
+                "    sw t1, 0(t0)",
+            ]
+        )
+        if scenario.stateful_sequence.get("fence") == "with-sfence":
+            lines.append("    sfence.vma")
+        elif scenario.stateful_sequence.get("fence") == "no-fence-experimental":
+            lines.append("no_fence_experimental:")
+        lines.extend(
+            [
+                "    j enter_stateful_probe",
+                "stateful_handle_final:",
+            ]
+        )
+
+        if expected_final == "store_side_effect":
+            lines.extend(
+                [
+                    f"    li t1, {ecall_cause}",
+                    "    beq t2, t1, check_expected_side_effect",
+                ]
+            )
+            lines.extend(emit_failure_tohost_lines("UNEXPECTED_TRAP"))
+            lines.extend(["    j finish", "check_expected_side_effect:"])
+            lines.extend(self._emit_check_sentinel_store())
+        else:
+            if expected_cause is None:
+                raise ValueError("stateful expected trap requires expected_cause")
+            lines.extend(
+                [
+                    f"    li t1, {int(expected_cause)}",
+                    "    beq t2, t1, stateful_expected_trap",
+                    f"    li t1, {ecall_cause}",
+                    "    beq t2, t1, stateful_unexpected_no_trap",
+                ]
+            )
+            lines.extend(emit_failure_tohost_lines("WRONG_MCAUSE"))
+            lines.extend(["    j finish", "stateful_expected_trap:"])
+            if expected_final == "trap_no_side_effect":
+                lines.extend(self._emit_check_sentinel_initial())
+            else:
+                lines.extend([f"    li a0, {PASS_TOHOST}", "    j finish"])
+            lines.append("stateful_unexpected_no_trap:")
+            if expected_final == "trap_no_side_effect":
+                lines.extend(
+                    [
+                        "    la t0, sentinel_word",
+                        "    lw t1, 0(t0)",
+                        "    li t4, 0x11223344",
+                        "    bne t1, t4, fail_forbidden_side_effect",
+                    ]
+                )
+                lines.extend(emit_failure_tohost_lines("UNEXPECTED_NO_TRAP"))
+                lines.append("    j finish")
+            else:
+                lines.extend(emit_failure_tohost_lines(str(stale_failure_class)))
+                lines.append("    j finish")
+
+        lines.extend(
+            [
+                "pass_stateful:",
+                f"    li a0, {PASS_TOHOST}",
+                "    j finish",
+                "fail_forbidden_side_effect:",
+            ]
+        )
+        lines.extend(emit_failure_tohost_lines("FORBIDDEN_SIDE_EFFECT"))
+        lines.extend(["    j finish", "fail_missing_expected_side_effect:"])
+        lines.extend(emit_failure_tohost_lines("MISSING_EXPECTED_SIDE_EFFECT"))
+        lines.extend(self._emit_finish_block(backend, include_tohost_data=False))
+        return lines
+
+    def _emit_stateful_mutation(self, scenario: PmpScenario) -> list[str]:
+        sequence = scenario.stateful_sequence or {}
+        mutation = sequence.get("mutation")
+        lines: list[str] = []
+        if mutation == "pte-deny-leaf":
+            lines.extend(
+                [
+                    "    la t0, sv39_l0_target",
+                    "    li t1, 0x0",
+                    "    sd t1, 0(t0)",
+                ]
+            )
+        for write in sequence.get("pmpaddr_writes") or []:
+            lines.extend(
+                [
+                    f"    li t1, {write['pmpaddr']}",
+                    f"    csrw pmpaddr{int(write['index'])}, t1",
+                ]
+            )
+        pmpcfg0_after = sequence.get("pmpcfg0_after")
+        if pmpcfg0_after:
+            lines.extend(
+                [
+                    f"    li t1, {pmpcfg0_after}",
+                    "    csrw pmpcfg0, t1",
+                ]
+            )
+        if not lines:
+            lines.append("    nop")
+        return lines
+
+    def _emit_check_sentinel_initial(self) -> list[str]:
+        return [
+            "    la t0, sentinel_word",
+            "    lw t1, 0(t0)",
+            "    li t4, 0x11223344",
+            "    bne t1, t4, fail_forbidden_side_effect",
+            f"    li a0, {PASS_TOHOST}",
+            "    j finish",
+        ]
+
+    def _emit_check_sentinel_store(self) -> list[str]:
+        return [
+            "    la t0, sentinel_word",
+            "    lw t1, 0(t0)",
+            "    li t4, 0x5a5a5a5a",
+            "    bne t1, t4, fail_missing_expected_side_effect",
+            f"    li a0, {PASS_TOHOST}",
+            "    j finish",
+        ]
+
     def _emit_trap_handler(self, scenario: PmpScenario, outcome, backend: str) -> list[str]:
         expected_cause = int(outcome.trap_cause) if outcome.trap_cause is not None else None
         ecall_cause = {
@@ -416,6 +631,53 @@ class AssemblyEmitter:
             "stack:",
             "    .skip 2048",
             "stack_top:",
+        ]
+
+    def _emit_stateful_m_data(self) -> list[str]:
+        return [
+            f"    .org 0x{M_DATA_BASE - MEM_BASE:x}",
+            "scratch:",
+            "    .skip 1024",
+            "    .align 3",
+            "    .globl result",
+            "result:",
+            "    .dword 0",
+            "    .dword 0",
+            "    .dword 0",
+            "stateful_phase:",
+            "    .word 0",
+            "    .word 0",
+            "    .align 6",
+            "    .globl tohost",
+            "tohost:",
+            "    .dword 0",
+            "    .globl fromhost",
+            "fromhost:",
+            "    .dword 0",
+            "stack:",
+            "    .skip 2048",
+            "stack_top:",
+        ]
+
+    def _emit_stateful_su_probe(self, scenario: PmpScenario) -> list[str]:
+        lines = [
+            f"    .org 0x{SU_CODE_BASE - MEM_BASE:x}",
+            "stateful_probe:",
+            "stateful_final_probe:",
+        ]
+        lines.extend(self._emit_probe(scenario))
+        if scenario.probe.access != Access.FETCH:
+            lines.extend(self._emit_success_ecall())
+        return lines
+
+    def _emit_stateful_target_region(self) -> list[str]:
+        return [
+            f"    .org 0x{TARGET_BASE - MEM_BASE:x}",
+            "target_region:",
+            "sentinel_word:",
+            "    .word 0x11223344",
+            "    .word 0",
+            "    .dword 0x99aabbccddeeff00",
         ]
 
     def _emit_su_probe(self, scenario: PmpScenario) -> list[str]:

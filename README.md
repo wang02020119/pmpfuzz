@@ -87,6 +87,21 @@ Useful coverage-oriented profiles:
 - `sv39-ptw-pmp-matrix`: PTW PMP deny coverage across walk levels and preload modes.
 - `boom-ptw-pmp-regression`: fixed BOOM PTW/PMP regression and controls.
 
+Stateful permission profiles close the stale-permission and memory-side-effect
+part of the PMP security chain:
+
+- `pmp-side-effect`: denied store must trap without changing the sentinel word;
+  allowed store controls must update it.
+- `tlb-stale-pte`: warm translation, mutate leaf PTE to deny, then probe again.
+- `tlb-stale-pmp`: warm translation, mutate final-target PMP to deny, then probe again.
+- `ptw-stale-pmp`: warm PTW path, mutate PTE-page PMP to deny, then probe again.
+
+Run the chain-closure smoke suite on the server:
+
+```sh
+sh scripts/run_chain_closure_smoke.sh
+```
+
 Run the engineering smoke suite on the server:
 
 ```sh

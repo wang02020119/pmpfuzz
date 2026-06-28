@@ -8,6 +8,9 @@ from .dut import (
     DEFAULT_CLEAN_CHIPYARD_DIR,
     DEFAULT_XIANGSHAN_EMU,
     LEGACY_XIANGSHAN_EMU,
+    resolve_xiangshan_binary,
+    xiangshan_emu_build_config,
+    xiangshan_emu_supports_goodtrap,
 )
 
 
@@ -24,8 +27,26 @@ def capability_for_dut(
     spec = _DUT_SPECS.get(dut)
     if spec is None:
         raise ValueError(f"unsupported DUT for capability probe: {dut}")
-    resolved_path = str(path or spec.get("path") or "")
+    selected_path = path or spec.get("path") or ""
+    if dut == "xiangshan-clean" and selected_path:
+        resolved_path = str(resolve_xiangshan_binary(Path(selected_path)))
+    else:
+        resolved_path = str(selected_path)
     resolved_available = _default_available(dut, resolved_path) if available is None else bool(available)
+    notes = list(spec.get("notes", ()))
+    oracle_applicability = (
+        str(spec.get("oracle_applicability") or "valid") if resolved_available else "infra_unadapted"
+    )
+    if dut == "xiangshan-clean" and resolved_available:
+        goodtrap_support = xiangshan_emu_supports_goodtrap(Path(resolved_path))
+        build_config = xiangshan_emu_build_config(Path(resolved_path))
+        if goodtrap_support is False:
+            oracle_applicability = "infra_unadapted"
+            notes.append(
+                "selected XiangShan emu was built with CONFIG_NO_DIFFTEST; rebuild with difftest enabled for xstrap good-trap"
+            )
+        elif build_config is not None:
+            notes.append(f"build metadata: {build_config}")
     capability = {
         "schema_version": DEFAULT_CAPABILITY_SCHEMA_VERSION,
         "dut": dut,
@@ -34,10 +55,8 @@ def capability_for_dut(
         "supported_capabilities": dict(spec["supported_capabilities"]),
         "finish_protocol": spec["finish_protocol"],
         "diagnostic_depth": spec["diagnostic_depth"],
-        "oracle_applicability": str(spec.get("oracle_applicability") or "valid")
-        if resolved_available
-        else "infra_unadapted",
-        "notes": list(spec.get("notes", ())),
+        "oracle_applicability": oracle_applicability,
+        "notes": notes,
     }
     return capability
 
@@ -107,7 +126,8 @@ def _default_available(dut: str, path: str) -> bool:
     if dut in {"rocket-clean", "boom-clean", "cva6-clean", "cva6"}:
         return _chipyard_sim_exists(dut)
     if dut == "xiangshan-clean":
-        return DEFAULT_XIANGSHAN_EMU.exists() or LEGACY_XIANGSHAN_EMU.exists()
+        resolved = resolve_xiangshan_binary(Path(path or DEFAULT_XIANGSHAN_EMU))
+        return resolved.exists() or LEGACY_XIANGSHAN_EMU.exists()
     if dut == "rocket-cascade":
         return Path(path).exists()
     return bool(path and Path(path).exists())

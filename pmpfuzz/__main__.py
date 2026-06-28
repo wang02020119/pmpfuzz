@@ -285,7 +285,11 @@ def _cmd_repro(args: argparse.Namespace) -> int:
         )
         start = time.monotonic()
         dut_result = dut.run(elf, timeout_seconds=args.per_case_timeout, log_path=log)
-        capability = capability_for_dut(dut_name)
+        capability = (
+            capability_for_dut(dut_name, path=args.dut_bin)
+            if args.dut_bin and dut_name == "xiangshan-clean"
+            else capability_for_dut(dut_name)
+        )
         applicability = oracle_applicability_for_result(
             case,
             capability,

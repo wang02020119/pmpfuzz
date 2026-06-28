@@ -11,7 +11,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from .capabilities import capability_for_dut, capability_matrix, oracle_applicability_for_case, oracle_applicability_for_result
+from .capabilities import (
+    DEFAULT_CAPABILITY_SCHEMA_VERSION,
+    capability_for_dut,
+    oracle_applicability_for_case,
+    oracle_applicability_for_result,
+)
 from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, make_dut
 from .emitter import AssemblyEmitter
 from .oracle import evaluate_scenario
@@ -142,8 +147,14 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
             "schedule": str(config.schedule) if config.schedule else None,
         },
     )
-    dut_capability = capability_for_dut(config.dut)
-    write_json(out_dir / "dut_capabilities.json", capability_matrix([config.dut]))
+    dut_capability = capability_for_dut(config.dut, path=config.dut_bin) if config.dut_bin else capability_for_dut(config.dut)
+    write_json(
+        out_dir / "dut_capabilities.json",
+        {
+            "schema_version": DEFAULT_CAPABILITY_SCHEMA_VERSION,
+            "duts": {config.dut: dut_capability},
+        },
+    )
     emitter = AssemblyEmitter()
     dut_runner = make_dut(
         dut=config.dut,

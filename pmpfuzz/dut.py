@@ -21,12 +21,22 @@ DEFAULT_CVA6_VERILATOR_BIN_DIR = Path(
     "/home/dubhe/wjs/cascade_cpu_fuzzing/mount/cascade_xiangshan_adapt/tools/verilator-5.032/bin"
 )
 DEFAULT_CVA6_VERILATOR = Path("/home/dubhe/wjs/pmp-fuzz-stage1/scripts/verilator_cva6_wrapper.sh")
-DEFAULT_XIANGSHAN_EMU = Path(
+XIANGSHAN_GOODTRAP_EMU = Path(
+    "/home/dubhe/wjs/pmp-duts/xiangshan-clean/build/verilator-compile/emu"
+)
+XIANGSHAN_NATIVE_EMU = Path(
     "/home/dubhe/wjs/pmp-duts/xiangshan-clean/build/native-tlminimal/verilator-compile/emu"
+)
+XIANGSHAN_NATIVE_DEBUG_EMU = Path(
+    "/home/dubhe/wjs/pmp-duts/xiangshan-clean/build/native-tlminimal-debug/verilator-compile/emu"
+)
+XIANGSHAN_NATIVE_FAST_EMU = Path(
+    "/home/dubhe/wjs/pmp-duts/xiangshan-clean/build/native-tlminimal-fast/verilator-compile/emu"
 )
 LEGACY_XIANGSHAN_EMU = Path(
     "/home/dubhe/wjs/cascade_xiangshan_adapt/XiangShan/build/native-tlminimal/verilator-compile/emu"
 )
+DEFAULT_XIANGSHAN_EMU = XIANGSHAN_GOODTRAP_EMU
 DEFAULT_CASCADE_ROCKET = (
     DEFAULT_CHIPYARD_DIR
     / "cascade-rocket"
@@ -332,7 +342,7 @@ class CascadeRocketDut:
 class XiangShanDut:
     def __init__(self, *, binary: Path = DEFAULT_XIANGSHAN_EMU, simlen: int = 100000) -> None:
         self.name = "xiangshan-clean"
-        self.binary = _resolve_xiangshan_binary(binary)
+        self.binary = resolve_xiangshan_binary(binary)
         self.simlen = simlen
 
     def command_for(self, image: Path) -> list[str]:
@@ -434,11 +444,50 @@ def make_dut(
     raise ValueError(f"unsupported DUT: {dut}")
 
 
+def resolve_xiangshan_binary(binary: Path) -> Path:
+    return _resolve_xiangshan_binary(binary)
+
+
+def xiangshan_emu_build_config(binary: Path) -> Path | None:
+    candidates = [binary.parent / "VSimTop.mk"]
+    try:
+        resolved = binary.resolve()
+    except OSError:
+        resolved = binary
+    if resolved != binary:
+        candidates.append(resolved.parent / "VSimTop.mk")
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def xiangshan_emu_supports_goodtrap(binary: Path) -> bool | None:
+    config = xiangshan_emu_build_config(binary)
+    if config is None:
+        return None
+    text = config.read_text(encoding="utf-8", errors="replace")
+    return "CONFIG_NO_DIFFTEST" not in text
+
+
 def _resolve_xiangshan_binary(binary: Path) -> Path:
+    if binary != DEFAULT_XIANGSHAN_EMU:
+        return binary
+    candidates = (
+        XIANGSHAN_GOODTRAP_EMU,
+        XIANGSHAN_NATIVE_EMU,
+        XIANGSHAN_NATIVE_DEBUG_EMU,
+        XIANGSHAN_NATIVE_FAST_EMU,
+        LEGACY_XIANGSHAN_EMU,
+    )
+    existing = [candidate for candidate in candidates if candidate.exists()]
+    for candidate in existing:
+        if xiangshan_emu_supports_goodtrap(candidate) is True:
+            return candidate
+    if existing:
+        return existing[0]
     if binary.exists():
         return binary
-    if binary == DEFAULT_XIANGSHAN_EMU and LEGACY_XIANGSHAN_EMU.exists():
-        return LEGACY_XIANGSHAN_EMU
     return binary
 
 

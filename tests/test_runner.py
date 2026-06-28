@@ -3,7 +3,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pmpfuzz.runner import CampaignResult, RunnerConfig, parse_time_budget, write_summary
+from pmpfuzz.runner import (
+    CampaignResult,
+    RunnerConfig,
+    _run_indexed_work_with_budget,
+    parse_time_budget,
+    write_summary,
+)
 
 
 class RunnerTest(unittest.TestCase):
@@ -56,6 +62,27 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(summary["infra_failed"], 1)
         self.assertEqual(summary["nonpass"], 2)
         self.assertIn("mixed-smepmp-mmu", coverage)
+
+    def test_time_budget_does_not_submit_all_pending_work_up_front(self):
+        calls = []
+        clock = {"now": 0.0}
+
+        def run_one(index, item):
+            calls.append((index, item))
+            clock["now"] = 10.0
+            return f"result-{index}"
+
+        results = _run_indexed_work_with_budget(
+            [(0, "first"), (1, "second"), (2, "third")],
+            run_one,
+            max_workers=1,
+            start_time=0.0,
+            time_budget_seconds=5,
+            time_fn=lambda: clock["now"],
+        )
+
+        self.assertEqual(results, ["result-0"])
+        self.assertEqual(calls, [(0, "first")])
 
 
 if __name__ == "__main__":

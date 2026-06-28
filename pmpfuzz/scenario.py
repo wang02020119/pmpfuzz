@@ -259,6 +259,7 @@ class ScenarioGenerator:
                 ),
             ]
 
+        entries.append(self._su_harness_entry())
         entries.append(self._harness_entry())
         return PmpScenario(
             name=f"scenario_{index:04d}",
@@ -889,6 +890,17 @@ class ScenarioGenerator:
             pmpaddr=PmpEntry.encode_napot(base=0x80000000, size=0x4000),
             read=True,
             write=True,
+            execute=True,
+            locked=False,
+        )
+
+    def _su_harness_entry(self) -> PmpEntry:
+        return PmpEntry(
+            index=6,
+            address_mode=AddressMode.NAPOT,
+            pmpaddr=PmpEntry.encode_napot(base=SU_CODE_BASE, size=SU_CODE_SIZE),
+            read=True,
+            write=False,
             execute=True,
             locked=False,
         )

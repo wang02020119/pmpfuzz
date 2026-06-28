@@ -182,6 +182,15 @@ class AssemblyEmitterTest(unittest.TestCase):
         self.assertIn("result:", asm)
         self.assertIn("0x60000010", asm)
 
+    def test_xiangshan_goodtrap_backend_uses_xstrap_words_not_ebreak(self):
+        scenario = ScenarioGenerator(seed=20260628, include_smepmp=False, profile="legacy-data").generate_batch(3)[2]
+
+        asm = AssemblyEmitter().emit(scenario, backend="xiangshan-goodtrap")
+
+        self.assertIn(".word 0x0000006b", asm)
+        self.assertIn(".word 0x0000806b", asm)
+        self.assertNotIn("ebreak", asm)
+
     def test_stateful_side_effect_harness_emits_phase_and_sentinel_checks(self):
         scenario = ScenarioGenerator(seed=71, include_smepmp=False, profile="pmp-side-effect").generate_batch(count=1)[0]
 

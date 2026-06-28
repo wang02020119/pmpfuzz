@@ -33,7 +33,7 @@ class CapabilityModelTest(unittest.TestCase):
         self.assertEqual(spike["oracle_applicability"], "valid")
         self.assertEqual(xiangshan["finish_protocol"], "xiangshan-goodtrap")
         self.assertEqual(xiangshan["diagnostic_depth"], "pass_fail_only")
-        self.assertIn(xiangshan["oracle_applicability"], {"valid", "infra_unadapted", "experimental"})
+        self.assertEqual(xiangshan["oracle_applicability"], "valid")
 
     def test_case_schema_includes_required_capabilities_and_oracle_applicability(self):
         scenario = ScenarioGenerator(seed=9, include_smepmp=False, profile="sv39-final-pmp").generate_batch(1)[0]

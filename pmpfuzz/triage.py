@@ -72,6 +72,8 @@ def render_markdown_report(run_dir: Path) -> str:
     triage = read_json(triage_path) if triage_path.exists() else triage_run(run_dir)
     coverage = coverage_from_run(run_dir)
     verdict = verdict_for_run(run_dir)
+    capabilities = _load_capabilities(run_dir)
+    applicability = aggregate.get("oracle_applicability") or {}
 
     lines = [
         "# PMP Fuzz Report",
@@ -88,26 +90,68 @@ def render_markdown_report(run_dir: Path) -> str:
         f"- Impact: `{verdict.get('impact') or 'none'}`",
         f"- Expected behavior: `{verdict.get('expected') or 'none'}`",
         "",
-        "## Coverage Summary",
+        "## DUT Capability Matrix",
         "",
-        f"- Generated cases: {coverage.get('total_cases', 0)}",
-        f"- Result records: {coverage.get('total_results', 0)}",
-        f"- Profiles: {', '.join(sorted((coverage.get('profiles') or {}).keys())) or 'none'}",
-        f"- Coverage tags: {', '.join(sorted((coverage.get('coverage_tags') or {}).keys())) or 'none'}",
-        f"- Semantic target: `{coverage.get('target') or 'none'}`",
-        f"- Semantic coverage: {coverage.get('covered_target_bins', 0)}/{coverage.get('target_bins', 0)} "
-        f"({coverage.get('coverage_rate', 0.0)})",
-        "",
-        "## Semantic Coverage Guidance",
-        "",
-        f"- Missing semantic bins: {coverage.get('missing_target_bins', 0)}",
-        f"- Suggested scheduler: `python3 -m pmpfuzz schedule --from-runs {run_dir} "
-        f"--target {coverage.get('target') or 'core-stateful'} --max-cases 64 --seed 20260628 "
-        f"--out runs/semantic_next`",
-        "",
-        "Top gaps:",
-        "",
+        "| DUT | Available | Finish protocol | Diagnostic depth | Oracle default |",
+        "| --- | --- | --- | --- | --- |",
     ]
+    for dut_name, capability in sorted((capabilities.get("duts") or {}).items()):
+        lines.append(
+            f"| `{dut_name}` | `{str(capability.get('available')).lower()}` | "
+            f"`{capability.get('finish_protocol')}` | `{capability.get('diagnostic_depth')}` | "
+            f"`{capability.get('oracle_applicability')}` |"
+        )
+    if not capabilities.get("duts"):
+        lines.append("| none | none | none | none | none |")
+
+    lines.extend(
+        [
+            "",
+            "## Oracle Applicability",
+            "",
+        ]
+    )
+    for name, count in sorted(applicability.items()):
+        lines.append(f"- `{name}`: {count}")
+    if not applicability:
+        lines.append("- none")
+
+    lines.extend(
+        [
+            "",
+            "## Medium Campaign Summary",
+            "",
+            f"- Valid-oracle results: {applicability.get('valid', 0)}",
+            f"- Unsupported results: {applicability.get('unsupported', 0)}",
+            f"- Infra-unadapted results: {applicability.get('infra_unadapted', 0)}",
+            f"- Experimental results: {applicability.get('experimental', 0)}",
+            "",
+            "## Coverage Summary",
+            "",
+            f"- Generated cases: {coverage.get('total_cases', 0)}",
+            f"- Result records: {coverage.get('total_results', 0)}",
+            f"- Profiles: {', '.join(sorted((coverage.get('profiles') or {}).keys())) or 'none'}",
+            f"- Coverage tags: {', '.join(sorted((coverage.get('coverage_tags') or {}).keys())) or 'none'}",
+            f"- Semantic target: `{coverage.get('target') or 'none'}`",
+            f"- Semantic coverage: {coverage.get('covered_target_bins', 0)}/{coverage.get('target_bins', 0)} "
+            f"({coverage.get('coverage_rate', 0.0)})",
+            "",
+        ]
+    )
+
+    lines.extend(
+        [
+            "## Semantic Coverage Guidance",
+            "",
+            f"- Missing semantic bins: {coverage.get('missing_target_bins', 0)}",
+            f"- Suggested scheduler: `python3 -m pmpfuzz schedule --from-runs {run_dir} "
+            f"--target {coverage.get('target') or 'core-stateful'} --max-cases 64 --seed 20260628 "
+            f"--out runs/semantic_next`",
+            "",
+            "Top gaps:",
+            "",
+        ]
+    )
     for gap in coverage.get("top_gaps", [])[:10]:
         lines.append(f"- `{gap}`")
     if not coverage.get("top_gaps"):
@@ -198,3 +242,10 @@ def write_report(run_dir: Path) -> Path:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(render_markdown_report(run_dir), encoding="ascii")
     return report_path
+
+
+def _load_capabilities(run_dir: Path) -> dict[str, Any]:
+    path = run_dir / "dut_capabilities.json"
+    if path.exists():
+        return read_json(path)
+    return {"duts": {}}

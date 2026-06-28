@@ -110,18 +110,29 @@ def _stateful_verdict_evidence(
     sequence = case.get("stateful_sequence")
     if not sequence:
         return None
-    failing = [result for result in results if result.get("failure_class") in _STATEFUL_FAILURE_CLASSES]
-    if not failing:
+    all_failing = [
+        result
+        for result in results
+        if result.get("failure_class") in _STATEFUL_FAILURE_CLASSES
+        and (result.get("oracle_applicability") or "valid") not in {"unsupported", "infra_unadapted"}
+    ]
+    if not all_failing:
         return None
     if sequence.get("fence") == "no-fence-experimental":
         return {
             "kind": "experimental_no_fence_observation",
             "case": name,
             "profile": case.get("profile"),
-            "failure_classes": sorted({result.get("failure_class") for result in failing}),
+            "failure_classes": sorted({result.get("failure_class") for result in all_failing}),
             "reason": "no-fence stateful stale result is recorded as experimental observation",
         }
-    spike_passed = any(result.get("dut") == "spike" and result.get("status") == "pass" for result in results)
+    failing = [result for result in all_failing if _is_valid_oracle_result(result)]
+    if not failing:
+        return None
+    spike_passed = any(
+        result.get("dut") == "spike" and result.get("status") == "pass" and _is_valid_oracle_result(result)
+        for result in results
+    )
     non_spike_failures = [result for result in failing if result.get("dut") != "spike"]
     if not spike_passed or not non_spike_failures:
         return None
@@ -177,7 +188,10 @@ def _is_confirmed_boom_ptw_hang(
     if not spike or not rocket or not boom:
         return False
     return (
-        spike.get("status") == "pass"
+        _is_valid_oracle_result(spike)
+        and _is_valid_oracle_result(rocket)
+        and _is_valid_oracle_result(boom)
+        and spike.get("status") == "pass"
         and rocket.get("status") == "pass"
         and boom.get("failure_class") == "pipeline_hung"
         and case.get("access") == "load"
@@ -193,8 +207,13 @@ def _is_related_wrong_mcause(case: dict[str, Any], boom: dict[str, Any] | None) 
     if not boom:
         return False
     return (
-        case.get("translation") == "sv39"
+        _is_valid_oracle_result(boom)
+        and case.get("translation") == "sv39"
         and case.get("ptw_fault_level") is not None
         and boom.get("failure_class") == "wrong_mcause"
         and boom.get("observed_mcause") == 13
     )
+
+
+def _is_valid_oracle_result(result: dict[str, Any]) -> bool:
+    return (result.get("oracle_applicability") or "valid") == "valid"

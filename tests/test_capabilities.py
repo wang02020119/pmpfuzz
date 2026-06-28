@@ -110,7 +110,9 @@ class CapabilityModelTest(unittest.TestCase):
         bare = ScenarioGenerator(seed=1, include_smepmp=False, profile="legacy-data").generate_batch(1)[0]
         sv39 = ScenarioGenerator(seed=1, include_smepmp=False, profile="sv39-ptw-pmp-matrix").generate_batch(1)[0]
 
-        self.assertEqual(required_capabilities_for_case(scenario_to_case_dict(bare, seed=1, index=0)), ["pmp"])
+        bare_required = required_capabilities_for_case(scenario_to_case_dict(bare, seed=1, index=0))
+        self.assertIn("pmp", bare_required)
+        self.assertNotIn("sv39", bare_required)
         self.assertIn("sv39", required_capabilities_for_case(scenario_to_case_dict(sv39, seed=1, index=0)))
 
 

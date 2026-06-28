@@ -22,6 +22,9 @@ DEFAULT_CVA6_VERILATOR_BIN_DIR = Path(
 )
 DEFAULT_CVA6_VERILATOR = Path("/home/dubhe/wjs/pmp-fuzz-stage1/scripts/verilator_cva6_wrapper.sh")
 DEFAULT_XIANGSHAN_EMU = Path(
+    "/home/dubhe/wjs/pmp-duts/xiangshan-clean/build/native-tlminimal/verilator-compile/emu"
+)
+LEGACY_XIANGSHAN_EMU = Path(
     "/home/dubhe/wjs/cascade_xiangshan_adapt/XiangShan/build/native-tlminimal/verilator-compile/emu"
 )
 DEFAULT_CASCADE_ROCKET = (
@@ -329,7 +332,7 @@ class CascadeRocketDut:
 class XiangShanDut:
     def __init__(self, *, binary: Path = DEFAULT_XIANGSHAN_EMU, simlen: int = 100000) -> None:
         self.name = "xiangshan-clean"
-        self.binary = binary
+        self.binary = _resolve_xiangshan_binary(binary)
         self.simlen = simlen
 
     def command_for(self, image: Path) -> list[str]:
@@ -431,6 +434,14 @@ def make_dut(
     raise ValueError(f"unsupported DUT: {dut}")
 
 
+def _resolve_xiangshan_binary(binary: Path) -> Path:
+    if binary.exists():
+        return binary
+    if binary == DEFAULT_XIANGSHAN_EMU and LEGACY_XIANGSHAN_EMU.exists():
+        return LEGACY_XIANGSHAN_EMU
+    return binary
+
+
 def parse_cascade_log(text: str, returncode: int) -> ParsedDutLog:
     match = re.search(r"Dump of reg x\d+:\s+0x([0-9a-fA-F]+)", text)
     observed_code = int(match.group(1), 16) if match else None
@@ -512,7 +523,14 @@ def parse_xiangshan_log(text: str, returncode: int) -> ParsedDutLog:
             "fail",
             None,
             "xiangshan reported bad trap",
-            failure_class=classify_log_failure(text, returncode),
+            failure_class="xiangshan_bad_trap",
+        )
+    if "EXCEEDING CYCLE/INSTR LIMIT" in text:
+        return ParsedDutLog(
+            "infra_failure",
+            None,
+            "xiangshan exceeded cycle limit before observing good/bad trap",
+            failure_class="infra_unadapted",
         )
     if returncode != 0:
         return ParsedDutLog(
@@ -525,5 +543,5 @@ def parse_xiangshan_log(text: str, returncode: int) -> ParsedDutLog:
         "infra_failure",
         None,
         "xiangshan finished without a recognizable pass/fail marker",
-        failure_class="infra_failure",
+        failure_class="infra_unadapted",
     )

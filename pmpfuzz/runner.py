@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
+from .capabilities import capability_for_dut, capability_matrix, oracle_applicability_for_case, oracle_applicability_for_result
 from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, make_dut
 from .emitter import AssemblyEmitter
 from .oracle import evaluate_scenario
@@ -141,6 +142,8 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
             "schedule": str(config.schedule) if config.schedule else None,
         },
     )
+    dut_capability = capability_for_dut(config.dut)
+    write_json(out_dir / "dut_capabilities.json", capability_matrix([config.dut]))
     emitter = AssemblyEmitter()
     dut_runner = make_dut(
         dut=config.dut,
@@ -150,7 +153,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
         dut_bin=config.dut_bin,
         simlen=config.simlen,
     )
-    emitter_backend = "cascade-mmio" if config.dut == "rocket-cascade" else "tohost"
+    emitter_backend = _emitter_backend_for_dut(config.dut)
     indexed_scenarios = _scenario_plan(config)
     root = Path(__file__).resolve().parents[1]
     compile_script = root / "scripts" / "compile_one.sh"
@@ -161,6 +164,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
         outcome = evaluate_scenario(scenario)
         expected_cause = int(outcome.trap_cause) if outcome.trap_cause is not None else None
         case = scenario_to_case_dict(scenario, seed=config.seed, index=index)
+        case_applicability = oracle_applicability_for_case(case, dut_capability)
         case_dir = cases_dir / scenario.name
         result_dir = results_dir / scenario.name
         case_dir.mkdir(parents=True, exist_ok=True)
@@ -171,6 +175,32 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
         case_path = case_dir / "case.json"
         asm.write_text(emitter.emit(scenario, backend=emitter_backend), encoding="ascii")
         write_json(case_path, case)
+        if case_applicability == "unsupported":
+            result = CampaignResult(
+                name=scenario.name,
+                profile=scenario.profile,
+                status="setup_unsupported",
+                expected_allowed=outcome.allowed,
+                expected_cause=expected_cause,
+                elapsed_seconds=time.monotonic() - case_start,
+                failure_class="setup_unsupported",
+                reason="case requires capabilities not implemented by this DUT",
+            )
+            write_json(
+                result_dir / "result.json",
+                result_to_dict(
+                    case=case,
+                    dut=config.dut,
+                    status=result.status,
+                    elapsed_seconds=result.elapsed_seconds,
+                    returncode=None,
+                    log=log,
+                    reason=result.reason,
+                    failure_class=result.failure_class,
+                    oracle_applicability=case_applicability,
+                ),
+            )
+            return result
         if _requires_rlb_for_setup(scenario):
             result = CampaignResult(
                 name=scenario.name,
@@ -193,6 +223,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                     log=log,
                     reason=result.reason,
                     failure_class=result.failure_class,
+                    oracle_applicability="unsupported",
                 ),
             )
             return result
@@ -231,12 +262,19 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                     log=log,
                     reason=result.reason,
                     failure_class=result.failure_class,
+                    oracle_applicability=case_applicability,
                 ),
             )
             return result
 
         dut_result = dut_runner.run(elf, timeout_seconds=config.per_case_timeout_seconds, log_path=log)
         status = dut_result.status
+        result_applicability = oracle_applicability_for_result(
+            case,
+            dut_capability,
+            status=status,
+            failure_class=dut_result.failure_class,
+        )
         if status != "pass":
             _copy_failure_artifacts(failures, case_dir, result_dir)
         result = CampaignResult(
@@ -268,6 +306,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                 observed_mcause=result.observed_mcause,
                 observed_mtval=result.observed_mtval,
                 failure_class=result.failure_class,
+                oracle_applicability=result_applicability,
             ),
         )
         return result
@@ -309,6 +348,14 @@ def _scenario_plan(config: RunnerConfig):
                 scenario = replace(scenario, name=f"{profile}__{scenario.name}")
             indexed_scenarios.append((index, scenario))
     return indexed_scenarios
+
+
+def _emitter_backend_for_dut(dut: str) -> str:
+    if dut == "rocket-cascade":
+        return "cascade-mmio"
+    if dut == "xiangshan-clean":
+        return "xiangshan-goodtrap"
+    return "tohost"
 
 
 def _copy_failure_artifacts(failures: Path, case_dir: Path, result_dir: Path) -> None:

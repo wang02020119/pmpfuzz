@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+from typing import Any, Iterable
+
+from .dut import (
+    DEFAULT_CLEAN_CHIPYARD_DIR,
+    DEFAULT_XIANGSHAN_EMU,
+    LEGACY_XIANGSHAN_EMU,
+)
+
+
+DEFAULT_CAPABILITY_SCHEMA_VERSION = 1
+DEFAULT_CAPABILITY_SPIKE = "/home/dubhe/wjs/boom_host_deploy/opt-riscv/bin/spike"
+
+
+def capability_for_dut(
+    dut: str,
+    *,
+    available: bool | None = None,
+    path: Path | str | None = None,
+) -> dict[str, Any]:
+    spec = _DUT_SPECS.get(dut)
+    if spec is None:
+        raise ValueError(f"unsupported DUT for capability probe: {dut}")
+    resolved_path = str(path or spec.get("path") or "")
+    resolved_available = _default_available(dut, resolved_path) if available is None else bool(available)
+    capability = {
+        "schema_version": DEFAULT_CAPABILITY_SCHEMA_VERSION,
+        "dut": dut,
+        "available": resolved_available,
+        "path": resolved_path,
+        "supported_capabilities": dict(spec["supported_capabilities"]),
+        "finish_protocol": spec["finish_protocol"],
+        "diagnostic_depth": spec["diagnostic_depth"],
+        "oracle_applicability": "valid" if resolved_available else "infra_unadapted",
+        "notes": list(spec.get("notes", ())),
+    }
+    return capability
+
+
+def capability_matrix(duts: Iterable[str]) -> dict[str, Any]:
+    entries = {dut: capability_for_dut(dut) for dut in duts}
+    return {
+        "schema_version": DEFAULT_CAPABILITY_SCHEMA_VERSION,
+        "duts": entries,
+    }
+
+
+def required_capabilities_for_case(case: dict[str, Any]) -> list[str]:
+    required = {"pmp"}
+    if str(case.get("translation")) == "sv39" or case.get("sv39") is not None:
+        required.add("sv39")
+    privilege = case.get("privilege")
+    if privilege == "S":
+        required.add("s_mode")
+    elif privilege == "U":
+        required.add("u_mode")
+    mseccfg = case.get("mseccfg") or {}
+    if any(bool(mseccfg.get(bit)) for bit in ("mml", "mmwp", "rlb")) or "smepmp" in str(case.get("profile")):
+        required.add("smepmp")
+    return sorted(required)
+
+
+def oracle_applicability_for_case(case: dict[str, Any], capability: dict[str, Any] | None = None) -> str:
+    if _is_experimental_case(case):
+        return "experimental"
+    if capability is None:
+        return "valid"
+    if not capability.get("available"):
+        return "infra_unadapted"
+    supported = capability.get("supported_capabilities") or {}
+    missing = [item for item in required_capabilities_for_case(case) if not supported.get(item, False)]
+    if missing:
+        return "unsupported"
+    return str(capability.get("oracle_applicability") or "valid")
+
+
+def oracle_applicability_for_result(
+    case: dict[str, Any],
+    capability: dict[str, Any] | None,
+    *,
+    status: str,
+    failure_class: str | None,
+) -> str:
+    if status == "setup_unsupported":
+        return "unsupported"
+    if failure_class == "infra_unadapted":
+        return "infra_unadapted"
+    return oracle_applicability_for_case(case, capability)
+
+
+def _is_experimental_case(case: dict[str, Any]) -> bool:
+    profile = str(case.get("profile") or "")
+    if profile in {"legacy-fetch-experimental"}:
+        return True
+    sequence = case.get("stateful_sequence") or {}
+    return sequence.get("fence") == "no-fence-experimental"
+
+
+def _default_available(dut: str, path: str) -> bool:
+    if dut == "spike":
+        return Path(path).exists() or shutil.which(path) is not None
+    if dut in {"rocket-clean", "boom-clean", "cva6-clean", "cva6"}:
+        return _chipyard_sim_exists(dut)
+    if dut == "xiangshan-clean":
+        return DEFAULT_XIANGSHAN_EMU.exists() or LEGACY_XIANGSHAN_EMU.exists()
+    if dut == "rocket-cascade":
+        return Path(path).exists()
+    return bool(path and Path(path).exists())
+
+
+def _chipyard_sim_exists(dut: str) -> bool:
+    configs = {
+        "rocket-clean": ("simulator-chipyard.harness-RocketConfig",),
+        "boom-clean": ("simulator-chipyard.harness-SmallBoomV3Config",),
+        "cva6": ("simulator-chipyard.harness-CVA6Config", "simulator-chipyard-CVA6Config"),
+        "cva6-clean": ("simulator-chipyard.harness-CVA6Config", "simulator-chipyard-CVA6Config"),
+    }
+    sim_dir = DEFAULT_CLEAN_CHIPYARD_DIR / "sims" / "verilator"
+    return any((sim_dir / name).exists() for name in configs.get(dut, ()))
+
+
+_COMMON_FULL = {
+    "pmp": True,
+    "s_mode": True,
+    "u_mode": True,
+    "sv39": True,
+    "smepmp": False,
+}
+
+_DUT_SPECS: dict[str, dict[str, Any]] = {
+    "spike": {
+        "path": DEFAULT_CAPABILITY_SPIKE,
+        "supported_capabilities": {**_COMMON_FULL, "smepmp": True},
+        "finish_protocol": "tohost",
+        "diagnostic_depth": "structured_tohost",
+        "notes": ["reference ISA simulator; Smepmp availability still depends on selected --isa"],
+    },
+    "rocket-clean": {
+        "path": DEFAULT_CLEAN_CHIPYARD_DIR / "sims" / "verilator" / "simulator-chipyard.harness-RocketConfig",
+        "supported_capabilities": _COMMON_FULL,
+        "finish_protocol": "tohost",
+        "diagnostic_depth": "structured_tohost",
+    },
+    "boom-clean": {
+        "path": DEFAULT_CLEAN_CHIPYARD_DIR / "sims" / "verilator" / "simulator-chipyard.harness-SmallBoomV3Config",
+        "supported_capabilities": _COMMON_FULL,
+        "finish_protocol": "tohost",
+        "diagnostic_depth": "structured_tohost",
+    },
+    "cva6": {
+        "path": DEFAULT_CLEAN_CHIPYARD_DIR / "sims" / "verilator" / "simulator-chipyard.harness-CVA6Config",
+        "supported_capabilities": _COMMON_FULL,
+        "finish_protocol": "tohost",
+        "diagnostic_depth": "structured_tohost",
+    },
+    "cva6-clean": {
+        "path": DEFAULT_CLEAN_CHIPYARD_DIR / "sims" / "verilator" / "simulator-chipyard.harness-CVA6Config",
+        "supported_capabilities": _COMMON_FULL,
+        "finish_protocol": "tohost",
+        "diagnostic_depth": "structured_tohost",
+    },
+    "xiangshan-clean": {
+        "path": DEFAULT_XIANGSHAN_EMU,
+        "supported_capabilities": _COMMON_FULL,
+        "finish_protocol": "xiangshan-goodtrap",
+        "diagnostic_depth": "pass_fail_only",
+        "notes": ["clean OpenXiangShan emu path preferred; legacy path is used only as fallback"],
+    },
+    "rocket-cascade": {
+        "path": "",
+        "supported_capabilities": _COMMON_FULL,
+        "finish_protocol": "cascade-mmio",
+        "diagnostic_depth": "result_code_only",
+    },
+}

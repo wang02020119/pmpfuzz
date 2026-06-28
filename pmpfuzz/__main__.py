@@ -9,8 +9,9 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
+from .capabilities import capability_for_dut, capability_matrix, oracle_applicability_for_result
 from .coverage import write_coverage
-from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_XIANGSHAN_EMU, make_dut
+from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_XIANGSHAN_EMU, LEGACY_XIANGSHAN_EMU, make_dut
 from .emitter import AssemblyEmitter
 from .runner import DEFAULT_SPIKE, RunnerConfig, parse_time_budget, run_campaign
 from .scenario import ScenarioGenerator
@@ -39,9 +40,14 @@ def build_parser() -> argparse.ArgumentParser:
     env_check = subparsers.add_parser("env-check", help="check local/server tool paths")
     _add_common_env_args(env_check)
 
+    probe_dut = subparsers.add_parser("probe-dut", help="write DUT capability metadata")
+    probe_dut.add_argument("--dut", default="spike,rocket-clean,boom-clean,cva6-clean,xiangshan-clean")
+    probe_dut.add_argument("--out", type=Path, required=True)
+    _add_common_env_args(probe_dut)
+
     gen = subparsers.add_parser("gen", help="generate cases without running a DUT")
     _add_generation_args(gen)
-    gen.add_argument("--backend", choices=["tohost", "cascade-mmio"], default="tohost")
+    gen.add_argument("--backend", choices=["tohost", "cascade-mmio", "xiangshan-goodtrap"], default="tohost")
 
     run = subparsers.add_parser("run", help="run a fuzz campaign")
     _add_generation_args(run)
@@ -104,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "env-check":
         return _cmd_env_check(args)
+    if args.command == "probe-dut":
+        return _cmd_probe_dut(args)
     if args.command == "gen":
         return _cmd_gen(args)
     if args.command == "run":
@@ -167,8 +175,8 @@ def _cmd_env_check(args: argparse.Namespace) -> int:
         ),
         (
             "xiangshan-clean",
-            DEFAULT_XIANGSHAN_EMU.exists(),
-            str(DEFAULT_XIANGSHAN_EMU),
+            DEFAULT_XIANGSHAN_EMU.exists() or LEGACY_XIANGSHAN_EMU.exists(),
+            f"{DEFAULT_XIANGSHAN_EMU} fallback={LEGACY_XIANGSHAN_EMU}",
         ),
     ]
     ok = True
@@ -176,6 +184,19 @@ def _cmd_env_check(args: argparse.Namespace) -> int:
         ok = ok and passed
         print(f"{name}: {'ok' if passed else 'missing'} {detail}")
     return 0 if ok else 1
+
+
+def _cmd_probe_dut(args: argparse.Namespace) -> int:
+    duts = [item.strip() for item in args.dut.split(",") if item.strip()]
+    matrix = capability_matrix(duts)
+    write_json(args.out / "dut_capabilities.json", matrix)
+    for dut_name, capability in matrix["duts"].items():
+        print(
+            f"{dut_name}: {'ok' if capability['available'] else 'missing'} "
+            f"finish={capability['finish_protocol']} diagnostic={capability['diagnostic_depth']} "
+            f"oracle={capability['oracle_applicability']}"
+        )
+    return 0
 
 
 def _cmd_gen(args: argparse.Namespace) -> int:
@@ -264,6 +285,13 @@ def _cmd_repro(args: argparse.Namespace) -> int:
         )
         start = time.monotonic()
         dut_result = dut.run(elf, timeout_seconds=args.per_case_timeout, log_path=log)
+        capability = capability_for_dut(dut_name)
+        applicability = oracle_applicability_for_result(
+            case,
+            capability,
+            status=dut_result.status,
+            failure_class=dut_result.failure_class,
+        )
         result = result_to_dict(
             case=case,
             dut=dut_name,
@@ -276,6 +304,7 @@ def _cmd_repro(args: argparse.Namespace) -> int:
             observed_mcause=dut_result.observed_mcause,
             observed_mtval=dut_result.observed_mtval,
             failure_class=dut_result.failure_class,
+            oracle_applicability=applicability,
         )
         write_json(result_dir / "result.json", result)
         any_failed = any_failed or dut_result.status != "pass"

@@ -9,6 +9,7 @@ from .oracle import evaluate_scenario
 from .pmp import Access, PmpEntry, PmpModel
 from .scenario import M_DATA_BASE, M_DATA_SIZE, M_TEXT_BASE, M_TEXT_SIZE, SU_CODE_BASE, SU_CODE_SIZE, PmpScenario
 from .semantic_coverage import combo_bins_for_case, semantic_bins_for_case
+from .capabilities import oracle_applicability_for_case, required_capabilities_for_case
 
 
 SCHEMA_VERSION = 2
@@ -81,6 +82,8 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
         "expected_allowed": expected_allowed,
         "pte_permissions": scenario.pte_permissions,
         "security_focus": scenario.security_focus,
+        "required_capabilities": [],
+        "oracle_applicability": "valid",
         "expected": {
             "allowed": expected_allowed,
             "trap_cause": expected_cause,
@@ -99,6 +102,8 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
         }
     if scenario.stateful_sequence is not None:
         data["stateful_sequence"] = scenario.stateful_sequence
+    data["required_capabilities"] = required_capabilities_for_case(data)
+    data["oracle_applicability"] = oracle_applicability_for_case(data)
     data["semantic_bins"] = semantic_bins_for_case(data)
     data["combo_bins"] = combo_bins_for_case(data)
     return data
@@ -161,6 +166,7 @@ def result_to_dict(
     observed_mcause: int | None = None,
     observed_mtval: int | None = None,
     failure_class: str | None = None,
+    oracle_applicability: str | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -169,6 +175,8 @@ def result_to_dict(
         "dut": dut,
         "status": status,
         "failure_class": failure_class,
+        "required_capabilities": list(case.get("required_capabilities") or required_capabilities_for_case(case)),
+        "oracle_applicability": oracle_applicability or case.get("oracle_applicability") or "valid",
         "expected_allowed": case["expected"]["allowed"],
         "expected_cause": case["expected"]["trap_cause"],
         "expected_stage": case["expected"]["stage"],
@@ -190,9 +198,12 @@ def aggregate_results(run_dir: Path) -> dict[str, Any]:
     statuses: dict[str, int] = {}
     profiles: dict[str, int] = {}
     failure_classes: dict[str, int] = {}
+    oracle_applicability: dict[str, int] = {}
     for result in results:
         statuses[result["status"]] = statuses.get(result["status"], 0) + 1
         profiles[result["profile"]] = profiles.get(result["profile"], 0) + 1
+        applicability = result.get("oracle_applicability") or "unknown"
+        oracle_applicability[applicability] = oracle_applicability.get(applicability, 0) + 1
         failure_class = result.get("failure_class") or ""
         if failure_class:
             failure_classes[failure_class] = failure_classes.get(failure_class, 0) + 1
@@ -208,6 +219,7 @@ def aggregate_results(run_dir: Path) -> dict[str, Any]:
         "statuses": statuses,
         "profiles": profiles,
         "failure_classes": failure_classes,
+        "oracle_applicability": oracle_applicability,
         "avg_elapsed_seconds": round(elapsed / total, 4) if total else None,
         "results": results,
     }

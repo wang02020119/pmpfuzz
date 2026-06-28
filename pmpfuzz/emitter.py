@@ -584,6 +584,26 @@ class AssemblyEmitter:
             if include_tohost_data:
                 lines.extend(self._emit_legacy_runtime_data())
             return lines
+        if backend == "xiangshan-goodtrap":
+            lines = [
+                "finish:",
+                "    la t0, result",
+                "    sd a0, 0(t0)" if include_tohost_data else "    sd a0, 16(t0)",
+                "    la t0, tohost",
+                "    sd a0, 0(t0)",
+                f"    li t1, {PASS_TOHOST}",
+                "    beq a0, t1, xiangshan_finish_good",
+                "    li a0, 1",
+                "    ebreak",
+                "1:  j 1b",
+                "xiangshan_finish_good:",
+                "    li a0, 0",
+                "    ebreak",
+                "2:  j 2b",
+            ]
+            if include_tohost_data:
+                lines.extend(self._emit_legacy_runtime_data())
+            return lines
         raise ValueError(f"unsupported emitter backend: {backend}")
 
     def _emit_legacy_runtime_data(self) -> list[str]:

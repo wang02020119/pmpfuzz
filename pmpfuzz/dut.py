@@ -21,18 +21,11 @@ DEFAULT_CVA6_VERILATOR_BIN_DIR = Path(
     "/home/dubhe/wjs/cascade_cpu_fuzzing/mount/cascade_xiangshan_adapt/tools/verilator-5.032/bin"
 )
 DEFAULT_CVA6_VERILATOR = Path("/home/dubhe/wjs/pmp-fuzz-stage1/scripts/verilator_cva6_wrapper.sh")
-XIANGSHAN_GOODTRAP_EMU = Path(
-    "/home/dubhe/wjs/pmp-duts/xiangshan-clean/build/verilator-compile/emu"
-)
-XIANGSHAN_NATIVE_EMU = Path(
-    "/home/dubhe/wjs/pmp-duts/xiangshan-clean/build/native-tlminimal/verilator-compile/emu"
-)
-XIANGSHAN_NATIVE_DEBUG_EMU = Path(
-    "/home/dubhe/wjs/pmp-duts/xiangshan-clean/build/native-tlminimal-debug/verilator-compile/emu"
-)
-XIANGSHAN_NATIVE_FAST_EMU = Path(
-    "/home/dubhe/wjs/pmp-duts/xiangshan-clean/build/native-tlminimal-fast/verilator-compile/emu"
-)
+XIANGSHAN_VANILLA_ROOT = Path("/home/dubhe/wjs/xiangshan_vanilla")
+XIANGSHAN_GOODTRAP_EMU = XIANGSHAN_VANILLA_ROOT / "build/verilator-compile/emu"
+XIANGSHAN_NATIVE_EMU = XIANGSHAN_VANILLA_ROOT / "build/native-tlminimal/verilator-compile/emu"
+XIANGSHAN_NATIVE_DEBUG_EMU = XIANGSHAN_VANILLA_ROOT / "build/native-tlminimal-debug/verilator-compile/emu"
+XIANGSHAN_NATIVE_FAST_EMU = XIANGSHAN_VANILLA_ROOT / "build/native-tlminimal-fast/verilator-compile/emu"
 LEGACY_XIANGSHAN_EMU = Path(
     "/home/dubhe/wjs/cascade_xiangshan_adapt/XiangShan/build/native-tlminimal/verilator-compile/emu"
 )

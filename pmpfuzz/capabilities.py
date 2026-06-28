@@ -191,7 +191,7 @@ _DUT_SPECS: dict[str, dict[str, Any]] = {
         "diagnostic_depth": "pass_fail_only",
         "oracle_applicability": "valid",
         "notes": [
-            "clean OpenXiangShan emu path preferred; legacy path is used only as fallback",
+            "clean OpenXiangShan vanilla emu path preferred; legacy cascade path is used only as fallback",
             "uses XiangShan xstrap instruction encoding rather than standard ebreak/tohost termination",
         ],
     },

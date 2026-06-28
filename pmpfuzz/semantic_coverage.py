@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+from itertools import combinations
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable
 
+from .oracle import evaluate_scenario
+from .pmp import Access, PmpEntry, PmpModel
 from .scenario import PmpScenario, ScenarioGenerator
 
 
@@ -28,10 +31,10 @@ EXPERIMENTAL_PROFILES = (
 )
 
 PROFILE_TARGET_COUNTS = {
-    "pmp-boundary": 72,
-    "sv39-perm-matrix": 210,
-    "sv39-ptw-pmp-matrix": 72,
-    "pmp-side-effect": 4,
+    "pmp-boundary": 144,
+    "sv39-perm-matrix": 168,
+    "sv39-ptw-pmp-matrix": 288,
+    "pmp-side-effect": 8,
     "tlb-stale-pte": 4,
     "tlb-stale-pmp": 4,
     "ptw-stale-pmp": 4,
@@ -40,6 +43,8 @@ PROFILE_TARGET_COUNTS = {
     "smepmp-table": 48,
     "mixed-smepmp-mmu": 48,
 }
+
+COVERAGE_MODES = ("semantic", "pairwise", "security-triples")
 
 
 def semantic_bins_for_case(case: dict[str, Any]) -> list[str]:
@@ -107,6 +112,25 @@ def semantic_bins_for_case(case: dict[str, Any]) -> list[str]:
     return sorted(bins)
 
 
+def combo_bins_for_case(case: dict[str, Any], *, coverage_mode: str = "all") -> list[str]:
+    explicit = case.get("combo_bins")
+    if explicit:
+        bins = sorted({str(item) for item in explicit if str(item)})
+    else:
+        factors = _combo_factors(case)
+        bins = _pairwise_combo_bins(factors)
+        bins.update(_security_triple_bins(factors))
+        bins = sorted(bins)
+
+    if coverage_mode == "all":
+        return bins
+    if coverage_mode == "pairwise":
+        return [item for item in bins if item.startswith("combo2:")]
+    if coverage_mode == "security-triples":
+        return [item for item in bins if item.startswith("combo3:")]
+    raise ValueError(f"unsupported coverage mode for combo bins: {coverage_mode}")
+
+
 def semantic_bins_for_scenario(scenario: PmpScenario) -> list[str]:
     case: dict[str, Any] = {
         "profile": scenario.profile,
@@ -124,6 +148,32 @@ def semantic_bins_for_scenario(scenario: PmpScenario) -> list[str]:
         "stateful_sequence": scenario.stateful_sequence,
     }
     return semantic_bins_for_case(case)
+
+
+def combo_bins_for_scenario(scenario: PmpScenario, *, coverage_mode: str = "all") -> list[str]:
+    pmp_locked, pmp_allow = _pmp_metadata_for_scenario(scenario)
+    expected_allowed = evaluate_scenario(scenario).allowed
+    if scenario.stateful_sequence is not None:
+        expected_allowed = scenario.stateful_sequence.get("expected_final") == "store_side_effect"
+    case: dict[str, Any] = {
+        "profile": scenario.profile,
+        "privilege": scenario.privilege.value,
+        "access": scenario.probe.access.value,
+        "translation": scenario.translation.value,
+        "probe_offset": scenario.probe.offset_name,
+        "sum_enabled": scenario.sum_enabled,
+        "mxr": scenario.mxr,
+        "ptw_fault_level": scenario.ptw_fault_level,
+        "preload_mode": scenario.preload_mode,
+        "pmp_match_mode": scenario.pmp_match_mode,
+        "pmp_locked": pmp_locked,
+        "pmp_allow": pmp_allow,
+        "expected_allowed": expected_allowed,
+        "pte_permissions": scenario.pte_permissions,
+        "security_focus": scenario.security_focus,
+        "stateful_sequence": scenario.stateful_sequence,
+    }
+    return combo_bins_for_case(case, coverage_mode=coverage_mode)
 
 
 def coverage_gap_from_runs(
@@ -161,6 +211,52 @@ def coverage_gap_from_runs(
     }
 
 
+def combination_gap_from_runs(
+    run_dirs: Iterable[Path],
+    *,
+    target: str = CORE_STATEFUL_TARGET,
+    include_experimental: bool = False,
+    seed: int = 20260628,
+    coverage_mode: str = "pairwise",
+) -> dict[str, Any]:
+    if coverage_mode not in {"pairwise", "security-triples"}:
+        raise ValueError("combination coverage gap requires pairwise or security-triples mode")
+    target_bins = set(
+        target_combo_bins(
+            target=target,
+            include_experimental=include_experimental,
+            seed=seed,
+            coverage_mode=coverage_mode,
+        )
+    )
+    observed_bins: set[str] = set()
+    run_dir_text: list[str] = []
+    for run_dir in run_dirs:
+        run_dir = Path(run_dir)
+        run_dir_text.append(str(run_dir))
+        for case_path in sorted((run_dir / "cases").glob("*/case.json")):
+            observed_bins.update(combo_bins_for_case(_read_json(case_path), coverage_mode=coverage_mode))
+
+    covered_target = observed_bins & target_bins
+    missing = target_bins - covered_target
+    coverage_rate = round(len(covered_target) / len(target_bins), 6) if target_bins else 1.0
+    return {
+        "schema_version": 3,
+        "target": target,
+        "coverage_mode": coverage_mode,
+        "include_experimental": include_experimental,
+        "run_dirs": run_dir_text,
+        "total_target_combo_bins": len(target_bins),
+        "observed_combo_bins": sorted(observed_bins),
+        "covered_combo_bins": sorted(covered_target),
+        "covered_target_combo_bins": len(covered_target),
+        "missing_combo_bins": sorted(missing),
+        "missing_target_combo_bins": len(missing),
+        "combo_coverage_rate": coverage_rate,
+        "top_combo_gaps": sorted(missing)[:25],
+    }
+
+
 def build_schedule(
     run_dirs: Iterable[Path],
     *,
@@ -168,10 +264,24 @@ def build_schedule(
     max_cases: int = 64,
     seed: int = 20260628,
     include_experimental: bool = False,
+    coverage_mode: str = "semantic",
 ) -> dict[str, Any]:
+    if coverage_mode not in COVERAGE_MODES:
+        raise ValueError(f"unsupported coverage mode: {coverage_mode}")
     run_dirs = [Path(item) for item in run_dirs]
-    gap = coverage_gap_from_runs(run_dirs, target=target, include_experimental=include_experimental, seed=seed)
-    missing = set(gap["missing_bins"])
+    semantic_gap = coverage_gap_from_runs(run_dirs, target=target, include_experimental=include_experimental, seed=seed)
+    combo_gap = None
+    if coverage_mode == "semantic":
+        missing = set(semantic_gap["missing_bins"])
+    else:
+        combo_gap = combination_gap_from_runs(
+            run_dirs,
+            target=target,
+            include_experimental=include_experimental,
+            seed=seed,
+            coverage_mode=coverage_mode,
+        )
+        missing = set(combo_gap["missing_combo_bins"])
     selected: list[dict[str, Any]] = []
     candidates = _target_candidates(target=target, include_experimental=include_experimental, seed=seed)
 
@@ -181,7 +291,12 @@ def build_schedule(
         for candidate in candidates:
             if candidate.get("_selected"):
                 continue
-            gain = set(candidate["semantic_bins"]) & missing
+            candidate_bins = (
+                set(candidate["semantic_bins"])
+                if coverage_mode == "semantic"
+                else set(combo_bins_for_case(candidate, coverage_mode=coverage_mode))
+            )
+            gain = candidate_bins & missing
             if len(gain) > len(best_gain):
                 best = candidate
                 best_gain = gain
@@ -193,21 +308,32 @@ def build_schedule(
             break
         best["_selected"] = True
         missing -= best_gain
-        selected.append(_schedule_entry(best, best_gain, seed))
+        selected.append(_schedule_entry(best, best_gain, seed, coverage_mode=coverage_mode))
 
-    return {
-        "schema_version": 1,
+    schedule = {
+        "schema_version": 2,
         "target": target,
+        "coverage_mode": coverage_mode,
         "seed": seed,
         "include_smepmp": False,
         "include_experimental": include_experimental,
         "max_cases": max_cases,
         "from_runs": [str(item) for item in run_dirs],
-        "total_target_bins": gap["total_target_bins"],
-        "covered_target_bins_before": gap["covered_target_bins"],
-        "missing_target_bins_before": gap["missing_target_bins"],
+        "total_target_bins": semantic_gap["total_target_bins"],
+        "covered_target_bins_before": semantic_gap["covered_target_bins"],
+        "missing_target_bins_before": semantic_gap["missing_target_bins"],
         "entries": selected,
     }
+    if combo_gap is not None:
+        schedule.update(
+            {
+                "total_target_combo_bins": combo_gap["total_target_combo_bins"],
+                "covered_target_combo_bins_before": combo_gap["covered_target_combo_bins"],
+                "missing_target_combo_bins_before": combo_gap["missing_target_combo_bins"],
+                "combo_coverage_rate_before": combo_gap["combo_coverage_rate"],
+            }
+        )
+    return schedule
 
 
 def write_schedule(
@@ -218,15 +344,26 @@ def write_schedule(
     seed: int,
     out_dir: Path,
     include_experimental: bool = False,
+    coverage_mode: str = "semantic",
 ) -> Path:
     out_dir = Path(out_dir)
-    gap = coverage_gap_from_runs(run_dirs, target=target, include_experimental=include_experimental, seed=seed)
+    if coverage_mode == "semantic":
+        gap = coverage_gap_from_runs(run_dirs, target=target, include_experimental=include_experimental, seed=seed)
+    else:
+        gap = combination_gap_from_runs(
+            run_dirs,
+            target=target,
+            include_experimental=include_experimental,
+            seed=seed,
+            coverage_mode=coverage_mode,
+        )
     schedule = build_schedule(
         run_dirs,
         target=target,
         max_cases=max_cases,
         seed=seed,
         include_experimental=include_experimental,
+        coverage_mode=coverage_mode,
     )
     _write_json(out_dir / "coverage_gap.json", gap)
     schedule_path = out_dir / "schedule.json"
@@ -270,6 +407,19 @@ def target_semantic_bins(
     return sorted(bins)
 
 
+def target_combo_bins(
+    *,
+    target: str = CORE_STATEFUL_TARGET,
+    include_experimental: bool = False,
+    seed: int = 20260628,
+    coverage_mode: str = "pairwise",
+) -> list[str]:
+    bins: set[str] = set()
+    for candidate in _target_candidates(target=target, include_experimental=include_experimental, seed=seed):
+        bins.update(combo_bins_for_case(candidate, coverage_mode=coverage_mode))
+    return sorted(bins)
+
+
 def target_profiles(target: str, include_experimental: bool = False) -> tuple[str, ...]:
     if target != CORE_STATEFUL_TARGET:
         raise ValueError(f"unsupported semantic coverage target: {target}")
@@ -291,22 +441,159 @@ def _target_candidates(*, target: str, include_experimental: bool, seed: int) ->
                     "index": index,
                     "name": f"{profile}__{scenario.name}",
                     "semantic_bins": semantic_bins_for_scenario(scenario),
+                    "combo_bins": combo_bins_for_scenario(scenario),
                 }
             )
     return candidates
 
 
-def _schedule_entry(candidate: dict[str, Any], gain: set[str], seed: int) -> dict[str, Any]:
-    return {
+def _schedule_entry(candidate: dict[str, Any], gain: set[str], seed: int, *, coverage_mode: str) -> dict[str, Any]:
+    entry = {
         "profile": candidate["profile"],
         "index": candidate["index"],
         "name": candidate["name"],
         "seed": seed,
         "include_smepmp": False,
         "semantic_bins": candidate["semantic_bins"],
-        "covers_missing_bins": sorted(gain),
-        "reason": f"covers {len(gain)} missing semantic bins",
+        "combo_bins": candidate["combo_bins"],
+        "coverage_mode": coverage_mode,
     }
+    if coverage_mode == "semantic":
+        entry["covers_missing_bins"] = sorted(gain)
+        entry["covers_missing_combo_bins"] = []
+        entry["reason"] = f"covers {len(gain)} missing semantic bins"
+    else:
+        entry["covers_missing_bins"] = []
+        entry["covers_missing_combo_bins"] = sorted(gain)
+        entry["reason"] = f"covers {len(gain)} missing {coverage_mode} combo bins"
+    return entry
+
+
+def _combo_factors(case: dict[str, Any]) -> dict[str, str]:
+    profile = str(case.get("profile") or "unknown")
+    factors: dict[str, str] = {"profile": profile}
+    _add_factor(factors, "priv", case.get("privilege"))
+    _add_factor(factors, "access", case.get("access"))
+    _add_factor(factors, "translation", case.get("translation"))
+    _add_factor(factors, "pmp", case.get("pmp_match_mode"))
+    _add_factor(factors, "pmp_allow", _bool_text(case.get("pmp_allow")) if case.get("pmp_allow") is not None else None)
+    _add_factor(factors, "pmp_locked", _bool_text(case.get("pmp_locked")) if case.get("pmp_locked") is not None else None)
+    _add_factor(factors, "expected_allowed", _bool_text(case.get("expected_allowed")) if case.get("expected_allowed") is not None else None)
+    _add_factor(factors, "probe", case.get("probe_offset"))
+    _add_factor(factors, "ptw", case.get("ptw_fault_level"))
+    _add_factor(factors, "preload", case.get("preload_mode"))
+    _add_factor(factors, "sum", _bool_text(case.get("sum_enabled")))
+    _add_factor(factors, "mxr", _bool_text(case.get("mxr")))
+    _add_factor(factors, "security", case.get("security_focus"))
+
+    pte = case.get("pte_permissions") or {}
+    _add_factor(factors, "pte_rwx", pte.get("rwx"))
+    _add_factor(factors, "pte_user", _bool_text(pte.get("user")) if "user" in pte else None)
+    _add_factor(factors, "pte_a", _bool_text(pte.get("accessed")) if "accessed" in pte else None)
+    _add_factor(factors, "pte_d", _bool_text(pte.get("dirty")) if "dirty" in pte else None)
+
+    sequence = case.get("stateful_sequence") or {}
+    _add_factor(factors, "sequence", sequence.get("kind"))
+    _add_factor(factors, "mutation", sequence.get("mutation"))
+    _add_factor(factors, "fence", sequence.get("fence"))
+    _add_factor(factors, "expected_cause", sequence.get("expected_cause"))
+    return factors
+
+
+def _pairwise_combo_bins(factors: dict[str, str]) -> set[str]:
+    profile = factors["profile"]
+    names = [
+        "priv",
+        "access",
+        "translation",
+        "pmp",
+        "pmp_allow",
+        "pmp_locked",
+        "expected_allowed",
+        "probe",
+        "ptw",
+        "preload",
+        "sum",
+        "mxr",
+        "pte_rwx",
+        "pte_user",
+        "pte_a",
+        "pte_d",
+        "security",
+        "sequence",
+        "mutation",
+        "fence",
+        "expected_cause",
+    ]
+    present = [(name, factors[name]) for name in names if name in factors]
+    return {
+        f"combo2:profile={profile}|{left}={left_value}|{right}={right_value}"
+        for (left, left_value), (right, right_value) in combinations(present, 2)
+    }
+
+
+def _security_triple_bins(factors: dict[str, str]) -> set[str]:
+    profile = factors["profile"]
+    triples = (
+        ("priv", "access", "pmp"),
+        ("mxr", "preload", "ptw"),
+        ("mutation", "fence", "priv"),
+        ("priv", "access", "pte_rwx"),
+        ("pmp_locked", "pmp_allow", "probe"),
+        ("expected_allowed", "access", "priv"),
+    )
+    bins: set[str] = set()
+    for names in triples:
+        if all(name in factors for name in names):
+            bins.add(
+                "combo3:profile={profile}|{items}".format(
+                    profile=profile,
+                    items="|".join(f"{name}={factors[name]}" for name in names),
+                )
+            )
+    return bins
+
+
+def _add_factor(factors: dict[str, str], name: str, value: object) -> None:
+    if value is None:
+        return
+    text = str(value)
+    if text:
+        factors[name] = text
+
+
+def _bool_text(value: object) -> str:
+    return "1" if bool(value) else "0"
+
+
+def _pmp_metadata_for_scenario(scenario: PmpScenario) -> tuple[bool, bool]:
+    harness_indices = {6, 7}
+    if scenario.translation.value != "bare" or scenario.profile == "pmp-side-effect":
+        harness_indices.update({0, 1, 2})
+    relevant = [entry for entry in scenario.entries if entry.address_mode.name.lower() != "off" and entry.index not in harness_indices]
+    locked = any(entry.locked for entry in relevant)
+    decision = PmpModel(scenario.entries, scenario.mseccfg).check(
+        privilege=scenario.privilege,
+        access=scenario.probe.access,
+        physical_address=scenario.probe.physical_address,
+        size=scenario.probe.size,
+        mprv=scenario.mprv,
+        mpp=scenario.mpp,
+    )
+    matched = next((entry for entry in scenario.entries if entry.index == decision.match_index), None)
+    if matched is None:
+        return locked, False
+    return locked, _entry_allows_access(matched, scenario.probe.access)
+
+
+def _entry_allows_access(entry: PmpEntry, access: Access) -> bool:
+    if access == Access.LOAD:
+        return entry.read
+    if access == Access.STORE:
+        return entry.write
+    if access == Access.FETCH:
+        return entry.execute
+    raise ValueError(f"unsupported access: {access}")
 
 
 def _add_field_bin(bins: set[str], profile: str, name: str, value: object) -> None:

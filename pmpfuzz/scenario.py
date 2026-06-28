@@ -166,33 +166,40 @@ class ScenarioGenerator:
         )
 
     def _generate_pmp_boundary(self, index: int) -> PmpScenario:
-        case = index % 12
-        access = [Access.LOAD, Access.STORE, Access.FETCH][index % 3]
-        privilege = [Privilege.U, Privilege.S, Privilege.M][(index // 3) % 3]
-        base = TARGET_BASE + ((index // 12) % 2) * 0x2000
+        variants = (
+            ("tor", "inside", True),
+            ("tor", "upper_bound", False),
+            ("na4", "inside", True),
+            ("na4", "upper_bound", False),
+            ("napot", "last_byte", True),
+            ("napot", "upper_bound", False),
+            ("first-match-overlap", "inside", False),
+            ("first-match-overlap", "inside", True),
+        )
+        mode, offset_kind, allow = variants[index % len(variants)]
+        access = [Access.LOAD, Access.STORE, Access.FETCH][(index // len(variants)) % 3]
+        privilege = [Privilege.U, Privilege.S, Privilege.M][(index // (len(variants) * 3)) % 3]
+        base = TARGET_BASE + ((index // (len(variants) * 3 * 3 * 2)) % 2) * 0x2000
         size = 0x1000
-        locked = bool(index & 0x1)
-        allow = case not in {1, 3, 5, 6}
+        locked = bool((index // (len(variants) * 3 * 3)) % 2)
 
-        if case in {0, 1}:
-            mode = "tor"
-            offset_name, address = ("inside", base + 0x100) if case == 0 else ("upper_bound", base + size)
+        if mode == "tor":
+            offset_name, address = ("inside", base + 0x100) if offset_kind == "inside" else ("upper_bound", base + size)
             entry = PmpEntry(
                 index=1,
                 address_mode=AddressMode.TOR,
                 pmpaddr=(base + size) >> 2,
-                read=allow or access != Access.LOAD,
-                write=allow and access == Access.STORE,
-                execute=allow and access == Access.FETCH,
+                read=True,
+                write=True,
+                execute=True,
                 locked=locked,
             )
             entries = [
                 PmpEntry(0, AddressMode.OFF, base >> 2, False, False, False, False),
                 self._permissions_for_access(entry, access, allow),
             ]
-        elif case in {2, 3}:
-            mode = "na4"
-            offset_name, address = ("inside", base) if case == 2 else ("upper_bound", base + 4)
+        elif mode == "na4":
+            offset_name, address = ("inside", base) if offset_kind == "inside" else ("upper_bound", base + 4)
             entries = [
                 self._permissions_for_access(
                     PmpEntry(
@@ -208,9 +215,8 @@ class ScenarioGenerator:
                     allow,
                 )
             ]
-        elif case in {4, 5}:
-            mode = "napot"
-            offset_name, address = ("last_byte", base + size - 4) if case == 4 else ("upper_bound", base + size)
+        elif mode == "napot":
+            offset_name, address = ("last_byte", base + size - 4) if offset_kind == "last_byte" else ("upper_bound", base + size)
             entries = [
                 self._permissions_for_access(
                     PmpEntry(
@@ -227,9 +233,7 @@ class ScenarioGenerator:
                 )
             ]
         else:
-            mode = "first-match-overlap"
             offset_name, address = "inside", base + 0x100
-            first_allows = case in {7, 9, 11}
             entries = [
                 self._permissions_for_access(
                     PmpEntry(
@@ -242,7 +246,7 @@ class ScenarioGenerator:
                         locked=locked,
                     ),
                     access,
-                    first_allows,
+                    allow,
                 ),
                 self._permissions_for_access(
                     PmpEntry(
@@ -255,7 +259,7 @@ class ScenarioGenerator:
                         locked=False,
                     ),
                     access,
-                    not first_allows,
+                    not allow,
                 ),
             ]
 
@@ -270,7 +274,16 @@ class ScenarioGenerator:
             mpp=Privilege.M,
             mseccfg=Mseccfg(),
             profile="pmp-boundary",
-            coverage_tags=("pmp", "boundary", mode, access.value, privilege.value),
+            coverage_tags=(
+                "pmp",
+                "boundary",
+                mode,
+                access.value,
+                privilege.value,
+                "locked" if locked else "unlocked",
+                "allow" if allow else "deny",
+                offset_name,
+            ),
             pmp_match_mode=mode,
             security_focus="pmp-boundary",
         )
@@ -447,8 +460,6 @@ class ScenarioGenerator:
         )
 
     def _generate_sv39_perm_matrix(self, index: int) -> PmpScenario:
-        access = [Access.LOAD, Access.STORE, Access.FETCH][index % 3]
-        privilege = [Privilege.U, Privilege.S][(index // 3) % 2]
         pte_variants = [
             PageTableEntry(read=True, write=False, execute=False, user=True, accessed=True, dirty=False),
             PageTableEntry(read=True, write=True, execute=False, user=True, accessed=True, dirty=True),
@@ -458,7 +469,11 @@ class ScenarioGenerator:
             PageTableEntry(read=True, write=True, execute=False, user=True, accessed=True, dirty=False),
             PageTableEntry(read=True, write=False, execute=False, user=True, accessed=False, dirty=False),
         ]
-        pte = pte_variants[(index // 6) % len(pte_variants)]
+        pte = pte_variants[index % len(pte_variants)]
+        access = [Access.LOAD, Access.STORE, Access.FETCH][(index // len(pte_variants)) % 3]
+        privilege = [Privilege.U, Privilege.S][(index // (len(pte_variants) * 3)) % 2]
+        sum_enabled = bool((index // (len(pte_variants) * 3 * 2)) % 2)
+        mxr = bool((index // (len(pte_variants) * 3 * 2 * 2)) % 2)
         return self._generate_sv39_custom(
             index=index,
             profile="sv39-perm-matrix",
@@ -466,20 +481,23 @@ class ScenarioGenerator:
             privilege=privilege,
             pte=pte,
             deny_page_walk=False,
-            sum_enabled=privilege == Privilege.S and index % 4 in {1, 2},
-            mxr=index % 5 in {0, 1},
+            sum_enabled=sum_enabled,
+            mxr=mxr,
             security_focus="sv39-permission",
         )
 
     def _generate_sv39_ptw_pmp_matrix(self, index: int) -> PmpScenario:
         access = [Access.LOAD, Access.STORE, Access.FETCH][index % 3]
         privilege = [Privilege.U, Privilege.S][(index // 3) % 2]
-        deny_walk_index = (index // 6) % 3
+        deny_walk_index = (index // (3 * 2)) % 3
         preload_modes = ("cold", "root-target", "denied-l1", "all")
+        preload_mode = preload_modes[(index // (3 * 2 * 3)) % len(preload_modes)]
+        deny_locked = bool((index // (3 * 2 * 3 * len(preload_modes))) % 2)
+        mxr = not bool((index // (3 * 2 * 3 * len(preload_modes) * 2)) % 2)
         pte = PageTableEntry(
             read=access in {Access.LOAD, Access.STORE},
             write=access == Access.STORE,
-            execute=access == Access.FETCH or index % 5 == 0,
+            execute=access == Access.FETCH or mxr,
             user=privilege == Privilege.U,
             accessed=True,
             dirty=access == Access.STORE,
@@ -492,10 +510,10 @@ class ScenarioGenerator:
             pte=pte,
             deny_page_walk=True,
             deny_walk_index=deny_walk_index,
-            deny_locked=bool(index % 2),
+            deny_locked=deny_locked,
             sum_enabled=privilege == Privilege.S,
-            mxr=index % 4 in {0, 1},
-            preload_mode=preload_modes[(index // 3) % len(preload_modes)],
+            mxr=mxr,
+            preload_mode=preload_mode,
             security_focus="ptw-pmp-matrix",
         )
 
@@ -528,6 +546,7 @@ class ScenarioGenerator:
     def _generate_pmp_side_effect(self, index: int) -> PmpScenario:
         allowed_control = index % 2 == 1
         privilege = [Privilege.U, Privilege.S][(index // 2) % 2]
+        locked = bool((index // 4) % 2)
         target = PmpEntry(
             index=3,
             address_mode=AddressMode.NAPOT,
@@ -535,7 +554,7 @@ class ScenarioGenerator:
             read=True,
             write=allowed_control,
             execute=False,
-            locked=False,
+            locked=locked,
         )
         expected_final = "store_side_effect" if allowed_control else "trap_no_side_effect"
         return PmpScenario(
@@ -552,7 +571,14 @@ class ScenarioGenerator:
             mpp=Privilege.M,
             mseccfg=Mseccfg(),
             profile="pmp-side-effect",
-            coverage_tags=("pmp", "side-effect", privilege.value, "store", expected_final),
+            coverage_tags=(
+                "pmp",
+                "side-effect",
+                privilege.value,
+                "store",
+                expected_final,
+                "locked" if locked else "unlocked",
+            ),
             pmp_match_mode="side-effect-target",
             security_focus="memory-side-effect",
             stateful_sequence=self._stateful_sequence(

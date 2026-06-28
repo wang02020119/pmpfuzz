@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from .oracle import evaluate_scenario
-from .pmp import PmpEntry
+from .pmp import Access, PmpEntry, PmpModel
 from .scenario import PmpScenario
-from .semantic_coverage import semantic_bins_for_case
+from .semantic_coverage import combo_bins_for_case, semantic_bins_for_case
 
 
 SCHEMA_VERSION = 2
@@ -51,6 +51,7 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
         expected_stage = "stateful_final"
         expected_reason = f"stateful final outcome: {final}"
         expected_pa = f"0x{scenario.probe.physical_address:x}"
+    pmp_locked, pmp_allow = _pmp_metadata_for_scenario(scenario)
     data: dict[str, Any] = {
         "schema_version": STATEFUL_SCHEMA_VERSION if scenario.stateful_sequence else SCHEMA_VERSION,
         "name": scenario.name,
@@ -62,6 +63,7 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
         "address": f"0x{scenario.probe.effective_address():x}",
         "physical_address": f"0x{scenario.probe.physical_address:x}",
         "virtual_address": f"0x{scenario.probe.virtual_address:x}" if scenario.probe.virtual_address is not None else None,
+        "probe_offset": scenario.probe.offset_name,
         "translation": scenario.translation.value,
         "mprv": scenario.mprv,
         "mpp": scenario.mpp.value,
@@ -74,6 +76,9 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
         "ptw_fault_level": scenario.ptw_fault_level,
         "preload_mode": scenario.preload_mode,
         "pmp_match_mode": scenario.pmp_match_mode,
+        "pmp_locked": pmp_locked,
+        "pmp_allow": pmp_allow,
+        "expected_allowed": expected_allowed,
         "pte_permissions": scenario.pte_permissions,
         "security_focus": scenario.security_focus,
         "expected": {
@@ -95,7 +100,38 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
     if scenario.stateful_sequence is not None:
         data["stateful_sequence"] = scenario.stateful_sequence
     data["semantic_bins"] = semantic_bins_for_case(data)
+    data["combo_bins"] = combo_bins_for_case(data)
     return data
+
+
+def _pmp_metadata_for_scenario(scenario: PmpScenario) -> tuple[bool, bool]:
+    harness_indices = {6, 7}
+    if scenario.translation.value != "bare" or scenario.profile == "pmp-side-effect":
+        harness_indices.update({0, 1, 2})
+    relevant = [entry for entry in scenario.entries if entry.address_mode.name.lower() != "off" and entry.index not in harness_indices]
+    locked = any(entry.locked for entry in relevant)
+    decision = PmpModel(scenario.entries, scenario.mseccfg).check(
+        privilege=scenario.privilege,
+        access=scenario.probe.access,
+        physical_address=scenario.probe.physical_address,
+        size=scenario.probe.size,
+        mprv=scenario.mprv,
+        mpp=scenario.mpp,
+    )
+    matched = next((entry for entry in scenario.entries if entry.index == decision.match_index), None)
+    if matched is None:
+        return locked, False
+    return locked, _entry_allows_access(matched, scenario.probe.access)
+
+
+def _entry_allows_access(entry: PmpEntry, access: Access) -> bool:
+    if access == Access.LOAD:
+        return entry.read
+    if access == Access.STORE:
+        return entry.write
+    if access == Access.FETCH:
+        return entry.execute
+    raise ValueError(f"unsupported access: {access}")
 
 
 def result_to_dict(

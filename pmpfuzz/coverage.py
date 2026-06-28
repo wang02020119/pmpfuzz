@@ -3,7 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .semantic_coverage import CORE_STATEFUL_TARGET, coverage_gap_from_runs, semantic_bins_for_case
+from .semantic_coverage import (
+    CORE_STATEFUL_TARGET,
+    combo_bins_for_case,
+    combination_gap_from_runs,
+    coverage_gap_from_runs,
+    semantic_bins_for_case,
+)
 from .schema import read_json, write_json
 
 
@@ -26,7 +32,7 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         results.append(read_json(result_path))
 
     coverage: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_dir": str(run_dir),
         "total_cases": len(cases),
         "total_results": len(results),
@@ -46,6 +52,7 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         "statuses": {},
         "failure_classes": {},
         "semantic_bins": {},
+        "combo_bins": {},
     }
 
     for case in cases:
@@ -61,6 +68,8 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
             _bump(coverage["coverage_tags"], tag)
         for semantic_bin in semantic_bins_for_case(case):
             _bump(coverage["semantic_bins"], semantic_bin)
+        for combo_bin in combo_bins_for_case(case):
+            _bump(coverage["combo_bins"], combo_bin)
         pte_permissions = case.get("pte_permissions") or {}
         _bump(coverage["pte_permissions"], pte_permissions.get("rwx"))
         sequence = case.get("stateful_sequence") or {}
@@ -73,6 +82,7 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         _bump(coverage["failure_classes"], result.get("failure_class"))
 
     gap = coverage_gap_from_runs([run_dir], target=CORE_STATEFUL_TARGET)
+    combo_gap = combination_gap_from_runs([run_dir], target=CORE_STATEFUL_TARGET, coverage_mode="pairwise")
     coverage.update(
         {
             "target": gap["target"],
@@ -83,6 +93,13 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
             "missing_target_bins": gap["missing_target_bins"],
             "coverage_rate": gap["coverage_rate"],
             "top_gaps": gap["top_gaps"],
+            "target_combo_bins": combo_gap["total_target_combo_bins"],
+            "covered_combo_bins": combo_gap["covered_combo_bins"],
+            "covered_target_combo_bins": combo_gap["covered_target_combo_bins"],
+            "missing_combo_bins": combo_gap["missing_combo_bins"],
+            "missing_target_combo_bins": combo_gap["missing_target_combo_bins"],
+            "combo_coverage_rate": combo_gap["combo_coverage_rate"],
+            "top_combo_gaps": combo_gap["top_combo_gaps"],
         }
     )
     return coverage

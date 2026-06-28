@@ -64,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.add_argument("--seed", type=int, default=20260628)
     schedule.add_argument("--out", type=Path, required=True)
     schedule.add_argument("--include-experimental", action="store_true")
+    schedule.add_argument("--coverage-mode", choices=["semantic", "pairwise", "security-triples"], default="semantic")
 
     report = subparsers.add_parser("report", help="write a Markdown report for a campaign")
     report.add_argument("--run-dir", type=Path, required=True)
@@ -114,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
             out_dir=args.out,
             include_experimental=args.include_experimental,
+            coverage_mode=args.coverage_mode,
         )
         print(f"schedule={schedule_path}")
         return 0

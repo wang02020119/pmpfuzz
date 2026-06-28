@@ -169,6 +169,26 @@ class SemanticCoverageTest(unittest.TestCase):
         self.assertTrue(all(entry["covers_missing_combo_bins"] for entry in first["entries"]))
         self.assertIn("coverage_mode", written)
 
+    def test_security_triples_scheduler_uses_high_risk_triple_bins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            schedule = build_schedule(
+                [Path(tmp) / "empty"],
+                target=CORE_STATEFUL_TARGET,
+                coverage_mode="security-triples",
+                max_cases=4,
+                seed=20260628,
+            )
+
+        self.assertEqual(schedule["coverage_mode"], "security-triples")
+        self.assertEqual(len(schedule["entries"]), 4)
+        self.assertTrue(
+            all(
+                bin_name.startswith("combo3:")
+                for entry in schedule["entries"]
+                for bin_name in entry["covers_missing_combo_bins"]
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -94,6 +94,26 @@ def render_markdown_report(run_dir: Path) -> str:
         f"- Result records: {coverage.get('total_results', 0)}",
         f"- Profiles: {', '.join(sorted((coverage.get('profiles') or {}).keys())) or 'none'}",
         f"- Coverage tags: {', '.join(sorted((coverage.get('coverage_tags') or {}).keys())) or 'none'}",
+        f"- Semantic target: `{coverage.get('target') or 'none'}`",
+        f"- Semantic coverage: {coverage.get('covered_target_bins', 0)}/{coverage.get('target_bins', 0)} "
+        f"({coverage.get('coverage_rate', 0.0)})",
+        "",
+        "## Semantic Coverage Guidance",
+        "",
+        f"- Missing semantic bins: {coverage.get('missing_target_bins', 0)}",
+        f"- Suggested scheduler: `python3 -m pmpfuzz schedule --from-runs {run_dir} "
+        f"--target {coverage.get('target') or 'core-stateful'} --max-cases 64 --seed 20260628 "
+        f"--out runs/semantic_next`",
+        "",
+        "Top gaps:",
+        "",
+    ]
+    for gap in coverage.get("top_gaps", [])[:10]:
+        lines.append(f"- `{gap}`")
+    if not coverage.get("top_gaps"):
+        lines.append("- none")
+
+    lines.extend([
         "",
         "## Stateful Permission Verdict",
         "",
@@ -104,7 +124,7 @@ def render_markdown_report(run_dir: Path) -> str:
         "",
         "## Status Summary",
         "",
-    ]
+    ])
     for status, count in sorted((aggregate.get("statuses") or {}).items()):
         lines.append(f"- `{status}`: {count}")
     lines.extend(["", "## Failure Classes", ""])

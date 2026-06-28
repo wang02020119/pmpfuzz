@@ -72,12 +72,13 @@ class SemanticCoverageTest(unittest.TestCase):
             )
 
             written = schedule_path.read_text(encoding="ascii")
+            gap_exists = (out_dir / "coverage_gap.json").exists()
 
         self.assertEqual(first, second)
         self.assertEqual(len(first["entries"]), 8)
         self.assertTrue(all(entry["semantic_bins"] for entry in first["entries"]))
         self.assertTrue(all(entry["name"].startswith(entry["profile"] + "__") for entry in first["entries"]))
-        self.assertTrue((out_dir / "coverage_gap.json").exists())
+        self.assertTrue(gap_exists)
         self.assertIn("covers_missing_bins", written)
 
 

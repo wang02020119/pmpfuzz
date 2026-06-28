@@ -16,6 +16,7 @@ from .emitter import AssemblyEmitter
 from .oracle import evaluate_scenario
 from .scenario import ScenarioGenerator
 from .schema import scenario_to_case_dict, result_to_dict, write_aggregate, write_json
+from .semantic_coverage import scenarios_from_schedule
 
 
 DEFAULT_SPIKE = "/home/dubhe/wjs/boom_host_deploy/opt-riscv/bin/spike"
@@ -39,6 +40,7 @@ class RunnerConfig:
     per_case_timeout_seconds: int = 10
     include_smepmp: bool = True
     indices: tuple[int, ...] | None = None
+    schedule: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,7 @@ def write_summary(*, config: RunnerConfig, results: list[CampaignResult]) -> Non
         "isa": config.isa,
         "chipyard_dir": str(config.chipyard_dir),
         "results": [asdict(result) for result in results],
+        "schedule": str(config.schedule) if config.schedule else None,
     }
     (config.out / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="ascii")
 
@@ -135,6 +138,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
             "isa": config.isa,
             "chipyard_dir": str(config.chipyard_dir),
             "include_smepmp": config.include_smepmp,
+            "schedule": str(config.schedule) if config.schedule else None,
         },
     )
     emitter = AssemblyEmitter()
@@ -289,6 +293,8 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
 
 
 def _scenario_plan(config: RunnerConfig):
+    if config.schedule is not None:
+        return scenarios_from_schedule(config.schedule)
     profiles = config.profiles or (config.profile,)
     multi_profile = len(profiles) > 1
     selected = set(config.indices or ())

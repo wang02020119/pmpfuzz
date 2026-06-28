@@ -8,6 +8,7 @@ from typing import Any
 from .oracle import evaluate_scenario
 from .pmp import PmpEntry
 from .scenario import PmpScenario
+from .semantic_coverage import semantic_bins_for_case
 
 
 SCHEMA_VERSION = 2
@@ -93,6 +94,7 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
         }
     if scenario.stateful_sequence is not None:
         data["stateful_sequence"] = scenario.stateful_sequence
+    data["semantic_bins"] = semantic_bins_for_case(data)
     return data
 
 

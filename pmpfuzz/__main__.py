@@ -15,6 +15,7 @@ from .emitter import AssemblyEmitter
 from .runner import DEFAULT_SPIKE, RunnerConfig, parse_time_budget, run_campaign
 from .scenario import ScenarioGenerator
 from .schema import read_json, result_to_dict, scenario_to_case_dict, write_aggregate, write_json
+from .semantic_coverage import CORE_STATEFUL_TARGET, scenarios_from_schedule, write_schedule
 from .triage import triage_run, write_report
 
 
@@ -56,6 +57,14 @@ def build_parser() -> argparse.ArgumentParser:
     coverage = subparsers.add_parser("coverage", help="write coverage bins for a campaign")
     coverage.add_argument("--run-dir", type=Path, required=True)
 
+    schedule = subparsers.add_parser("schedule", help="build the next semantic coverage-guided campaign")
+    schedule.add_argument("--from-runs", required=True, help="comma-separated run directories")
+    schedule.add_argument("--target", default=CORE_STATEFUL_TARGET)
+    schedule.add_argument("--max-cases", type=int, default=64)
+    schedule.add_argument("--seed", type=int, default=20260628)
+    schedule.add_argument("--out", type=Path, required=True)
+    schedule.add_argument("--include-experimental", action="store_true")
+
     report = subparsers.add_parser("report", help="write a Markdown report for a campaign")
     report.add_argument("--run-dir", type=Path, required=True)
 
@@ -70,6 +79,7 @@ def _add_generation_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--no-smepmp", action="store_true")
     parser.add_argument("--indices", default=None, help="comma-separated scenario indices to generate/run")
+    parser.add_argument("--schedule", type=Path, default=None, help="semantic schedule.json to generate/run exactly")
 
 
 def _add_common_env_args(parser: argparse.ArgumentParser) -> None:
@@ -95,6 +105,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "coverage":
         out = write_coverage(args.run_dir)
         print(f"coverage={out}")
+        return 0
+    if args.command == "schedule":
+        schedule_path = write_schedule(
+            _parse_run_dirs(args.from_runs),
+            target=args.target,
+            max_cases=args.max_cases,
+            seed=args.seed,
+            out_dir=args.out,
+            include_experimental=args.include_experimental,
+        )
+        print(f"schedule={schedule_path}")
         return 0
     if args.command == "report":
         write_aggregate(args.run_dir)
@@ -166,6 +187,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         per_case_timeout_seconds=args.per_case_timeout,
         include_smepmp=not args.no_smepmp,
         indices=_parse_indices(args.indices),
+        schedule=args.schedule,
     )
     results = run_campaign(config)
     failed = [result for result in results if result.status not in {"pass", "setup_unsupported"}]
@@ -241,6 +263,8 @@ def _cmd_repro(args: argparse.Namespace) -> int:
 
 
 def _selected_scenarios(args: argparse.Namespace):
+    if args.schedule is not None:
+        return scenarios_from_schedule(args.schedule)
     selected = {int(item.strip()) for item in args.indices.split(",") if item.strip()} if args.indices else set()
     profiles = _profiles_from_args(args)
     multi_profile = len(profiles) > 1
@@ -274,6 +298,10 @@ def _profiles_from_args(args: argparse.Namespace) -> list[str]:
     if getattr(args, "profiles", None):
         return [item.strip() for item in args.profiles.split(",") if item.strip()]
     return [args.profile]
+
+
+def _parse_run_dirs(value: str) -> list[Path]:
+    return [Path(item.strip()) for item in value.split(",") if item.strip()]
 
 
 def _load_case(case_path: Path) -> tuple[Path, dict]:

@@ -77,8 +77,31 @@ python3 -m pmpfuzz coverage --run-dir runs/rocket_sv39_final
 python3 -m pmpfuzz report --run-dir runs/rocket_sv39_final
 ```
 
+Build the next campaign from semantic coverage gaps:
+
+```sh
+python3 -m pmpfuzz schedule \
+  --from-runs runs/rocket_sv39_final \
+  --target core-stateful \
+  --max-cases 64 \
+  --seed 20260628 \
+  --out runs/semantic_next
+
+python3 -m pmpfuzz gen \
+  --schedule runs/semantic_next/schedule.json \
+  --out runs/semantic_next_generated
+
+python3 -m pmpfuzz run \
+  --dut rocket-clean \
+  --schedule runs/semantic_next/schedule.json \
+  --no-smepmp \
+  --out runs/rocket_semantic_next
+```
+
 The report includes a `Security Verdict` section. A BOOM PTW/PMP hang with
 Spike/Rocket pass evidence is reported as `confirmed_new_failure_mode`.
+Reports also include `Semantic Coverage Guidance`, which lists the covered
+semantic target, missing bins, and a ready-to-run scheduler command.
 
 Useful coverage-oriented profiles:
 

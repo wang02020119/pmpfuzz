@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .semantic_coverage import CORE_STATEFUL_TARGET, coverage_gap_from_runs, semantic_bins_for_case
 from .schema import read_json, write_json
 
 
@@ -25,7 +26,7 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         results.append(read_json(result_path))
 
     coverage: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_dir": str(run_dir),
         "total_cases": len(cases),
         "total_results": len(results),
@@ -44,6 +45,7 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         "stateful_fences": {},
         "statuses": {},
         "failure_classes": {},
+        "semantic_bins": {},
     }
 
     for case in cases:
@@ -57,6 +59,8 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         _bump(coverage["security_focus"], case.get("security_focus"))
         for tag in case.get("coverage_tags") or []:
             _bump(coverage["coverage_tags"], tag)
+        for semantic_bin in semantic_bins_for_case(case):
+            _bump(coverage["semantic_bins"], semantic_bin)
         pte_permissions = case.get("pte_permissions") or {}
         _bump(coverage["pte_permissions"], pte_permissions.get("rwx"))
         sequence = case.get("stateful_sequence") or {}
@@ -68,6 +72,19 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         _bump(coverage["statuses"], result.get("status"))
         _bump(coverage["failure_classes"], result.get("failure_class"))
 
+    gap = coverage_gap_from_runs([run_dir], target=CORE_STATEFUL_TARGET)
+    coverage.update(
+        {
+            "target": gap["target"],
+            "target_bins": gap["total_target_bins"],
+            "covered_bins": gap["covered_bins"],
+            "covered_target_bins": gap["covered_target_bins"],
+            "missing_bins": gap["missing_bins"],
+            "missing_target_bins": gap["missing_target_bins"],
+            "coverage_rate": gap["coverage_rate"],
+            "top_gaps": gap["top_gaps"],
+        }
+    )
     return coverage
 
 

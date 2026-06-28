@@ -7,7 +7,6 @@ from typing import Any, Iterable
 from .dut import (
     DEFAULT_CLEAN_CHIPYARD_DIR,
     DEFAULT_XIANGSHAN_EMU,
-    LEGACY_XIANGSHAN_EMU,
     resolve_xiangshan_binary,
     xiangshan_emu_build_config,
     xiangshan_emu_supports_goodtrap,
@@ -127,7 +126,7 @@ def _default_available(dut: str, path: str) -> bool:
         return _chipyard_sim_exists(dut)
     if dut == "xiangshan-clean":
         resolved = resolve_xiangshan_binary(Path(path or DEFAULT_XIANGSHAN_EMU))
-        return resolved.exists() or LEGACY_XIANGSHAN_EMU.exists()
+        return resolved.exists()
     if dut == "rocket-cascade":
         return Path(path).exists()
     return bool(path and Path(path).exists())
@@ -191,7 +190,7 @@ _DUT_SPECS: dict[str, dict[str, Any]] = {
         "diagnostic_depth": "pass_fail_only",
         "oracle_applicability": "valid",
         "notes": [
-            "clean OpenXiangShan vanilla emu path preferred; legacy cascade path is used only as fallback",
+            "clean OpenXiangShan vanilla emu path only; legacy cascade emu must be passed explicitly",
             "uses XiangShan xstrap instruction encoding rather than standard ebreak/tohost termination",
         ],
     },

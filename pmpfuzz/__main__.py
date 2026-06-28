@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .capabilities import capability_for_dut, capability_matrix, oracle_applicability_for_result
 from .coverage import write_coverage
-from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_XIANGSHAN_EMU, LEGACY_XIANGSHAN_EMU, make_dut
+from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_XIANGSHAN_EMU, make_dut
 from .emitter import AssemblyEmitter
 from .runner import DEFAULT_SPIKE, RunnerConfig, parse_time_budget, run_campaign
 from .scenario import ScenarioGenerator
@@ -149,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _cmd_env_check(args: argparse.Namespace) -> int:
     chipyard_dir = args.chipyard_dir or DEFAULT_CLEAN_CHIPYARD_DIR
+    xiangshan_capability = capability_for_dut("xiangshan-clean")
     checks = [
         ("spike", Path(args.spike).exists() or shutil.which(args.spike) is not None, args.spike),
         (
@@ -175,8 +176,8 @@ def _cmd_env_check(args: argparse.Namespace) -> int:
         ),
         (
             "xiangshan-clean",
-            DEFAULT_XIANGSHAN_EMU.exists() or LEGACY_XIANGSHAN_EMU.exists(),
-            f"{DEFAULT_XIANGSHAN_EMU} fallback={LEGACY_XIANGSHAN_EMU}",
+            bool(xiangshan_capability["available"]),
+            f"{xiangshan_capability['path']} oracle={xiangshan_capability['oracle_applicability']}",
         ),
     ]
     ok = True

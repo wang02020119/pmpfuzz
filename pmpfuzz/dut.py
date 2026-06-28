@@ -471,7 +471,6 @@ def _resolve_xiangshan_binary(binary: Path) -> Path:
         XIANGSHAN_NATIVE_EMU,
         XIANGSHAN_NATIVE_DEBUG_EMU,
         XIANGSHAN_NATIVE_FAST_EMU,
-        LEGACY_XIANGSHAN_EMU,
     )
     existing = [candidate for candidate in candidates if candidate.exists()]
     for candidate in existing:

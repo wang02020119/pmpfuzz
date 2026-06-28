@@ -115,6 +115,31 @@ class DutAdapterTest(unittest.TestCase):
 
         self.assertEqual(dut.config, "SmallBoomV3Config")
 
+    def test_cva6_dut_uses_clean_chipyard_defaults_without_cascade_wrapper(self):
+        dut = make_dut(
+            dut="cva6",
+            spike="spike",
+            isa="rv64gc",
+            chipyard_dir=Path("/clean-chipyard"),
+        )
+
+        command = dut.command_for(Path("/tmp/case.elf"))
+
+        self.assertEqual(dut.config, "CVA6Config")
+        self.assertIn("VERILATOR_THREADS=1", command)
+        self.assertNotIn("verilator_cva6_wrapper.sh", " ".join(command))
+
+    def test_cva6_clean_alias_uses_cva6_config(self):
+        dut = make_dut(
+            dut="cva6-clean",
+            spike="spike",
+            isa="rv64gc",
+            chipyard_dir=Path("/clean-chipyard"),
+        )
+
+        self.assertEqual(dut.name, "cva6-clean")
+        self.assertEqual(dut.config, "CVA6Config")
+
     def test_cascade_rocket_command_uses_simlen_and_binary_env(self):
         dut = CascadeRocketDut(binary=Path("/rocket/Vtop_tiny_soc"), simlen=5000)
 

@@ -7,6 +7,7 @@ from pmpfuzz.dut import (
     make_dut,
     parse_cascade_log,
     parse_chipyard_log,
+    parse_spike_log,
     _subprocess_output_text,
 )
 
@@ -41,6 +42,13 @@ class DutAdapterTest(unittest.TestCase):
         self.assertEqual(parse_chipyard_log("*** PASSED ***", returncode=0).status, "pass")
         self.assertEqual(parse_chipyard_log("*** FAILED *** (tohost = 3)", returncode=0).status, "fail")
         self.assertEqual(parse_chipyard_log("assert failed", returncode=1).status, "infra_failure")
+
+    def test_spike_log_parser_treats_failed_marker_as_fail_even_with_zero_returncode(self):
+        result = parse_spike_log("*** FAILED *** (tohost = 16384)\n", returncode=0)
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(result.observed_tohost, 16384)
+        self.assertEqual(result.failure_class, "unknown_failure")
 
     def test_chipyard_make_command_uses_config_binary_and_hex_runner(self):
         dut = ChipyardMakeDut(

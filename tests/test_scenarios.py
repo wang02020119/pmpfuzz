@@ -2,7 +2,7 @@ import unittest
 
 from pmpfuzz.mmu import TranslationMode
 from pmpfuzz.schema import scenario_to_case_dict
-from pmpfuzz.scenario import ScenarioGenerator
+from pmpfuzz.scenario import SU_CODE_BASE, SU_CODE_SIZE, ScenarioGenerator
 from pmpfuzz.pmp import Access, AddressMode, Privilege
 
 
@@ -89,6 +89,21 @@ class ScenarioGeneratorTest(unittest.TestCase):
         self.assertIn(AddressMode.NAPOT, address_modes)
         self.assertIn("first-match-overlap", modes)
         self.assertTrue(all("pmp" in scenario.coverage_tags for scenario in scenarios))
+
+    def test_pmp_boundary_su_cases_allow_probe_fetch_harness(self):
+        scenarios = ScenarioGenerator(seed=71, include_smepmp=False, profile="pmp-boundary").generate_batch(count=12)
+
+        for scenario in scenarios:
+            if scenario.privilege == Privilege.M:
+                continue
+            su_entries = [
+                entry
+                for entry in scenario.entries
+                if entry.execute
+                and entry.address_mode == AddressMode.NAPOT
+                and entry.pmpaddr == entry.encode_napot(base=SU_CODE_BASE, size=SU_CODE_SIZE)
+            ]
+            self.assertTrue(su_entries, scenario.name)
 
     def test_sv39_matrix_profiles_expose_permission_and_ptw_metadata(self):
         perm = ScenarioGenerator(seed=43, include_smepmp=False, profile="sv39-perm-matrix").generate_batch(count=16)

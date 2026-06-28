@@ -13,6 +13,7 @@ class XiangShanBuildScriptTest(unittest.TestCase):
         self.assertIn("--disable-fork", text)
         self.assertIn("CXX=/usr/bin/g++", text)
         self.assertIn("LINK=/usr/bin/g++", text)
+        self.assertIn('OPT_FAST="${OPT_FAST:--O0}"', text)
         self.assertIn("CONFIG_NO_DIFFTEST", text)
         self.assertNotIn("cascade_xiangshan_adapt", text)
 

@@ -8,7 +8,7 @@ EDA_BIN="${EDA_BIN:-/home/dubhe/wjs/toolchains/eda/bin}"
 LOG_DIR="${LOG_DIR:-/home/dubhe/wjs/pmp-fuzz-stage1/runs/xiangshan_vanilla_build}"
 MAKE_THREADS="${MAKE_THREADS:-1}"
 CHISEL_THREADS="${CHISEL_THREADS:-1}"
-OPT_FAST="${OPT_FAST:--O2}"
+OPT_FAST="${OPT_FAST:--O0}"
 
 export JAVA_HOME
 export PATH="$JAVA_HOME/bin:$MILL_DIR:$EDA_BIN:$PATH"

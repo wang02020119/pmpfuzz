@@ -3,7 +3,7 @@ import unittest
 from pmpfuzz.mmu import TranslationMode
 from pmpfuzz.schema import scenario_to_case_dict
 from pmpfuzz.scenario import SU_CODE_BASE, SU_CODE_SIZE, ScenarioGenerator
-from pmpfuzz.pmp import Access, AddressMode, Privilege
+from pmpfuzz.pmp import Access, AddressMode, PmpEntry, Privilege
 
 
 class ScenarioGeneratorTest(unittest.TestCase):
@@ -119,6 +119,27 @@ class ScenarioGeneratorTest(unittest.TestCase):
                 and entry.pmpaddr == entry.encode_napot(base=SU_CODE_BASE, size=SU_CODE_SIZE)
             ]
             self.assertTrue(su_entries, scenario.name)
+
+    def test_harness_entries_stay_in_low_pmp_indices_for_dut_compatibility(self):
+        profiles = ("legacy-data", "pmp-boundary")
+
+        for profile in profiles:
+            scenarios = ScenarioGenerator(seed=72, include_smepmp=False, profile=profile).generate_batch(count=12)
+            for scenario in scenarios:
+                harness_entries = [
+                    entry
+                    for entry in scenario.entries
+                    if entry.address_mode == AddressMode.NAPOT
+                    and entry.execute
+                    and entry.pmpaddr
+                    in {
+                        PmpEntry.encode_napot(base=0x80000000, size=0x4000),
+                        PmpEntry.encode_napot(base=SU_CODE_BASE, size=SU_CODE_SIZE),
+                    }
+                ]
+
+                self.assertTrue(harness_entries, scenario.name)
+                self.assertTrue(all(entry.index <= 3 for entry in harness_entries), scenario.name)
 
     def test_sv39_matrix_profiles_expose_permission_and_ptw_metadata(self):
         perm = ScenarioGenerator(seed=43, include_smepmp=False, profile="sv39-perm-matrix").generate_batch(count=16)

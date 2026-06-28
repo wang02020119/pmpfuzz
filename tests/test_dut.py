@@ -4,6 +4,7 @@ from pathlib import Path
 from pmpfuzz.dut import (
     CascadeRocketDut,
     ChipyardMakeDut,
+    XiangShanDut,
     make_dut,
     parse_cascade_log,
     parse_chipyard_log,
@@ -139,6 +140,24 @@ class DutAdapterTest(unittest.TestCase):
 
         self.assertEqual(dut.name, "cva6-clean")
         self.assertEqual(dut.config, "CVA6Config")
+
+    def test_xiangshan_clean_uses_direct_openxiangshan_emu(self):
+        dut = make_dut(
+            dut="xiangshan-clean",
+            spike="spike",
+            isa="rv64gc",
+            dut_bin=Path("/xs/build/native-tlminimal/verilator-compile/emu"),
+            simlen=12345,
+        )
+
+        self.assertIsInstance(dut, XiangShanDut)
+        command = dut.command_for(Path("/tmp/case.elf"))
+        self.assertEqual(command[0], "/xs/build/native-tlminimal/verilator-compile/emu")
+        self.assertIn("--no-diff", command)
+        self.assertIn("-C", command)
+        self.assertIn("12345", command)
+        self.assertIn("-i", command)
+        self.assertIn("/tmp/case.elf", command)
 
     def test_cascade_rocket_command_uses_simlen_and_binary_env(self):
         dut = CascadeRocketDut(binary=Path("/rocket/Vtop_tiny_soc"), simlen=5000)

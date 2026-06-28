@@ -45,6 +45,10 @@ class EngineeringCliTest(unittest.TestCase):
             parser.parse_args(["run", "--dut", "cva6-clean", "--out", "out"]).dut,
             "cva6-clean",
         )
+        self.assertEqual(
+            parser.parse_args(["run", "--dut", "xiangshan-clean", "--out", "out"]).dut,
+            "xiangshan-clean",
+        )
 
     def test_gen_command_writes_case_json_and_assembly(self):
         with tempfile.TemporaryDirectory() as tmp:

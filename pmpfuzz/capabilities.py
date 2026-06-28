@@ -169,10 +169,10 @@ _DUT_SPECS: dict[str, dict[str, Any]] = {
         "supported_capabilities": _COMMON_FULL,
         "finish_protocol": "xiangshan-goodtrap",
         "diagnostic_depth": "pass_fail_only",
-        "oracle_applicability": "infra_unadapted",
+        "oracle_applicability": "valid",
         "notes": [
             "clean OpenXiangShan emu path preferred; legacy path is used only as fallback",
-            "current pmpfuzz ELF does not yet trigger XiangShan HIT GOOD TRAP; results are infra-only",
+            "uses XiangShan xstrap instruction encoding rather than standard ebreak/tohost termination",
         ],
     },
     "rocket-cascade": {

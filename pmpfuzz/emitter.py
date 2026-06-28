@@ -593,12 +593,10 @@ class AssemblyEmitter:
                 "    sd a0, 0(t0)",
                 f"    li t1, {PASS_TOHOST}",
                 "    beq a0, t1, xiangshan_finish_good",
-                "    li a0, 1",
-                "    ebreak",
+                "    .word 0x0000806b",
                 "1:  j 1b",
                 "xiangshan_finish_good:",
-                "    li a0, 0",
-                "    ebreak",
+                "    .word 0x0000006b",
                 "2:  j 2b",
             ]
             if include_tohost_data:

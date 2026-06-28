@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 OUT="${1:-runs/medium_multidut_$(date +%Y%m%d_%H%M%S)}"
+TOTAL_BUDGET="${TOTAL_BUDGET:-3h}"
 SEED_RUN="$OUT/seed"
 mkdir -p "$OUT"
 
@@ -33,6 +34,7 @@ run_one_dut() {
   local cases="$2"
   local timeout="$3"
   local simlen="$4"
+  local dut_budget="$5"
   local run_dir="$OUT/$dut"
   local schedule_dir="$run_dir/schedule"
 
@@ -46,7 +48,7 @@ run_one_dut() {
     --seed 20260628 \
     --out "$schedule_dir"
 
-  echo "[run] $dut"
+  echo "[run] $dut budget=$dut_budget"
   set +e
   python3 -m pmpfuzz run \
     --dut "$dut" \
@@ -56,7 +58,7 @@ run_one_dut() {
     --no-smepmp \
     --per-case-timeout "$timeout" \
     --simlen "$simlen" \
-    --time-budget 90m \
+    --time-budget "$dut_budget" \
     --out "$run_dir"
   local rc=$?
   set -e
@@ -69,11 +71,26 @@ run_one_dut() {
   return 0
 }
 
-set -e
-run_one_dut spike 256 30 100000
-run_one_dut rocket-clean 128 220 100000
-run_one_dut boom-clean 128 260 100000
-run_one_dut cva6-clean 96 260 100000
-run_one_dut xiangshan-clean 64 160 200000
+run_all_duts() {
+  set -e
+  run_one_dut spike 256 30 100000 "5m"
+  run_one_dut rocket-clean 128 220 100000 "25m"
+  run_one_dut boom-clean 128 260 100000 "30m"
+  run_one_dut cva6-clean 96 260 100000 "30m"
+  run_one_dut xiangshan-clean 64 160 200000 "45m"
+}
 
-echo "[complete] medium multi-DUT run at $OUT"
+export ROOT OUT SEED_RUN
+export -f run_one_dut run_all_duts
+
+echo "[budget] total=$TOTAL_BUDGET"
+set +e
+timeout "$TOTAL_BUDGET" bash -c 'run_all_duts'
+rc=$?
+set -e
+if [ "$rc" -eq 124 ]; then
+  echo "[timeout] medium multi-DUT exceeded $TOTAL_BUDGET"
+fi
+
+echo "[complete] medium multi-DUT run at $OUT rc=$rc"
+exit "$rc"

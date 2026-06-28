@@ -31,6 +31,21 @@ class DiagnosticsTest(unittest.TestCase):
     def test_log_classifier_detects_pipeline_hang(self):
         self.assertEqual(classify_log_failure("Assertion failed: Pipeline has hung.", 2), "pipeline_hung")
 
+    def test_stateful_failure_classes_round_trip(self):
+        for klass in [
+            FailureClass.FORBIDDEN_SIDE_EFFECT,
+            FailureClass.MISSING_EXPECTED_SIDE_EFFECT,
+            FailureClass.STALE_PMP_PERMISSION,
+            FailureClass.STALE_TLB_PERMISSION,
+            FailureClass.STALE_PTW_PERMISSION,
+        ]:
+            payload = encode_failure_payload(klass, mcause=7, mtval=0x9000)
+            decoded = decode_tohost_payload(payload)
+
+            self.assertEqual(decoded.failure_class, klass.name.lower())
+            self.assertEqual(decoded.observed_mcause, 7)
+            self.assertEqual(decoded.observed_mtval, 0x9000)
+
 
 if __name__ == "__main__":
     unittest.main()

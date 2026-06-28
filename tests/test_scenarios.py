@@ -1,6 +1,7 @@
 import unittest
 
 from pmpfuzz.mmu import TranslationMode
+from pmpfuzz.schema import scenario_to_case_dict
 from pmpfuzz.scenario import ScenarioGenerator
 from pmpfuzz.pmp import Access, AddressMode, Privilege
 
@@ -106,6 +107,31 @@ class ScenarioGeneratorTest(unittest.TestCase):
         self.assertEqual(scenarios[0].preload_mode, "cold")
         self.assertIn("boom-regression", scenarios[0].coverage_tags)
         self.assertIn("mxr-off-control", {scenario.security_focus for scenario in scenarios})
+
+    def test_stateful_profiles_generate_sequence_metadata_and_schema_v3(self):
+        expected = {
+            "pmp-side-effect": "side-effect",
+            "tlb-stale-pte": "stale-pte",
+            "tlb-stale-pmp": "stale-pmp",
+            "ptw-stale-pmp": "stale-ptw-pmp",
+        }
+        for profile, tag in expected.items():
+            scenario = ScenarioGenerator(seed=61, include_smepmp=False, profile=profile).generate_batch(count=1)[0]
+            case = scenario_to_case_dict(scenario, seed=61, index=0)
+
+            self.assertEqual(case["schema_version"], 3)
+            self.assertEqual(case["profile"], profile)
+            self.assertIn(tag, case["coverage_tags"])
+            self.assertIn("stateful_sequence", case)
+            self.assertEqual(case["stateful_sequence"]["kind"], profile)
+            self.assertIn(case["stateful_sequence"]["fence"], {"with-sfence", "no-fence-experimental", "none"})
+
+    def test_non_stateful_cases_keep_schema_v2_compatibility(self):
+        scenario = ScenarioGenerator(seed=67, include_smepmp=False, profile="legacy-data").generate_batch(count=1)[0]
+        case = scenario_to_case_dict(scenario, seed=67, index=0)
+
+        self.assertEqual(case["schema_version"], 2)
+        self.assertNotIn("stateful_sequence", case)
 
 
 if __name__ == "__main__":

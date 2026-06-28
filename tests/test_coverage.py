@@ -37,6 +37,19 @@ class CoverageTest(unittest.TestCase):
         self.assertEqual(coverage["statuses"]["pass"], 1)
         self.assertTrue(out_exists)
 
+    def test_coverage_counts_stateful_sequence_dimensions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(seed=5, include_smepmp=False, profile="tlb-stale-pmp").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=5, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+
+            coverage = coverage_from_run(run_dir)
+
+        self.assertEqual(coverage["stateful_sequences"]["tlb-stale-pmp"], 1)
+        self.assertEqual(coverage["stateful_mutations"]["pmpcfg-deny-target"], 1)
+        self.assertIn("with-sfence", coverage["stateful_fences"])
+
 
 if __name__ == "__main__":
     unittest.main()

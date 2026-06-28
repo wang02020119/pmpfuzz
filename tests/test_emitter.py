@@ -1,6 +1,7 @@
 import unittest
 
 from pmpfuzz.emitter import AssemblyEmitter
+from pmpfuzz.scenario import ScenarioGenerator
 from pmpfuzz.mmu import PageTableEntry, Sv39Mapping, TranslationMode
 from pmpfuzz.pmp import Access, AddressMode, PmpEntry, Privilege
 from pmpfuzz.scenario import AccessProbe, PmpScenario
@@ -180,6 +181,29 @@ class AssemblyEmitterTest(unittest.TestCase):
         self.assertIn("stack_top:", asm)
         self.assertIn("result:", asm)
         self.assertIn("0x60000010", asm)
+
+    def test_stateful_side_effect_harness_emits_phase_and_sentinel_checks(self):
+        scenario = ScenarioGenerator(seed=71, include_smepmp=False, profile="pmp-side-effect").generate_batch(count=1)[0]
+
+        asm = AssemblyEmitter().emit(scenario)
+
+        self.assertIn("stateful_phase:", asm)
+        self.assertIn("sentinel_word:", asm)
+        self.assertIn("apply_stateful_mutation:", asm)
+        self.assertIn("stateful_final_probe:", asm)
+        self.assertIn("fail_forbidden_side_effect:", asm)
+
+    def test_stateful_stale_harness_emits_mutation_and_optional_sfence(self):
+        with_fence = ScenarioGenerator(seed=73, include_smepmp=False, profile="tlb-stale-pte").generate_batch(count=1)[0]
+        no_fence = ScenarioGenerator(seed=73, include_smepmp=False, profile="tlb-stale-pte").generate_batch(count=2)[1]
+
+        with_fence_asm = AssemblyEmitter().emit(with_fence)
+        no_fence_asm = AssemblyEmitter().emit(no_fence)
+
+        self.assertIn("apply_stateful_mutation:", with_fence_asm)
+        self.assertIn("sd t1, 0(t0)", with_fence_asm)
+        self.assertIn("sfence.vma", with_fence_asm)
+        self.assertIn("no_fence_experimental:", no_fence_asm)
 
 
 if __name__ == "__main__":

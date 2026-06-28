@@ -24,6 +24,12 @@ class EngineeringCliTest(unittest.TestCase):
             "schedule",
         )
         self.assertEqual(
+            parser.parse_args(
+                ["schedule", "--from-runs", "seed", "--out", "next", "--coverage-mode", "pairwise"]
+            ).coverage_mode,
+            "pairwise",
+        )
+        self.assertEqual(
             parser.parse_args(["gen", "--out", "out", "--profiles", "legacy-data,pmp-boundary"]).profiles,
             "legacy-data,pmp-boundary",
         )
@@ -138,6 +144,20 @@ class EngineeringCliTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(case["name"], "pmp-boundary__scenario_0000")
         self.assertIn("profile=pmp-boundary", case["semantic_bins"])
+        self.assertTrue(case["combo_bins"])
+
+    def test_report_includes_combination_coverage_guidance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(seed=71, include_smepmp=False, profile="pmp-boundary").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=71, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+
+            report_path = write_report(run_dir)
+            report_text = report_path.read_text(encoding="ascii")
+
+        self.assertIn("Combination Coverage Guidance", report_text)
+        self.assertIn("Pairwise combo coverage", report_text)
 
 
 if __name__ == "__main__":

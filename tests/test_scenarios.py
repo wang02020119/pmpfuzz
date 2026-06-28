@@ -90,6 +90,21 @@ class ScenarioGeneratorTest(unittest.TestCase):
         self.assertIn("first-match-overlap", modes)
         self.assertTrue(all("pmp" in scenario.coverage_tags for scenario in scenarios))
 
+    def test_pmp_boundary_profile_reaches_pairwise_combo_dimensions(self):
+        scenarios = ScenarioGenerator(seed=42, include_smepmp=False, profile="pmp-boundary").generate_batch(count=144)
+        cases = [scenario_to_case_dict(scenario, seed=42, index=index) for index, scenario in enumerate(scenarios)]
+
+        self.assertEqual({case["privilege"] for case in cases}, {"M", "S", "U"})
+        self.assertEqual({case["access"] for case in cases}, {"fetch", "load", "store"})
+        self.assertGreaterEqual(
+            {"tor", "na4", "napot", "first-match-overlap"} & {case["pmp_match_mode"] for case in cases},
+            {"tor", "na4", "napot", "first-match-overlap"},
+        )
+        self.assertEqual({case["pmp_locked"] for case in cases}, {False, True})
+        self.assertEqual({case["expected_allowed"] for case in cases}, {False, True})
+        self.assertIn("upper_bound", {case["probe_offset"] for case in cases})
+        self.assertTrue(all(case["combo_bins"] for case in cases))
+
     def test_pmp_boundary_su_cases_allow_probe_fetch_harness(self):
         scenarios = ScenarioGenerator(seed=71, include_smepmp=False, profile="pmp-boundary").generate_batch(count=12)
 
@@ -113,6 +128,45 @@ class ScenarioGeneratorTest(unittest.TestCase):
         self.assertGreaterEqual(len({scenario.pte_permissions["rwx"] for scenario in perm}), 3)
         self.assertGreaterEqual({"L2", "L1", "L0"} & {scenario.ptw_fault_level for scenario in ptw}, {"L1", "L0"})
         self.assertIn("cold", {scenario.preload_mode for scenario in ptw})
+
+    def test_sv39_matrix_profiles_reach_combo_dimensions(self):
+        perm = [
+            scenario_to_case_dict(scenario, seed=44, index=index)
+            for index, scenario in enumerate(
+                ScenarioGenerator(seed=44, include_smepmp=False, profile="sv39-perm-matrix").generate_batch(count=168)
+            )
+        ]
+        ptw = [
+            scenario_to_case_dict(scenario, seed=48, index=index)
+            for index, scenario in enumerate(
+                ScenarioGenerator(seed=48, include_smepmp=False, profile="sv39-ptw-pmp-matrix").generate_batch(count=288)
+            )
+        ]
+
+        self.assertEqual({case["privilege"] for case in perm}, {"S", "U"})
+        self.assertEqual({case["access"] for case in perm}, {"fetch", "load", "store"})
+        self.assertEqual({case["sum_enabled"] for case in perm}, {False, True})
+        self.assertEqual({case["mxr"] for case in perm}, {False, True})
+        self.assertGreaterEqual(len({case["pte_permissions"]["rwx"] for case in perm}), 5)
+
+        self.assertEqual({case["ptw_fault_level"] for case in ptw}, {"L0", "L1", "L2"})
+        self.assertEqual({case["preload_mode"] for case in ptw}, {"all", "cold", "denied-l1", "root-target"})
+        self.assertEqual({case["mxr"] for case in ptw}, {False, True})
+        self.assertEqual({case["pmp_locked"] for case in ptw}, {False, True})
+        self.assertTrue(all(case["combo_bins"] for case in perm + ptw))
+
+    def test_pmp_side_effect_profile_reaches_locked_privilege_and_outcome_dimensions(self):
+        cases = [
+            scenario_to_case_dict(scenario, seed=50, index=index)
+            for index, scenario in enumerate(
+                ScenarioGenerator(seed=50, include_smepmp=False, profile="pmp-side-effect").generate_batch(count=8)
+            )
+        ]
+
+        self.assertEqual({case["privilege"] for case in cases}, {"S", "U"})
+        self.assertEqual({case["expected_allowed"] for case in cases}, {False, True})
+        self.assertEqual({case["pmp_locked"] for case in cases}, {False, True})
+        self.assertTrue(all(case["access"] == "store" for case in cases))
 
     def test_boom_ptw_pmp_regression_profile_starts_with_hang_candidate_and_controls(self):
         scenarios = ScenarioGenerator(seed=53, include_smepmp=False, profile="boom-ptw-pmp-regression").generate_batch(count=4)

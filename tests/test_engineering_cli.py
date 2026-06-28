@@ -20,8 +20,20 @@ class EngineeringCliTest(unittest.TestCase):
         self.assertEqual(parser.parse_args(["report", "--run-dir", "out"]).command, "report")
         self.assertEqual(parser.parse_args(["coverage", "--run-dir", "out"]).command, "coverage")
         self.assertEqual(
+            parser.parse_args(["schedule", "--from-runs", "seed", "--out", "next"]).command,
+            "schedule",
+        )
+        self.assertEqual(
             parser.parse_args(["gen", "--out", "out", "--profiles", "legacy-data,pmp-boundary"]).profiles,
             "legacy-data,pmp-boundary",
+        )
+        self.assertEqual(
+            parser.parse_args(["gen", "--schedule", "schedule.json", "--out", "out"]).schedule,
+            Path("schedule.json"),
+        )
+        self.assertEqual(
+            parser.parse_args(["run", "--schedule", "schedule.json", "--out", "out"]).schedule,
+            Path("schedule.json"),
         )
 
     def test_gen_command_writes_case_json_and_assembly(self):
@@ -92,6 +104,40 @@ class EngineeringCliTest(unittest.TestCase):
         self.assertEqual(triage["group_count"], 1)
         self.assertIn("PMP Fuzz Report", report_text)
         self.assertIn("Security Verdict", report_text)
+
+    def test_gen_command_accepts_schedule_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schedule = {
+                "schema_version": 1,
+                "target": "core-stateful",
+                "seed": 20260628,
+                "include_smepmp": False,
+                "entries": [
+                    {
+                        "profile": "pmp-boundary",
+                        "index": 0,
+                        "name": "pmp-boundary__scenario_0000",
+                        "seed": 20260628,
+                        "include_smepmp": False,
+                        "semantic_bins": ["profile=pmp-boundary"],
+                        "covers_missing_bins": ["profile=pmp-boundary"],
+                        "reason": "test",
+                    }
+                ],
+            }
+            write_json(root / "schedule.json", schedule)
+
+            rc = main(["gen", "--schedule", str(root / "schedule.json"), "--out", str(root / "generated")])
+            case = json.loads(
+                (root / "generated" / "cases" / "pmp-boundary__scenario_0000" / "case.json").read_text(
+                    encoding="ascii"
+                )
+            )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(case["name"], "pmp-boundary__scenario_0000")
+        self.assertIn("profile=pmp-boundary", case["semantic_bins"])
 
 
 if __name__ == "__main__":

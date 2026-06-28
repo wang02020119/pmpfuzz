@@ -4,6 +4,7 @@ from pathlib import Path
 from pmpfuzz.dut import (
     CascadeRocketDut,
     ChipyardMakeDut,
+    DEFAULT_XIANGSHAN_EMU,
     XiangShanDut,
     make_dut,
     parse_cascade_log,
@@ -159,6 +160,9 @@ class DutAdapterTest(unittest.TestCase):
         self.assertIn("12345", command)
         self.assertIn("-i", command)
         self.assertIn("/tmp/case.elf", command)
+
+    def test_default_xiangshan_emu_points_to_vanilla_tree(self):
+        self.assertIn("/home/dubhe/wjs/xiangshan_vanilla/", DEFAULT_XIANGSHAN_EMU.as_posix())
 
     def test_xiangshan_log_parser_distinguishes_good_bad_limit_and_no_marker(self):
         self.assertEqual(parse_xiangshan_log("HIT GOOD TRAP at pc = 0x80000000", returncode=0).status, "pass")

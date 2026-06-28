@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from .coverage import write_coverage
-from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, make_dut
+from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_XIANGSHAN_EMU, make_dut
 from .emitter import AssemblyEmitter
 from .runner import DEFAULT_SPIKE, RunnerConfig, parse_time_budget, run_campaign
 from .scenario import ScenarioGenerator
@@ -20,7 +20,16 @@ from .triage import triage_run, write_report
 
 
 CLEAN_CHIPYARD_DUTS = {"rocket-clean", "boom-clean", "cva6", "cva6-clean"}
-DUT_CHOICES = ["spike", "rocket", "cva6", "cva6-clean", "rocket-cascade", "rocket-clean", "boom-clean"]
+DUT_CHOICES = [
+    "spike",
+    "rocket",
+    "cva6",
+    "cva6-clean",
+    "rocket-cascade",
+    "rocket-clean",
+    "boom-clean",
+    "xiangshan-clean",
+]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     repro.add_argument("--dut", default="spike,rocket-clean,boom-clean")
     repro.add_argument("--out", type=Path, required=True)
     repro.add_argument("--per-case-timeout", type=int, default=60)
+    repro.add_argument("--dut-bin", type=Path, default=None)
     repro.add_argument("--no-smepmp", action="store_true")
     _add_common_env_args(repro)
 
@@ -155,6 +165,11 @@ def _cmd_env_check(args: argparse.Namespace) -> int:
             _cva6_simulator_exists(chipyard_dir),
             " or ".join(str(path) for path in _cva6_simulator_candidates(chipyard_dir)),
         ),
+        (
+            "xiangshan-clean",
+            DEFAULT_XIANGSHAN_EMU.exists(),
+            str(DEFAULT_XIANGSHAN_EMU),
+        ),
     ]
     ok = True
     for name, passed, detail in checks:
@@ -245,6 +260,7 @@ def _cmd_repro(args: argparse.Namespace) -> int:
             spike=args.spike,
             isa=args.isa or ("rv64gc" if args.no_smepmp else "rv64gc_smepmp"),
             chipyard_dir=chipyard_dir,
+            dut_bin=args.dut_bin,
         )
         start = time.monotonic()
         dut_result = dut.run(elf, timeout_seconds=args.per_case_timeout, log_path=log)

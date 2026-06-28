@@ -21,6 +21,9 @@ DEFAULT_CVA6_VERILATOR_BIN_DIR = Path(
     "/home/dubhe/wjs/cascade_cpu_fuzzing/mount/cascade_xiangshan_adapt/tools/verilator-5.032/bin"
 )
 DEFAULT_CVA6_VERILATOR = Path("/home/dubhe/wjs/pmp-fuzz-stage1/scripts/verilator_cva6_wrapper.sh")
+DEFAULT_XIANGSHAN_EMU = Path(
+    "/home/dubhe/wjs/cascade_xiangshan_adapt/XiangShan/build/native-tlminimal/verilator-compile/emu"
+)
 DEFAULT_CASCADE_ROCKET = (
     DEFAULT_CHIPYARD_DIR
     / "cascade-rocket"
@@ -323,6 +326,54 @@ class CascadeRocketDut:
         )
 
 
+class XiangShanDut:
+    def __init__(self, *, binary: Path = DEFAULT_XIANGSHAN_EMU, simlen: int = 100000) -> None:
+        self.name = "xiangshan-clean"
+        self.binary = binary
+        self.simlen = simlen
+
+    def command_for(self, image: Path) -> list[str]:
+        return [
+            _posix_arg(self.binary),
+            "--no-diff",
+            "-C",
+            str(self.simlen),
+            "-i",
+            _posix_arg(image),
+        ]
+
+    def run(self, elf: Path, *, timeout_seconds: int, log_path: Path) -> DutRunResult:
+        start = time.monotonic()
+        timed_out, returncode, stdout = _run_command_to_log(
+            self.command_for(elf),
+            timeout_seconds=timeout_seconds,
+            log_path=log_path,
+        )
+        if timed_out:
+            return DutRunResult(
+                dut=self.name,
+                status="timeout",
+                elapsed_seconds=time.monotonic() - start,
+                log=str(log_path),
+                failure_class="timeout",
+                reason="xiangshan timeout",
+            )
+        parsed = parse_xiangshan_log(stdout, returncode or 0)
+        return DutRunResult(
+            dut=self.name,
+            status=parsed.status,
+            elapsed_seconds=time.monotonic() - start,
+            returncode=returncode,
+            observed_code=parsed.observed_code,
+            failure_class=parsed.failure_class,
+            observed_mcause=parsed.observed_mcause,
+            observed_mtval=parsed.observed_mtval,
+            observed_tohost=parsed.observed_tohost,
+            log=str(log_path),
+            reason=parsed.reason,
+        )
+
+
 def make_dut(
     *,
     dut: str,
@@ -331,7 +382,7 @@ def make_dut(
     chipyard_dir: Path = DEFAULT_CHIPYARD_DIR,
     dut_bin: Path | None = None,
     simlen: int = 100000,
-) -> SpikeDut | ChipyardMakeDut | CascadeRocketDut:
+) -> SpikeDut | ChipyardMakeDut | CascadeRocketDut | XiangShanDut:
     if dut == "spike":
         return SpikeDut(spike=spike, isa=isa)
     if dut == "rocket":
@@ -375,6 +426,8 @@ def make_dut(
         )
     if dut == "rocket-cascade":
         return CascadeRocketDut(binary=dut_bin or DEFAULT_CASCADE_ROCKET, simlen=simlen)
+    if dut == "xiangshan-clean":
+        return XiangShanDut(binary=dut_bin or DEFAULT_XIANGSHAN_EMU, simlen=simlen)
     raise ValueError(f"unsupported DUT: {dut}")
 
 
@@ -437,3 +490,40 @@ def parse_chipyard_log(text: str, returncode: int) -> ParsedDutLog:
             failure_class=classify_log_failure(text, returncode),
         )
     return ParsedDutLog("pass")
+
+
+def parse_xiangshan_log(text: str, returncode: int) -> ParsedDutLog:
+    code = failed_tohost_from_log(text)
+    if code is not None:
+        decoded = decode_tohost_payload(code)
+        return ParsedDutLog(
+            "fail",
+            code,
+            "xiangshan reported failed tohost",
+            failure_class=classify_log_failure(text, returncode, decoded),
+            observed_mcause=decoded.observed_mcause if decoded else None,
+            observed_mtval=decoded.observed_mtval if decoded else None,
+            observed_tohost=code,
+        )
+    if "HIT GOOD TRAP" in text or "good trap" in text.lower():
+        return ParsedDutLog("pass")
+    if "HIT BAD TRAP" in text or "bad trap" in text.lower():
+        return ParsedDutLog(
+            "fail",
+            None,
+            "xiangshan reported bad trap",
+            failure_class=classify_log_failure(text, returncode),
+        )
+    if returncode != 0:
+        return ParsedDutLog(
+            "fail",
+            None,
+            f"xiangshan returned {returncode}",
+            failure_class=classify_log_failure(text, returncode),
+        )
+    return ParsedDutLog(
+        "infra_failure",
+        None,
+        "xiangshan finished without a recognizable pass/fail marker",
+        failure_class="infra_failure",
+    )

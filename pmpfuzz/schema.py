@@ -7,7 +7,7 @@ from typing import Any
 
 from .oracle import evaluate_scenario
 from .pmp import Access, PmpEntry, PmpModel
-from .scenario import PmpScenario
+from .scenario import M_DATA_BASE, M_DATA_SIZE, M_TEXT_BASE, M_TEXT_SIZE, SU_CODE_BASE, SU_CODE_SIZE, PmpScenario
 from .semantic_coverage import combo_bins_for_case, semantic_bins_for_case
 
 
@@ -105,10 +105,12 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
 
 
 def _pmp_metadata_for_scenario(scenario: PmpScenario) -> tuple[bool, bool]:
-    harness_indices = {6, 7}
-    if scenario.translation.value != "bare" or scenario.profile == "pmp-side-effect":
-        harness_indices.update({0, 1, 2})
-    relevant = [entry for entry in scenario.entries if entry.address_mode.name.lower() != "off" and entry.index not in harness_indices]
+    relevant = [
+        entry
+        for entry in scenario.entries
+        if entry.address_mode.name.lower() != "off"
+        and not _is_harness_entry(entry)
+    ]
     locked = any(entry.locked for entry in relevant)
     decision = PmpModel(scenario.entries, scenario.mseccfg).check(
         privilege=scenario.privilege,
@@ -122,6 +124,18 @@ def _pmp_metadata_for_scenario(scenario: PmpScenario) -> tuple[bool, bool]:
     if matched is None:
         return locked, False
     return locked, _entry_allows_access(matched, scenario.probe.access)
+
+
+def _is_harness_entry(entry: PmpEntry) -> bool:
+    if entry.address_mode.name.lower() != "napot":
+        return False
+    harness_regions = {
+        PmpEntry.encode_napot(base=0x80000000, size=0x4000),
+        PmpEntry.encode_napot(base=M_TEXT_BASE, size=M_TEXT_SIZE),
+        PmpEntry.encode_napot(base=M_DATA_BASE, size=M_DATA_SIZE),
+        PmpEntry.encode_napot(base=SU_CODE_BASE, size=SU_CODE_SIZE),
+    }
+    return entry.pmpaddr in harness_regions
 
 
 def _entry_allows_access(entry: PmpEntry, access: Access) -> bool:

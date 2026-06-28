@@ -20,6 +20,8 @@ PAGE_TABLE_BASE = 0x80010000
 PAGE_TABLE_SIZE = 0x8000
 PROBE_VA = 0x40000000
 TARGET_VA = 0x80000000
+M_HARNESS_PMP_INDEX = 3
+SU_HARNESS_PMP_INDEX = 2
 
 
 @dataclass(frozen=True)
@@ -108,7 +110,7 @@ class ScenarioGenerator:
         return self._generate_legacy(index, accesses=(Access.LOAD, Access.STORE, Access.FETCH), profile="legacy")
 
     def _generate_legacy(self, index: int, *, accesses: tuple[Access, ...], profile: str) -> PmpScenario:
-        base = 0x80004000 + (index % 8) * 0x2000
+        base = TARGET_BASE + (index % 8) * 0x2000
         size = 0x1000
         address_mode = AddressMode.TOR if index % 2 == 0 else AddressMode.NAPOT
         privilege = [Privilege.S, Privilege.U, Privilege.M][index % 3]
@@ -147,6 +149,8 @@ class ScenarioGenerator:
                     allow_write_without_read=legacy_mml,
                 )
             ]
+        if privilege != Privilege.M:
+            entries.append(self._su_harness_entry())
         entries.append(self._harness_entry())
 
         return PmpScenario(
@@ -911,7 +915,7 @@ class ScenarioGenerator:
 
     def _harness_entry(self) -> PmpEntry:
         return PmpEntry(
-            index=7,
+            index=M_HARNESS_PMP_INDEX,
             address_mode=AddressMode.NAPOT,
             pmpaddr=PmpEntry.encode_napot(base=0x80000000, size=0x4000),
             read=True,
@@ -922,7 +926,7 @@ class ScenarioGenerator:
 
     def _su_harness_entry(self) -> PmpEntry:
         return PmpEntry(
-            index=6,
+            index=SU_HARNESS_PMP_INDEX,
             address_mode=AddressMode.NAPOT,
             pmpaddr=PmpEntry.encode_napot(base=SU_CODE_BASE, size=SU_CODE_SIZE),
             read=True,

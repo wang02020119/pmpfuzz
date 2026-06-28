@@ -340,7 +340,16 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--dut",
-        choices=["spike", "rocket", "cva6", "cva6-clean", "rocket-cascade", "rocket-clean", "boom-clean"],
+        choices=[
+            "spike",
+            "rocket",
+            "cva6",
+            "cva6-clean",
+            "rocket-cascade",
+            "rocket-clean",
+            "boom-clean",
+            "xiangshan-clean",
+        ],
         default="spike",
     )
     parser.add_argument("--spike", default=os.environ.get("SPIKE", DEFAULT_SPIKE))

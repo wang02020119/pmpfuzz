@@ -34,7 +34,9 @@ def capability_for_dut(
         "supported_capabilities": dict(spec["supported_capabilities"]),
         "finish_protocol": spec["finish_protocol"],
         "diagnostic_depth": spec["diagnostic_depth"],
-        "oracle_applicability": "valid" if resolved_available else "infra_unadapted",
+        "oracle_applicability": str(spec.get("oracle_applicability") or "valid")
+        if resolved_available
+        else "infra_unadapted",
         "notes": list(spec.get("notes", ())),
     }
     return capability
@@ -167,7 +169,11 @@ _DUT_SPECS: dict[str, dict[str, Any]] = {
         "supported_capabilities": _COMMON_FULL,
         "finish_protocol": "xiangshan-goodtrap",
         "diagnostic_depth": "pass_fail_only",
-        "notes": ["clean OpenXiangShan emu path preferred; legacy path is used only as fallback"],
+        "oracle_applicability": "infra_unadapted",
+        "notes": [
+            "clean OpenXiangShan emu path preferred; legacy path is used only as fallback",
+            "current pmpfuzz ELF does not yet trigger XiangShan HIT GOOD TRAP; results are infra-only",
+        ],
     },
     "rocket-cascade": {
         "path": "",

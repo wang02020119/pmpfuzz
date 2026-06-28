@@ -364,16 +364,14 @@ def make_dut(
             make_vars=("VERILATOR_THREADS=1",),
             set_verilator_bin_env=False,
         )
-    if dut == "cva6":
+    if dut in {"cva6", "cva6-clean"}:
         return ChipyardMakeDut(
-            dut_name="cva6",
+            dut_name=dut,
             chipyard_dir=chipyard_dir,
             config="CVA6Config",
-            verilator_bin_dir=DEFAULT_CVA6_VERILATOR_BIN_DIR,
-            make_vars=(
-                f"VERILATOR={_posix_arg(DEFAULT_CVA6_VERILATOR)}",
-                "EXTRA_SIM_CXXFLAGS=-std=c++17",
-            ),
+            verilator_bin_dir=chipyard_dir / ".conda-env" / "bin",
+            make_vars=("VERILATOR_THREADS=1",),
+            set_verilator_bin_env=False,
         )
     if dut == "rocket-cascade":
         return CascadeRocketDut(binary=dut_bin or DEFAULT_CASCADE_ROCKET, simlen=simlen)

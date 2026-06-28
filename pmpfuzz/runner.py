@@ -273,7 +273,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
         return result
 
     results: list[CampaignResult] = []
-    make_based_duts = {"rocket", "cva6", "rocket-clean", "boom-clean"}
+    make_based_duts = {"rocket", "cva6", "cva6-clean", "rocket-clean", "boom-clean"}
     effective_jobs = 1 if config.dut in make_based_duts else max(1, config.jobs)
     with ThreadPoolExecutor(max_workers=effective_jobs) as executor:
         futures = []
@@ -340,7 +340,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--dut",
-        choices=["spike", "rocket", "cva6", "rocket-cascade", "rocket-clean", "boom-clean"],
+        choices=["spike", "rocket", "cva6", "cva6-clean", "rocket-cascade", "rocket-clean", "boom-clean"],
         default="spike",
     )
     parser.add_argument("--spike", default=os.environ.get("SPIKE", DEFAULT_SPIKE))
@@ -364,7 +364,7 @@ def main() -> int:
         spike=args.spike,
         isa=args.isa or os.environ.get("SPIKE_ISA") or ("rv64gc" if args.no_smepmp else "rv64gc_smepmp"),
         chipyard_dir=args.chipyard_dir
-        or (DEFAULT_CLEAN_CHIPYARD_DIR if args.dut in {"rocket-clean", "boom-clean"} else DEFAULT_CHIPYARD_DIR),
+        or (DEFAULT_CLEAN_CHIPYARD_DIR if args.dut in {"rocket-clean", "boom-clean", "cva6", "cva6-clean"} else DEFAULT_CHIPYARD_DIR),
         dut_bin=args.dut_bin,
         simlen=args.simlen,
         per_case_timeout_seconds=args.per_case_timeout,

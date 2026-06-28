@@ -19,7 +19,8 @@ from .semantic_coverage import CORE_STATEFUL_TARGET, scenarios_from_schedule, wr
 from .triage import triage_run, write_report
 
 
-DUT_CHOICES = ["spike", "rocket", "cva6", "rocket-cascade", "rocket-clean", "boom-clean"]
+CLEAN_CHIPYARD_DUTS = {"rocket-clean", "boom-clean", "cva6", "cva6-clean"}
+DUT_CHOICES = ["spike", "rocket", "cva6", "cva6-clean", "rocket-cascade", "rocket-clean", "boom-clean"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -149,6 +150,11 @@ def _cmd_env_check(args: argparse.Namespace) -> int:
             (chipyard_dir / "sims/verilator/simulator-chipyard.harness-SmallBoomV3Config").exists(),
             str(chipyard_dir / "sims/verilator/simulator-chipyard.harness-SmallBoomV3Config"),
         ),
+        (
+            "cva6-clean",
+            _cva6_simulator_exists(chipyard_dir),
+            " or ".join(str(path) for path in _cva6_simulator_candidates(chipyard_dir)),
+        ),
     ]
     ok = True
     for name, passed, detail in checks:
@@ -182,8 +188,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         dut=args.dut,
         spike=args.spike,
         isa=args.isa or os.environ.get("SPIKE_ISA") or ("rv64gc" if args.no_smepmp else "rv64gc_smepmp"),
-        chipyard_dir=args.chipyard_dir
-        or (DEFAULT_CLEAN_CHIPYARD_DIR if args.dut in {"rocket-clean", "boom-clean"} else DEFAULT_CHIPYARD_DIR),
+        chipyard_dir=args.chipyard_dir or (DEFAULT_CLEAN_CHIPYARD_DIR if args.dut in CLEAN_CHIPYARD_DUTS else DEFAULT_CHIPYARD_DIR),
         dut_bin=args.dut_bin,
         simlen=args.simlen,
         per_case_timeout_seconds=args.per_case_timeout,
@@ -233,7 +238,7 @@ def _cmd_repro(args: argparse.Namespace) -> int:
         result_dir.mkdir(parents=True, exist_ok=True)
         log = result_dir / f"{case['name']}.{dut_name}.log"
         chipyard_dir = args.chipyard_dir or (
-            DEFAULT_CLEAN_CHIPYARD_DIR if dut_name in {"rocket-clean", "boom-clean"} else DEFAULT_CHIPYARD_DIR
+            DEFAULT_CLEAN_CHIPYARD_DIR if dut_name in CLEAN_CHIPYARD_DUTS else DEFAULT_CHIPYARD_DIR
         )
         dut = make_dut(
             dut=dut_name,
@@ -304,6 +309,17 @@ def _profiles_from_args(args: argparse.Namespace) -> list[str]:
 
 def _parse_run_dirs(value: str) -> list[Path]:
     return [Path(item.strip()) for item in value.split(",") if item.strip()]
+
+
+def _cva6_simulator_candidates(chipyard_dir: Path) -> tuple[Path, ...]:
+    return (
+        chipyard_dir / "sims/verilator/simulator-chipyard.harness-CVA6Config",
+        chipyard_dir / "sims/verilator/simulator-chipyard-CVA6Config",
+    )
+
+
+def _cva6_simulator_exists(chipyard_dir: Path) -> bool:
+    return any(path.exists() for path in _cva6_simulator_candidates(chipyard_dir))
 
 
 def _load_case(case_path: Path) -> tuple[Path, dict]:

@@ -36,7 +36,7 @@ ensure_cva6_pch_aliases() {
 }
 
 build_cva6() {
-  export PATH="$JAVA_HOME/bin:$RISCV/bin:$CVA6_VERILATOR_BIN_DIR:$PATH"
+  export PATH="$JAVA_HOME/bin:$RISCV/bin:$CHIPYARD_DIR/tools/circt/bin:$CHIPYARD_DIR/.conda-env/bin:$CVA6_VERILATOR_BIN_DIR:$PATH"
   cd "$CHIPYARD_DIR/sims/verilator"
   local sim="$CHIPYARD_DIR/sims/verilator/simulator-chipyard.harness-CVA6Config"
   local mdir="$CHIPYARD_DIR/sims/verilator/generated-src/chipyard.TestHarness.CVA6Config/chipyard.TestHarness.CVA6Config"

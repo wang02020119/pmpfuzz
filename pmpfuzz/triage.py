@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .coverage import coverage_from_run
+from .feedback import behavior_guidance_summary
 from .schema import read_json, write_json
 from .verdict import verdict_for_run
 
@@ -176,6 +177,36 @@ def render_markdown_report(run_dir: Path) -> str:
     for gap in coverage.get("top_combo_gaps", [])[:10]:
         lines.append(f"- `{gap}`")
     if not coverage.get("top_combo_gaps"):
+        lines.append("- none")
+
+    behavior = behavior_guidance_summary(run_dir)
+    lines.extend(
+        [
+            "",
+            "## Behavior Feedback Guidance",
+            "",
+            f"- Behavior signals: {behavior.get('signal_count', 0)}",
+            f"- Suggested feedback scheduler: `python3 -m pmpfuzz feedback --from-runs {run_dir} "
+            f"--max-cases 64 --seed 20260629 --out runs/feedback_next`",
+            "",
+            "Top behavior signals:",
+            "",
+        ]
+    )
+    for signal in behavior.get("top_signals", []):
+        lines.append(
+            f"- `{signal.get('kind')}` case=`{signal.get('case')}` dut=`{signal.get('dut')}` "
+            f"failure_class=`{signal.get('failure_class')}` weight={signal.get('weight')}"
+        )
+    if not behavior.get("top_signals"):
+        lines.append("- none")
+    lines.extend(["", "Top feedback mutations:", ""])
+    for entry in behavior.get("top_entries", []):
+        lines.append(
+            f"- `{entry.get('name')}` strategy=`{entry.get('mutation_strategy')}` "
+            f"score={entry.get('score')} ops=`{','.join(entry.get('mutation_ops') or [])}`"
+        )
+    if not behavior.get("top_entries"):
         lines.append("- none")
 
     lines.extend([

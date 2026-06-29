@@ -13,6 +13,7 @@ from .capabilities import capability_for_dut, capability_matrix, oracle_applicab
 from .coverage import write_coverage
 from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_XIANGSHAN_EMU, make_dut
 from .emitter import AssemblyEmitter
+from .feedback import write_feedback
 from .runner import DEFAULT_SPIKE, RunnerConfig, parse_time_budget, run_campaign
 from .scenario import ScenarioGenerator
 from .schema import read_json, result_to_dict, scenario_to_case_dict, write_aggregate, write_json
@@ -83,6 +84,15 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.add_argument("--include-experimental", action="store_true")
     schedule.add_argument("--coverage-mode", choices=["semantic", "pairwise", "security-triples"], default="semantic")
 
+    feedback = subparsers.add_parser("feedback", help="build the next behavior feedback-guided campaign")
+    feedback.add_argument("--from-runs", required=True, help="comma-separated run or repro directories")
+    feedback.add_argument("--target", default=CORE_STATEFUL_TARGET)
+    feedback.add_argument("--max-cases", type=int, default=64)
+    feedback.add_argument("--seed", type=int, default=20260629)
+    feedback.add_argument("--out", type=Path, required=True)
+    feedback.add_argument("--include-experimental", action="store_true")
+    feedback.add_argument("--signal-file", type=Path, action="append", default=[])
+
     report = subparsers.add_parser("report", help="write a Markdown report for a campaign")
     report.add_argument("--run-dir", type=Path, required=True)
 
@@ -137,6 +147,18 @@ def main(argv: list[str] | None = None) -> int:
             coverage_mode=args.coverage_mode,
         )
         print(f"schedule={schedule_path}")
+        return 0
+    if args.command == "feedback":
+        schedule_path = write_feedback(
+            _parse_run_dirs(args.from_runs),
+            target=args.target,
+            max_cases=args.max_cases,
+            seed=args.seed,
+            out_dir=args.out,
+            include_experimental=args.include_experimental,
+            signal_files=args.signal_file,
+        )
+        print(f"feedback={schedule_path.parent / 'feedback.json'} schedule={schedule_path}")
         return 0
     if args.command == "report":
         write_aggregate(args.run_dir)

@@ -34,6 +34,18 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
                     "reason": "Spike and Rocket pass while BOOM hangs on PTW PMP-denied U-mode Sv39 load",
                 }
             )
+        if _is_confirmed_boom_pmp_fetch_boundary_failure(case, spike, rocket, boom):
+            evidence.append(
+                {
+                    "kind": "confirmed_pmp_fetch_boundary_failure",
+                    "case": name,
+                    "profile": case.get("profile"),
+                    "boom_failure_class": boom.get("failure_class"),
+                    "observed_tohost": boom.get("observed_tohost"),
+                    "expected": "successful fetch and ecall completion",
+                    "reason": "Spike and Rocket pass while BOOM fails an allowed PMP NA4 fetch boundary probe",
+                }
+            )
         if _is_related_wrong_mcause(case, boom):
             related.append(
                 {
@@ -63,6 +75,16 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
             "impact": "stale_permission_reuse",
             "expected": "post-mutation access must trap after required fence",
             "evidence": stale,
+            "related_evidence": related,
+        }
+    fetch_boundary = [item for item in evidence if item.get("kind") == "confirmed_pmp_fetch_boundary_failure"]
+    if fetch_boundary:
+        return {
+            "verdict": "confirmed_pmp_fetch_boundary_failure",
+            "has_vulnerability": True,
+            "impact": "denial_of_service / incorrect_execute_permission_handling",
+            "expected": "successful fetch and ecall completion",
+            "evidence": fetch_boundary,
             "related_evidence": related,
         }
     if evidence:
@@ -200,6 +222,30 @@ def _is_confirmed_boom_ptw_hang(
         and case.get("ptw_fault_level") == "L1"
         and case.get("preload_mode") == "cold"
         and bool(case.get("mxr"))
+    )
+
+
+def _is_confirmed_boom_pmp_fetch_boundary_failure(
+    case: dict[str, Any],
+    spike: dict[str, Any] | None,
+    rocket: dict[str, Any] | None,
+    boom: dict[str, Any] | None,
+) -> bool:
+    if not spike or not rocket or not boom:
+        return False
+    return (
+        _is_valid_oracle_result(spike)
+        and _is_valid_oracle_result(rocket)
+        and _is_valid_oracle_result(boom)
+        and spike.get("status") == "pass"
+        and rocket.get("status") == "pass"
+        and boom.get("status") not in {"pass", "setup_unsupported"}
+        and boom.get("failure_class") in {"sim_assert", "tohost_fail", "infra_failure"}
+        and case.get("profile") == "pmp-boundary"
+        and case.get("translation") == "bare"
+        and case.get("access") == "fetch"
+        and case.get("pmp_match_mode") == "na4"
+        and bool(case.get("expected_allowed"))
     )
 
 

@@ -56,6 +56,29 @@ class ScenarioGeneratorTest(unittest.TestCase):
         self.assertEqual(len(encodings), 16)
         self.assertTrue(all(scenario.mseccfg.mml for scenario in scenarios))
 
+    def test_stable_smepmp_profiles_generate_schema_and_coverage_metadata(self):
+        profiles = (
+            "smepmp-mmwp-mmode-default-deny",
+            "smepmp-mml-shared-code",
+            "smepmp-mml-shared-data",
+            "smepmp-locked-entry",
+            "smepmp-rlb-setup",
+        )
+
+        for profile in profiles:
+            with self.subTest(profile=profile):
+                scenario = ScenarioGenerator(seed=30, include_smepmp=True, profile=profile).generate_batch(count=1)[0]
+                case = scenario_to_case_dict(scenario, seed=30, index=0)
+
+                self.assertEqual(case["profile"], profile)
+                self.assertIn("smepmp", case["required_capabilities"])
+                self.assertTrue(case["mseccfg"]["mml"] or case["mseccfg"]["mmwp"] or case["mseccfg"]["rlb"])
+                self.assertTrue(case["coverage_tags"])
+                self.assertTrue(case["semantic_bins"])
+                self.assertTrue(case["combo_bins"])
+                self.assertTrue(case.get("smepmp_rule"))
+                self.assertIn(case["smepmp_rule"], case["coverage_tags"])
+
     def test_no_smepmp_generation_avoids_reserved_write_without_read_pmp(self):
         scenarios = ScenarioGenerator(seed=31, include_smepmp=False, profile="legacy").generate_batch(count=64)
 

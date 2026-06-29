@@ -29,6 +29,16 @@ class MediumSmokeScriptTest(unittest.TestCase):
         self.assertIn('run_one_dut xiangshan-clean 64 160 200000 "45m"', text)
         self.assertIn('--time-budget "$dut_budget"', text)
 
+    def test_smepmp_hardening_script_is_capability_gated_and_skips_cva6_by_default(self):
+        script = Path("scripts/run_smepmp_hardening_smoke.sh")
+        self.assertTrue(script.exists())
+        text = script.read_text(encoding="ascii")
+
+        self.assertIn("--probe-smepmp", text)
+        self.assertIn("spike,rocket-clean,boom-clean,xiangshan-clean", text)
+        self.assertIn("smepmp-mmwp-mmode-default-deny", text)
+        self.assertNotIn("cva6-clean", text)
+
 
 if __name__ == "__main__":
     unittest.main()

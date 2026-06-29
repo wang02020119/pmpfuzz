@@ -107,6 +107,37 @@ class VerdictTest(unittest.TestCase):
         self.assertTrue(verdict["has_vulnerability"])
         self.assertEqual(verdict["verdict"], "confirmed_side_effect_failure")
 
+    def test_smepmp_permission_failure_is_confirmed_with_spike_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(seed=13, include_smepmp=True, profile="smepmp-mmwp-mmode-default-deny").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=13, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+
+            for dut, status, failure_class in [
+                ("spike", "pass", None),
+                ("rocket-clean", "fail", "unexpected_no_trap"),
+            ]:
+                write_json(
+                    run_dir / "results" / f"{case['name']}_{dut}" / "result.json",
+                    result_to_dict(
+                        case=case,
+                        dut=dut,
+                        status=status,
+                        elapsed_seconds=0.1,
+                        returncode=0 if status == "pass" else 1,
+                        log=run_dir / "results" / f"{case['name']}_{dut}" / "case.log",
+                        reason=failure_class,
+                        failure_class=failure_class,
+                    ),
+                )
+
+            verdict = verdict_for_run(run_dir)
+
+        self.assertTrue(verdict["has_vulnerability"])
+        self.assertEqual(verdict["verdict"], "confirmed_smepmp_permission_failure")
+        self.assertEqual(verdict["impact"], "wrong_smepmp_permission")
+
     def test_no_fence_stale_permission_is_experimental_not_confirmed(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)

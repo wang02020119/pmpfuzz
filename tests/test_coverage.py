@@ -53,6 +53,20 @@ class CoverageTest(unittest.TestCase):
         self.assertEqual(coverage["stateful_mutations"]["pmpcfg-deny-target"], 1)
         self.assertIn("with-sfence", coverage["stateful_fences"])
 
+    def test_coverage_counts_smepmp_dimensions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(seed=6, include_smepmp=True, profile="smepmp-mml-shared-code").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=6, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+
+            coverage = coverage_from_run(run_dir)
+
+        self.assertEqual(coverage["smepmp_mml"]["1"], 1)
+        self.assertIn(case["smepmp_rule"], coverage["smepmp_rules"])
+        self.assertIn(case["effective_privilege"], coverage["effective_privileges"])
+        self.assertIn(case["pmp_match_result"], coverage["pmp_match_results"])
+
 
 if __name__ == "__main__":
     unittest.main()

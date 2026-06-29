@@ -105,6 +105,32 @@ class BehaviorFeedbackTest(unittest.TestCase):
         self.assertIn("Suggested feedback scheduler", report_text)
         self.assertIn("differential_failure", report_text)
 
+    def test_feedback_schedule_generates_smepmp_neighborhood(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(seed=17, include_smepmp=True, profile="smepmp-mmwp-mmode-default-deny").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=17, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+            for dut, status, failure_class in [
+                ("spike", "pass", None),
+                ("boom-clean", "fail", "unexpected_no_trap"),
+            ]:
+                _write_result(
+                    run_dir,
+                    case,
+                    dut=dut,
+                    status=status,
+                    failure_class=failure_class,
+                    reason=failure_class,
+                )
+
+            schedule = build_feedback_schedule([run_dir], max_cases=6, seed=20260630, include_experimental=True)
+
+        self.assertTrue(schedule["entries"])
+        self.assertTrue(all("smepmp" in entry["profile"] for entry in schedule["entries"]))
+        self.assertEqual(schedule["entries"][0]["mutation_strategy"], "smepmp-permission-neighborhood")
+        self.assertTrue(any(op.startswith("set-mseccfg-") for op in schedule["entries"][0]["mutation_ops"]))
+
 
 def _write_boom_ptw_diff_run(run_dir: Path) -> dict:
     scenario = ScenarioGenerator(seed=20260629, include_smepmp=False, profile="boom-ptw-pmp-regression").generate_batch(1)[0]

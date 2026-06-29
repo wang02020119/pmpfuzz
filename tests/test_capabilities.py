@@ -7,6 +7,7 @@ from pmpfuzz.__main__ import build_parser, main
 from pmpfuzz.capabilities import (
     DEFAULT_CAPABILITY_SCHEMA_VERSION,
     capability_for_dut,
+    capability_matrix,
     required_capabilities_for_case,
 )
 from pmpfuzz.schema import result_to_dict, scenario_to_case_dict, write_json
@@ -19,9 +20,26 @@ class CapabilityModelTest(unittest.TestCase):
         parser = build_parser()
 
         args = parser.parse_args(["probe-dut", "--dut", "spike,rocket-clean,xiangshan-clean", "--out", "out"])
+        smepmp_args = parser.parse_args(["probe-dut", "--dut", "spike", "--probe-smepmp", "--out", "out"])
 
         self.assertEqual(args.command, "probe-dut")
         self.assertEqual(args.dut, "spike,rocket-clean,xiangshan-clean")
+        self.assertTrue(smepmp_args.probe_smepmp)
+
+    def test_capability_schema_v2_records_smepmp_probe_details(self):
+        matrix = capability_matrix(["spike", "rocket-clean"], probe_smepmp=True)
+
+        self.assertEqual(matrix["schema_version"], 2)
+        spike = matrix["duts"]["spike"]
+        rocket = matrix["duts"]["rocket-clean"]
+        self.assertIn("smepmp", spike)
+        self.assertEqual(
+            set(spike["smepmp"]),
+            {"csr_access", "mml", "mmwp", "rlb", "warl_behavior", "probe_status"},
+        )
+        self.assertIn(spike["smepmp"]["probe_status"], {"supported", "unsupported", "infra_unadapted", "unknown"})
+        self.assertIn("smepmp", rocket)
+        self.assertEqual(rocket["supported_capabilities"]["smepmp"], rocket["smepmp"]["probe_status"] == "supported")
 
     def test_capability_schema_records_finish_protocol_and_diagnostic_depth(self):
         spike = capability_for_dut("spike", available=True)
@@ -135,11 +153,39 @@ class CapabilityModelTest(unittest.TestCase):
     def test_required_capabilities_reflect_core_chain_features(self):
         bare = ScenarioGenerator(seed=1, include_smepmp=False, profile="legacy-data").generate_batch(1)[0]
         sv39 = ScenarioGenerator(seed=1, include_smepmp=False, profile="sv39-ptw-pmp-matrix").generate_batch(1)[0]
+        smepmp = ScenarioGenerator(seed=1, include_smepmp=True, profile="smepmp-mmwp-mmode-default-deny").generate_batch(1)[0]
 
         bare_required = required_capabilities_for_case(scenario_to_case_dict(bare, seed=1, index=0))
         self.assertIn("pmp", bare_required)
         self.assertNotIn("sv39", bare_required)
         self.assertIn("sv39", required_capabilities_for_case(scenario_to_case_dict(sv39, seed=1, index=0)))
+        self.assertIn("smepmp", required_capabilities_for_case(scenario_to_case_dict(smepmp, seed=1, index=0)))
+
+    def test_unsupported_smepmp_result_does_not_create_vulnerability_verdict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(seed=2, include_smepmp=True, profile="smepmp-mmwp-mmode-default-deny").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=2, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+            write_json(
+                run_dir / "results" / case["name"] / "result.json",
+                result_to_dict(
+                    case=case,
+                    dut="rocket-clean",
+                    status="setup_unsupported",
+                    elapsed_seconds=0.1,
+                    returncode=None,
+                    log=run_dir / "results" / case["name"] / "case.log",
+                    reason="smepmp unsupported",
+                    failure_class="setup_unsupported",
+                    oracle_applicability="unsupported",
+                ),
+            )
+
+            report = write_report(run_dir).read_text(encoding="ascii")
+
+        self.assertIn("unsupported", report)
+        self.assertIn("Vulnerability found: `false`", report)
 
 
 if __name__ == "__main__":

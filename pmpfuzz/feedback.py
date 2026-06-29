@@ -20,6 +20,11 @@ HIGH_VALUE_FAILURES = {
     "STALE_PMP_PERMISSION": 30,
     "STALE_TLB_PERMISSION": 30,
     "STALE_PTW_PERMISSION": 30,
+    "forbidden_side_effect": 30,
+    "missing_expected_side_effect": 20,
+    "stale_pmp_permission": 30,
+    "stale_tlb_permission": 30,
+    "stale_ptw_permission": 30,
     "timeout": 8,
 }
 
@@ -130,7 +135,7 @@ def build_feedback_schedule(
         "guidance_mode": "behavior",
         "target": target,
         "seed": seed,
-        "include_smepmp": False,
+        "include_smepmp": include_experimental,
         "include_experimental": include_experimental,
         "max_cases": max_cases,
         "from_runs": [str(item) for item in run_dirs],
@@ -275,8 +280,14 @@ def _features_for_case_result(case: dict[str, Any], result: dict[str, Any]) -> d
         "pmp_match_mode": case.get("pmp_match_mode"),
         "pmp_locked": case.get("pmp_locked"),
         "pmp_allow": case.get("pmp_allow"),
+        "pmp_match_result": case.get("pmp_match_result"),
         "mxr": case.get("mxr"),
         "sum_enabled": case.get("sum_enabled"),
+        "smepmp_rule": case.get("smepmp_rule"),
+        "effective_privilege": case.get("effective_privilege"),
+        "mseccfg_mml": (case.get("mseccfg") or {}).get("mml"),
+        "mseccfg_mmwp": (case.get("mseccfg") or {}).get("mmwp"),
+        "mseccfg_rlb": (case.get("mseccfg") or {}).get("rlb"),
         "security_focus": case.get("security_focus"),
         "pte_rwx": pte.get("rwx"),
         "pte_user": pte.get("user"),
@@ -292,7 +303,8 @@ def _features_for_case_result(case: dict[str, Any], result: dict[str, Any]) -> d
 def _candidate_cases(*, target: str, include_experimental: bool, seed: int) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for profile in target_profiles(target, include_experimental):
-        generator = ScenarioGenerator(seed=seed, include_smepmp=False, profile=profile)
+        include_smepmp = include_experimental or profile.startswith("smepmp")
+        generator = ScenarioGenerator(seed=seed, include_smepmp=include_smepmp, profile=profile)
         for index, scenario in enumerate(generator.generate_batch(PROFILE_TARGET_COUNTS[profile])):
             scenario = replace(scenario, name=f"{profile}__{scenario.name}")
             case = scenario_to_case_dict(scenario, seed=seed, index=index)
@@ -338,6 +350,8 @@ def _strategy_for_signal(signal: dict[str, Any]) -> str:
     failure_class = str(features.get("failure_class") or signal.get("kind") or "")
     profile = str(features.get("profile") or "")
     sequence_kind = str(features.get("stateful_kind") or "")
+    if profile.startswith("smepmp") or features.get("smepmp_rule"):
+        return "smepmp-permission-neighborhood"
     if _is_ptw_pmp_signal(features, failure_class, profile):
         return "ptw-pmp-neighborhood"
     if failure_class == "wrong_mcause":
@@ -371,6 +385,8 @@ def _score_candidate(signal: dict[str, Any], candidate: dict[str, Any], strategy
         return _score_wrong_mcause_candidate(features, candidate)
     if strategy == "stateful-permission-neighborhood":
         return _score_stateful_candidate(features, candidate)
+    if strategy == "smepmp-permission-neighborhood":
+        return _score_smepmp_candidate(features, candidate)
     if strategy == "timeout-control":
         return _score_timeout_candidate(features, candidate)
     return _score_semantic_candidate(features, candidate)
@@ -445,6 +461,30 @@ def _score_stateful_candidate(features: dict[str, Any], candidate: dict[str, Any
     return score
 
 
+def _score_smepmp_candidate(features: dict[str, Any], candidate: dict[str, Any]) -> int:
+    profile = str(candidate.get("profile") or "")
+    if not profile.startswith("smepmp"):
+        return 0
+    score = 100
+    if candidate.get("smepmp_rule") != features.get("smepmp_rule"):
+        score += 45
+    else:
+        score += 10
+    mseccfg = candidate.get("mseccfg") or {}
+    for bit in ("mml", "mmwp", "rlb"):
+        if bool(mseccfg.get(bit)) != bool(features.get(f"mseccfg_{bit}")):
+            score += 20
+        else:
+            score += 2
+    if candidate.get("privilege") != features.get("privilege"):
+        score += 10
+    if candidate.get("access") != features.get("access"):
+        score += 8
+    if candidate.get("pmp_match_result") != features.get("pmp_match_result"):
+        score += 6
+    return score
+
+
 def _score_timeout_candidate(features: dict[str, Any], candidate: dict[str, Any]) -> int:
     if candidate.get("profile") != features.get("profile"):
         return 0
@@ -475,7 +515,13 @@ def _mutation_ops(features: dict[str, Any], candidate: dict[str, Any]) -> list[s
     _append_flip(ops, "preload", features.get("preload_mode"), candidate.get("preload_mode"), prefix="set-preload")
     _append_flip(ops, "ptw", features.get("ptw_fault_level"), candidate.get("ptw_fault_level"), prefix="set-ptw-level")
     _append_flip(ops, "pmp-locked", _bool_digit(features.get("pmp_locked")), _bool_digit(candidate.get("pmp_locked")), prefix="set-pmp-locked")
+    _append_flip(ops, "pmp-match", features.get("pmp_match_result"), candidate.get("pmp_match_result"), prefix="set-pmp-match")
     _append_flip(ops, "pte-rwx", features.get("pte_rwx"), (candidate.get("pte_permissions") or {}).get("rwx"), prefix="set-pte-rwx")
+    mseccfg = candidate.get("mseccfg") or {}
+    _append_flip(ops, "mseccfg-mml", _bool_digit(features.get("mseccfg_mml")), _bool_digit(mseccfg.get("mml")), prefix="set-mseccfg-mml")
+    _append_flip(ops, "mseccfg-mmwp", _bool_digit(features.get("mseccfg_mmwp")), _bool_digit(mseccfg.get("mmwp")), prefix="set-mseccfg-mmwp")
+    _append_flip(ops, "mseccfg-rlb", _bool_digit(features.get("mseccfg_rlb")), _bool_digit(mseccfg.get("rlb")), prefix="set-mseccfg-rlb")
+    _append_flip(ops, "smepmp-rule", features.get("smepmp_rule"), candidate.get("smepmp_rule"), prefix="set-smepmp-rule")
     sequence = candidate.get("stateful_sequence") or {}
     _append_flip(ops, "mutation", features.get("stateful_mutation"), sequence.get("mutation"), prefix="set-stateful-mutation")
     _append_flip(ops, "fence", features.get("stateful_fence"), sequence.get("fence"), prefix="set-fence")
@@ -512,7 +558,7 @@ def _feedback_entry(candidate: dict[str, Any], signal: dict[str, Any], scored: d
         "index": candidate["index"],
         "name": candidate["name"],
         "seed": seed,
-        "include_smepmp": False,
+        "include_smepmp": str(candidate.get("profile") or "").startswith("smepmp") or bool(candidate.get("smepmp_rule")),
         "semantic_bins": list(candidate.get("semantic_bins") or []),
         "combo_bins": list(candidate.get("combo_bins") or []),
         "coverage_mode": "behavior",

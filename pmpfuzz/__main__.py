@@ -44,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     probe_dut = subparsers.add_parser("probe-dut", help="write DUT capability metadata")
     probe_dut.add_argument("--dut", default="spike,rocket-clean,boom-clean,cva6-clean,xiangshan-clean")
     probe_dut.add_argument("--out", type=Path, required=True)
+    probe_dut.add_argument("--probe-smepmp", action="store_true")
     _add_common_env_args(probe_dut)
 
     gen = subparsers.add_parser("gen", help="generate cases without running a DUT")
@@ -211,15 +212,102 @@ def _cmd_env_check(args: argparse.Namespace) -> int:
 
 def _cmd_probe_dut(args: argparse.Namespace) -> int:
     duts = [item.strip() for item in args.dut.split(",") if item.strip()]
-    matrix = capability_matrix(duts)
+    matrix = capability_matrix(duts, probe_smepmp=args.probe_smepmp)
+    if args.probe_smepmp:
+        for dut_name, capability in matrix["duts"].items():
+            smepmp = _runtime_smepmp_probe(args, dut_name, capability)
+            capability["smepmp"] = smepmp
+            capability["supported_capabilities"]["smepmp"] = smepmp["probe_status"] == "supported"
     write_json(args.out / "dut_capabilities.json", matrix)
     for dut_name, capability in matrix["duts"].items():
+        smepmp = capability.get("smepmp") or {}
         print(
             f"{dut_name}: {'ok' if capability['available'] else 'missing'} "
             f"finish={capability['finish_protocol']} diagnostic={capability['diagnostic_depth']} "
-            f"oracle={capability['oracle_applicability']}"
+            f"oracle={capability['oracle_applicability']} smepmp={smepmp.get('probe_status', 'unknown')}"
         )
     return 0
+
+
+def _runtime_smepmp_probe(args: argparse.Namespace, dut_name: str, capability: dict) -> dict:
+    static = capability.get("smepmp") or {}
+    if not capability.get("available"):
+        return static
+    if static.get("probe_status") != "supported":
+        return {
+            "csr_access": False,
+            "mml": False,
+            "mmwp": False,
+            "rlb": False,
+            "warl_behavior": "not_probed_static_unsupported",
+            "probe_status": "unsupported",
+        }
+
+    probe_dir = args.out / "smepmp_probe_runs" / dut_name
+    config = RunnerConfig(
+        profile="smepmp-mmwp-mmode-default-deny",
+        profiles=("smepmp-mmwp-mmode-default-deny",),
+        count=1,
+        seed=20260629,
+        jobs=1,
+        time_budget_seconds=120,
+        out=probe_dir,
+        dut=dut_name,
+        spike=args.spike,
+        isa=args.isa or "rv64gc_smepmp",
+        chipyard_dir=args.chipyard_dir or (DEFAULT_CLEAN_CHIPYARD_DIR if dut_name in CLEAN_CHIPYARD_DUTS else DEFAULT_CHIPYARD_DIR),
+        simlen=50000,
+        per_case_timeout_seconds=30,
+        include_smepmp=True,
+    )
+    try:
+        results = run_campaign(config)
+    except Exception as exc:
+        return {
+            "csr_access": False,
+            "mml": False,
+            "mmwp": False,
+            "rlb": False,
+            "warl_behavior": f"probe_exception:{type(exc).__name__}",
+            "probe_status": "infra_unadapted",
+        }
+
+    result = results[0] if results else None
+    if result is None:
+        return {
+            "csr_access": False,
+            "mml": False,
+            "mmwp": False,
+            "rlb": False,
+            "warl_behavior": "probe_no_result",
+            "probe_status": "infra_unadapted",
+        }
+    if result.status == "setup_unsupported":
+        return {
+            "csr_access": False,
+            "mml": False,
+            "mmwp": False,
+            "rlb": False,
+            "warl_behavior": "probe_setup_unsupported",
+            "probe_status": "unsupported",
+        }
+    if result.status in {"compile_fail", "infra_failure", "timeout"}:
+        return {
+            "csr_access": False,
+            "mml": False,
+            "mmwp": False,
+            "rlb": False,
+            "warl_behavior": f"probe_{result.status}",
+            "probe_status": "infra_unadapted",
+        }
+    return {
+        "csr_access": True,
+        "mml": True,
+        "mmwp": True,
+        "rlb": True,
+        "warl_behavior": "runtime_pass" if result.status == "pass" else f"runtime_nonpass:{result.failure_class or result.status}",
+        "probe_status": "supported",
+    }
 
 
 def _cmd_gen(args: argparse.Namespace) -> int:

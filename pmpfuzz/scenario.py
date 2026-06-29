@@ -57,6 +57,7 @@ class PmpScenario:
     pmp_match_mode: str | None = None
     pte_permissions: dict[str, object] = field(default_factory=dict)
     security_focus: str | None = None
+    smepmp_rule: str | None = None
     stateful_sequence: dict[str, object] | None = None
 
 
@@ -76,6 +77,14 @@ class ScenarioGenerator:
             return self._generate_legacy(index, accesses=(Access.FETCH,), profile="legacy-fetch-experimental")
         if self.profile == "smepmp-table":
             return self._generate_smepmp_table(index)
+        if self.profile in {
+            "smepmp-mmwp-mmode-default-deny",
+            "smepmp-mml-shared-code",
+            "smepmp-mml-shared-data",
+            "smepmp-locked-entry",
+            "smepmp-rlb-setup",
+        }:
+            return self._generate_stable_smepmp(index)
         if self.profile == "pmp-boundary":
             return self._generate_pmp_boundary(index)
         if self.profile == "sv39-final-pmp":
@@ -326,7 +335,143 @@ class ScenarioGenerator:
             mpp=Privilege.M,
             mseccfg=Mseccfg(rlb=self.include_smepmp, mml=self.include_smepmp, mmwp=self.include_smepmp),
             profile=self.profile,
+            coverage_tags=("smepmp", "table", privilege.value, access.value),
+            pmp_match_mode="smepmp-table",
+            security_focus="smepmp-table",
+            smepmp_rule="table",
         )
+
+    def _generate_stable_smepmp(self, index: int) -> PmpScenario:
+        profile = self.profile
+        if profile == "smepmp-mmwp-mmode-default-deny":
+            return PmpScenario(
+                name=f"scenario_{index:04d}",
+                entries=[self._harness_entry()],
+                privilege=Privilege.M,
+                probe=AccessProbe(access=Access.LOAD, physical_address=TARGET_BASE, size=4, offset_name="unmatched"),
+                mprv=False,
+                mpp=Privilege.M,
+                mseccfg=Mseccfg(mmwp=True),
+                profile=profile,
+                coverage_tags=("smepmp", "mmwp", "m-default-deny", "mmwp-mmode-default-deny", "M", "load", "unmatched"),
+                pmp_match_mode="unmatched",
+                security_focus=profile,
+                smepmp_rule="mmwp-mmode-default-deny",
+            )
+
+        if profile == "smepmp-mml-shared-code":
+            privilege = [Privilege.M, Privilege.S, Privilege.U][index % 3]
+            return PmpScenario(
+                name=f"scenario_{index:04d}",
+                entries=self._mml_harness_entries()
+                + [
+                    PmpEntry(
+                        index=4,
+                        address_mode=AddressMode.NAPOT,
+                        pmpaddr=PmpEntry.encode_napot(base=TARGET_BASE, size=TARGET_SIZE),
+                        read=False,
+                        write=True,
+                        execute=False,
+                        locked=True,
+                    )
+                ],
+                privilege=privilege,
+                probe=AccessProbe(access=Access.FETCH, physical_address=TARGET_BASE, size=4, offset_name="inside"),
+                mprv=False,
+                mpp=Privilege.M,
+                mseccfg=Mseccfg(rlb=True, mml=True),
+                profile=profile,
+                coverage_tags=("smepmp", "mml", "shared-code", "mml-shared-code", privilege.value, "fetch", "locked"),
+                pmp_match_mode="shared-code",
+                security_focus=profile,
+                smepmp_rule="mml-shared-code",
+            )
+
+        if profile == "smepmp-mml-shared-data":
+            access = [Access.LOAD, Access.STORE][index % 2]
+            privilege = [Privilege.M, Privilege.S, Privilege.U][(index // 2) % 3]
+            return PmpScenario(
+                name=f"scenario_{index:04d}",
+                entries=self._mml_harness_entries()
+                + [
+                    PmpEntry(
+                        index=4,
+                        address_mode=AddressMode.NAPOT,
+                        pmpaddr=PmpEntry.encode_napot(base=TARGET_BASE, size=TARGET_SIZE),
+                        read=False,
+                        write=True,
+                        execute=True,
+                        locked=False,
+                    )
+                ],
+                privilege=privilege,
+                probe=AccessProbe(access=access, physical_address=TARGET_BASE, size=4, offset_name="inside"),
+                mprv=False,
+                mpp=Privilege.M,
+                mseccfg=Mseccfg(mml=True),
+                profile=profile,
+                coverage_tags=("smepmp", "mml", "shared-data", "mml-shared-data", privilege.value, access.value, "unlocked"),
+                pmp_match_mode="shared-data",
+                security_focus=profile,
+                smepmp_rule="mml-shared-data",
+            )
+
+        if profile == "smepmp-locked-entry":
+            privilege = [Privilege.M, Privilege.S, Privilege.U][index % 3]
+            return PmpScenario(
+                name=f"scenario_{index:04d}",
+                entries=self._mml_harness_entries()
+                + [
+                    PmpEntry(
+                        index=4,
+                        address_mode=AddressMode.NAPOT,
+                        pmpaddr=PmpEntry.encode_napot(base=TARGET_BASE, size=TARGET_SIZE),
+                        read=True,
+                        write=False,
+                        execute=False,
+                        locked=True,
+                    )
+                ],
+                privilege=privilege,
+                probe=AccessProbe(access=Access.LOAD, physical_address=TARGET_BASE, size=4, offset_name="inside"),
+                mprv=False,
+                mpp=Privilege.M,
+                mseccfg=Mseccfg(mml=True),
+                profile=profile,
+                coverage_tags=("smepmp", "mml", "locked-entry", "mml-locked-entry", privilege.value, "load", "locked"),
+                pmp_match_mode="locked-entry",
+                security_focus=profile,
+                smepmp_rule="mml-locked-entry",
+            )
+
+        if profile == "smepmp-rlb-setup":
+            return PmpScenario(
+                name=f"scenario_{index:04d}",
+                entries=self._mml_harness_entries()
+                + [
+                    PmpEntry(
+                        index=4,
+                        address_mode=AddressMode.NAPOT,
+                        pmpaddr=PmpEntry.encode_napot(base=TARGET_BASE, size=TARGET_SIZE),
+                        read=True,
+                        write=False,
+                        execute=False,
+                        locked=True,
+                    )
+                ],
+                privilege=Privilege.M,
+                probe=AccessProbe(access=Access.LOAD, physical_address=TARGET_BASE, size=4, offset_name="inside"),
+                mprv=False,
+                mpp=Privilege.M,
+                mseccfg=Mseccfg(rlb=True, mml=True),
+                profile=profile,
+                coverage_tags=("smepmp", "rlb", "setup", "rlb-setup", "M", "load", "locked"),
+                pmp_match_mode="rlb-setup",
+                security_focus=profile,
+                smepmp_rule="rlb-setup",
+            )
+
+        raise ValueError(f"unsupported stable Smepmp profile: {profile}")
 
     def _generate_sv39(self, index: int, *, deny_page_walk: bool, sfence_vma: bool) -> PmpScenario:
         access = [Access.LOAD, Access.STORE, Access.FETCH][index % 3]

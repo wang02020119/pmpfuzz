@@ -22,6 +22,11 @@ CORE_STATEFUL_PROFILES = (
     "tlb-stale-pmp",
     "ptw-stale-pmp",
     "boom-ptw-pmp-regression",
+    "smepmp-mmwp-mmode-default-deny",
+    "smepmp-mml-shared-code",
+    "smepmp-mml-shared-data",
+    "smepmp-locked-entry",
+    "smepmp-rlb-setup",
 )
 
 EXPERIMENTAL_PROFILES = (
@@ -42,6 +47,11 @@ PROFILE_TARGET_COUNTS = {
     "legacy-fetch-experimental": 12,
     "smepmp-table": 48,
     "mixed-smepmp-mmu": 48,
+    "smepmp-mmwp-mmode-default-deny": 8,
+    "smepmp-mml-shared-code": 9,
+    "smepmp-mml-shared-data": 12,
+    "smepmp-locked-entry": 9,
+    "smepmp-rlb-setup": 4,
 }
 
 COVERAGE_MODES = ("semantic", "pairwise", "security-triples")
@@ -74,6 +84,20 @@ def semantic_bins_for_case(case: dict[str, Any]) -> list[str]:
     _add_field_bin(bins, profile, "ptw", case.get("ptw_fault_level"))
     _add_field_bin(bins, profile, "preload", case.get("preload_mode"))
     _add_field_bin(bins, profile, "security", case.get("security_focus"))
+    _add_field_bin(bins, profile, "smepmp_rule", case.get("smepmp_rule"))
+    _add_field_bin(bins, profile, "effective_priv", case.get("effective_privilege"))
+    _add_field_bin(bins, profile, "match", case.get("pmp_match_result"))
+
+    mseccfg = case.get("mseccfg") or {}
+    if mseccfg:
+        bins.add(
+            "profile={profile}|mml={mml}|mmwp={mmwp}|rlb={rlb}".format(
+                profile=profile,
+                mml=_bool_digit(mseccfg.get("mml")),
+                mmwp=_bool_digit(mseccfg.get("mmwp")),
+                rlb=_bool_digit(mseccfg.get("rlb")),
+            )
+        )
 
     pte = case.get("pte_permissions") or {}
     if pte:
@@ -145,6 +169,14 @@ def semantic_bins_for_scenario(scenario: PmpScenario) -> list[str]:
         "pmp_match_mode": scenario.pmp_match_mode,
         "pte_permissions": scenario.pte_permissions,
         "security_focus": scenario.security_focus,
+        "smepmp_rule": scenario.smepmp_rule,
+        "mseccfg": {
+            "mml": scenario.mseccfg.mml,
+            "mmwp": scenario.mseccfg.mmwp,
+            "rlb": scenario.mseccfg.rlb,
+        },
+        "effective_privilege": scenario.mpp.value if scenario.mprv else scenario.privilege.value,
+        "pmp_match_result": _pmp_match_result_for_scenario(scenario),
         "stateful_sequence": scenario.stateful_sequence,
     }
     return semantic_bins_for_case(case)
@@ -171,6 +203,14 @@ def combo_bins_for_scenario(scenario: PmpScenario, *, coverage_mode: str = "all"
         "expected_allowed": expected_allowed,
         "pte_permissions": scenario.pte_permissions,
         "security_focus": scenario.security_focus,
+        "mseccfg": {
+            "mml": scenario.mseccfg.mml,
+            "mmwp": scenario.mseccfg.mmwp,
+            "rlb": scenario.mseccfg.rlb,
+        },
+        "smepmp_rule": scenario.smepmp_rule,
+        "effective_privilege": scenario.mpp.value if scenario.mprv else scenario.privilege.value,
+        "pmp_match_result": _pmp_match_result_for_scenario(scenario),
         "stateful_sequence": scenario.stateful_sequence,
     }
     return combo_bins_for_case(case, coverage_mode=coverage_mode)
@@ -315,7 +355,7 @@ def build_schedule(
         "target": target,
         "coverage_mode": coverage_mode,
         "seed": seed,
-        "include_smepmp": False,
+        "include_smepmp": any(str(entry.get("profile") or "").startswith("smepmp") for entry in selected),
         "include_experimental": include_experimental,
         "max_cases": max_cases,
         "from_runs": [str(item) for item in run_dirs],
@@ -433,7 +473,7 @@ def _target_candidates(*, target: str, include_experimental: bool, seed: int) ->
     candidates: list[dict[str, Any]] = []
     for profile in target_profiles(target, include_experimental):
         count = PROFILE_TARGET_COUNTS[profile]
-        generator = ScenarioGenerator(seed=seed, include_smepmp=False, profile=profile)
+        generator = ScenarioGenerator(seed=seed, include_smepmp=profile.startswith("smepmp"), profile=profile)
         for index, scenario in enumerate(generator.generate_batch(count)):
             candidates.append(
                 {
@@ -453,7 +493,7 @@ def _schedule_entry(candidate: dict[str, Any], gain: set[str], seed: int, *, cov
         "index": candidate["index"],
         "name": candidate["name"],
         "seed": seed,
-        "include_smepmp": False,
+        "include_smepmp": str(candidate.get("profile") or "").startswith("smepmp"),
         "semantic_bins": candidate["semantic_bins"],
         "combo_bins": candidate["combo_bins"],
         "coverage_mode": coverage_mode,
@@ -485,6 +525,14 @@ def _combo_factors(case: dict[str, Any]) -> dict[str, str]:
     _add_factor(factors, "sum", _bool_text(case.get("sum_enabled")))
     _add_factor(factors, "mxr", _bool_text(case.get("mxr")))
     _add_factor(factors, "security", case.get("security_focus"))
+    _add_factor(factors, "smepmp_rule", case.get("smepmp_rule"))
+    _add_factor(factors, "effective_priv", case.get("effective_privilege"))
+    _add_factor(factors, "match", case.get("pmp_match_result"))
+
+    mseccfg = case.get("mseccfg") or {}
+    _add_factor(factors, "mml", _bool_text(mseccfg.get("mml")) if mseccfg else None)
+    _add_factor(factors, "mmwp", _bool_text(mseccfg.get("mmwp")) if mseccfg else None)
+    _add_factor(factors, "rlb", _bool_text(mseccfg.get("rlb")) if mseccfg else None)
 
     pte = case.get("pte_permissions") or {}
     _add_factor(factors, "pte_rwx", pte.get("rwx"))
@@ -524,6 +572,12 @@ def _pairwise_combo_bins(factors: dict[str, str]) -> set[str]:
         "mutation",
         "fence",
         "expected_cause",
+        "mml",
+        "mmwp",
+        "rlb",
+        "smepmp_rule",
+        "effective_priv",
+        "match",
     ]
     present = [(name, factors[name]) for name in names if name in factors]
     return {
@@ -541,6 +595,9 @@ def _security_triple_bins(factors: dict[str, str]) -> set[str]:
         ("priv", "access", "pte_rwx"),
         ("pmp_locked", "pmp_allow", "probe"),
         ("expected_allowed", "access", "priv"),
+        ("mml", "mmwp", "rlb"),
+        ("smepmp_rule", "effective_priv", "access"),
+        ("smepmp_rule", "pmp_locked", "match"),
     )
     bins: set[str] = set()
     for names in triples:
@@ -584,6 +641,18 @@ def _pmp_metadata_for_scenario(scenario: PmpScenario) -> tuple[bool, bool]:
     if matched is None:
         return locked, False
     return locked, _entry_allows_access(matched, scenario.probe.access)
+
+
+def _pmp_match_result_for_scenario(scenario: PmpScenario) -> str:
+    decision = PmpModel(scenario.entries, scenario.mseccfg).check(
+        privilege=scenario.privilege,
+        access=scenario.probe.access,
+        physical_address=scenario.probe.physical_address,
+        size=scenario.probe.size,
+        mprv=scenario.mprv,
+        mpp=scenario.mpp,
+    )
+    return "matched" if decision.match_index is not None else "unmatched"
 
 
 def _entry_allows_access(entry: PmpEntry, access: Access) -> bool:

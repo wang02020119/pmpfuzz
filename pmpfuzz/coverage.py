@@ -51,6 +51,12 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         "stateful_fences": {},
         "statuses": {},
         "failure_classes": {},
+        "smepmp_mml": {},
+        "smepmp_mmwp": {},
+        "smepmp_rlb": {},
+        "smepmp_rules": {},
+        "effective_privileges": {},
+        "pmp_match_results": {},
         "semantic_bins": {},
         "combo_bins": {},
     }
@@ -70,6 +76,13 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
             _bump(coverage["semantic_bins"], semantic_bin)
         for combo_bin in combo_bins_for_case(case):
             _bump(coverage["combo_bins"], combo_bin)
+        mseccfg = case.get("mseccfg") or {}
+        _bump(coverage["smepmp_mml"], int(bool(mseccfg.get("mml"))))
+        _bump(coverage["smepmp_mmwp"], int(bool(mseccfg.get("mmwp"))))
+        _bump(coverage["smepmp_rlb"], int(bool(mseccfg.get("rlb"))))
+        _bump(coverage["smepmp_rules"], case.get("smepmp_rule"))
+        _bump(coverage["effective_privileges"], case.get("effective_privilege"))
+        _bump(coverage["pmp_match_results"], case.get("pmp_match_result"))
         pte_permissions = case.get("pte_permissions") or {}
         _bump(coverage["pte_permissions"], pte_permissions.get("rwx"))
         sequence = case.get("stateful_sequence") or {}

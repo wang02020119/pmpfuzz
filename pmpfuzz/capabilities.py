@@ -13,7 +13,7 @@ from .dut import (
 )
 
 
-DEFAULT_CAPABILITY_SCHEMA_VERSION = 1
+DEFAULT_CAPABILITY_SCHEMA_VERSION = 2
 DEFAULT_CAPABILITY_SPIKE = "/home/dubhe/wjs/boom_host_deploy/opt-riscv/bin/spike"
 
 
@@ -22,6 +22,7 @@ def capability_for_dut(
     *,
     available: bool | None = None,
     path: Path | str | None = None,
+    probe_smepmp: bool = False,
 ) -> dict[str, Any]:
     spec = _DUT_SPECS.get(dut)
     if spec is None:
@@ -46,22 +47,26 @@ def capability_for_dut(
             )
         elif build_config is not None:
             notes.append(f"build metadata: {build_config}")
+    supported_capabilities = dict(spec["supported_capabilities"])
+    smepmp_probe = _smepmp_probe_result(dut, resolved_available, supported_capabilities.get("smepmp", False), probe_smepmp)
+    supported_capabilities["smepmp"] = smepmp_probe["probe_status"] == "supported"
     capability = {
         "schema_version": DEFAULT_CAPABILITY_SCHEMA_VERSION,
         "dut": dut,
         "available": resolved_available,
         "path": resolved_path,
-        "supported_capabilities": dict(spec["supported_capabilities"]),
+        "supported_capabilities": supported_capabilities,
         "finish_protocol": spec["finish_protocol"],
         "diagnostic_depth": spec["diagnostic_depth"],
         "oracle_applicability": oracle_applicability,
+        "smepmp": smepmp_probe,
         "notes": notes,
     }
     return capability
 
 
-def capability_matrix(duts: Iterable[str]) -> dict[str, Any]:
-    entries = {dut: capability_for_dut(dut) for dut in duts}
+def capability_matrix(duts: Iterable[str], *, probe_smepmp: bool = False) -> dict[str, Any]:
+    entries = {dut: capability_for_dut(dut, probe_smepmp=probe_smepmp) for dut in duts}
     return {
         "schema_version": DEFAULT_CAPABILITY_SCHEMA_VERSION,
         "duts": entries,
@@ -130,6 +135,26 @@ def _default_available(dut: str, path: str) -> bool:
     if dut == "rocket-cascade":
         return Path(path).exists()
     return bool(path and Path(path).exists())
+
+
+def _smepmp_probe_result(dut: str, available: bool, statically_supported: bool, probe_smepmp: bool) -> dict[str, Any]:
+    if not available:
+        status = "infra_unadapted"
+    elif not probe_smepmp:
+        status = "supported" if statically_supported else "unsupported"
+    elif statically_supported:
+        status = "supported"
+    else:
+        status = "unsupported"
+    supported = status == "supported"
+    return {
+        "csr_access": supported,
+        "mml": supported,
+        "mmwp": supported,
+        "rlb": supported,
+        "warl_behavior": "assumed_supported" if supported and probe_smepmp else ("static" if supported else "not_available"),
+        "probe_status": status,
+    }
 
 
 def _chipyard_sim_exists(dut: str) -> bool:

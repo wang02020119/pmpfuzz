@@ -418,6 +418,8 @@ def _copy_failure_artifacts(failures: Path, case_dir: Path, result_dir: Path) ->
 def _requires_rlb_for_setup(scenario) -> bool:
     if not scenario.mseccfg.mml:
         return False
+    if scenario.mseccfg.rlb:
+        return False
     for entry in scenario.entries:
         if entry.index <= 2:
             continue

@@ -69,12 +69,15 @@ def triage_run(run_dir: Path) -> dict[str, Any]:
 def render_markdown_report(run_dir: Path) -> str:
     aggregate_path = run_dir / "aggregate.json"
     aggregate = read_json(aggregate_path) if aggregate_path.exists() else {"total": 0, "results": []}
+    result_records = _load_result_records(run_dir)
+    if not aggregate.get("results") and result_records:
+        aggregate = _aggregate_from_results(result_records)
     triage_path = run_dir / "triage" / "triage.json"
     triage = read_json(triage_path) if triage_path.exists() else triage_run(run_dir)
     coverage = coverage_from_run(run_dir)
     verdict = verdict_for_run(run_dir)
     capabilities = _load_capabilities(run_dir)
-    applicability = aggregate.get("oracle_applicability") or {}
+    applicability = aggregate.get("oracle_applicability") or _oracle_applicability_from_results(result_records)
 
     lines = [
         "# PMP Fuzz Report",
@@ -280,3 +283,36 @@ def _load_capabilities(run_dir: Path) -> dict[str, Any]:
     if path.exists():
         return read_json(path)
     return {"duts": {}}
+
+
+def _load_result_records(run_dir: Path) -> list[dict[str, Any]]:
+    return [read_json(path) for path in sorted((run_dir / "results").glob("*/result.json"))]
+
+
+def _oracle_applicability_from_results(results: list[dict[str, Any]]) -> dict[str, int]:
+    applicability: dict[str, int] = {}
+    for result in results:
+        key = str(result.get("oracle_applicability") or "valid")
+        applicability[key] = applicability.get(key, 0) + 1
+    return applicability
+
+
+def _aggregate_from_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    statuses: dict[str, int] = {}
+    failure_classes: dict[str, int] = {}
+    for result in results:
+        status = str(result.get("status") or "unknown")
+        statuses[status] = statuses.get(status, 0) + 1
+        failure_class = result.get("failure_class")
+        if failure_class:
+            text = str(failure_class)
+            failure_classes[text] = failure_classes.get(text, 0) + 1
+    return {
+        "total": len(results),
+        "results": results,
+        "passed": statuses.get("pass", 0),
+        "nonpass": sum(count for status, count in statuses.items() if status not in {"pass", "setup_unsupported"}),
+        "statuses": statuses,
+        "failure_classes": failure_classes,
+        "oracle_applicability": _oracle_applicability_from_results(results),
+    }

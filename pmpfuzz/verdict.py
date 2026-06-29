@@ -24,6 +24,9 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
                 related.append(stateful)
             else:
                 evidence.append(stateful)
+        smepmp = _smepmp_verdict_evidence(name, case, results)
+        if smepmp:
+            evidence.append(smepmp)
         if _is_confirmed_boom_ptw_hang(case, spike, rocket, boom):
             evidence.append(
                 {
@@ -58,6 +61,7 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
 
     side_effect = [item for item in evidence if item.get("kind") == "confirmed_side_effect_failure"]
     stale = [item for item in evidence if item.get("kind") == "confirmed_stale_permission_failure"]
+    smepmp = [item for item in evidence if item.get("kind") == "confirmed_smepmp_permission_failure"]
     experimental = [item for item in related if item.get("kind") == "experimental_no_fence_observation"]
     if side_effect:
         return {
@@ -75,6 +79,15 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
             "impact": "stale_permission_reuse",
             "expected": "post-mutation access must trap after required fence",
             "evidence": stale,
+            "related_evidence": related,
+        }
+    if smepmp:
+        return {
+            "verdict": "confirmed_smepmp_permission_failure",
+            "has_vulnerability": True,
+            "impact": "wrong_smepmp_permission",
+            "expected": "Smepmp permission behavior must match the reference oracle",
+            "evidence": smepmp,
             "related_evidence": related,
         }
     fetch_boundary = [item for item in evidence if item.get("kind") == "confirmed_pmp_fetch_boundary_failure"]
@@ -183,6 +196,50 @@ _STATEFUL_FAILURE_CLASSES = {
     "stale_tlb_permission",
     "stale_ptw_permission",
 }
+
+
+def _smepmp_verdict_evidence(
+    name: str,
+    case: dict[str, Any],
+    results: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not _is_smepmp_case(case):
+        return None
+    spike_passed = any(
+        result.get("dut") == "spike" and result.get("status") == "pass" and _is_valid_oracle_result(result)
+        for result in results
+    )
+    if not spike_passed:
+        return None
+    failures = [
+        result
+        for result in results
+        if result.get("dut") != "spike"
+        and _is_valid_oracle_result(result)
+        and result.get("status") not in {"pass", "setup_unsupported"}
+        and result.get("failure_class") not in {"setup_unsupported", "unsupported", "infra_unadapted"}
+    ]
+    if not failures:
+        return None
+    return {
+        "kind": "confirmed_smepmp_permission_failure",
+        "case": name,
+        "profile": case.get("profile"),
+        "smepmp_rule": case.get("smepmp_rule"),
+        "failure_classes": sorted({str(result.get("failure_class") or result.get("status")) for result in failures}),
+        "failing_duts": sorted({str(result.get("dut")) for result in failures}),
+        "expected": "Smepmp permission behavior must match the reference oracle",
+        "reason": "Spike passes while a capability-valid DUT reports a Smepmp permission mismatch",
+    }
+
+
+def _is_smepmp_case(case: dict[str, Any]) -> bool:
+    if case.get("smepmp_rule"):
+        return True
+    if str(case.get("profile") or "").startswith("smepmp"):
+        return True
+    mseccfg = case.get("mseccfg") or {}
+    return any(bool(mseccfg.get(bit)) for bit in ("mml", "mmwp", "rlb"))
 
 
 def _cases_by_name(run_dir: Path) -> dict[str, dict[str, Any]]:

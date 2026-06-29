@@ -39,6 +39,14 @@ def pmp_entry_to_dict(entry: PmpEntry) -> dict[str, Any]:
 
 def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> dict[str, Any]:
     outcome = evaluate_scenario(scenario)
+    pmp_decision = PmpModel(scenario.entries, scenario.mseccfg).check(
+        privilege=scenario.privilege,
+        access=scenario.probe.access,
+        physical_address=scenario.probe.physical_address,
+        size=scenario.probe.size,
+        mprv=scenario.mprv,
+        mpp=scenario.mpp,
+    )
     expected_allowed = outcome.allowed
     expected_cause = int(outcome.trap_cause) if outcome.trap_cause is not None else None
     expected_stage = outcome.stage
@@ -77,11 +85,14 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
         "ptw_fault_level": scenario.ptw_fault_level,
         "preload_mode": scenario.preload_mode,
         "pmp_match_mode": scenario.pmp_match_mode,
+        "pmp_match_result": "matched" if pmp_decision.match_index is not None else "unmatched",
         "pmp_locked": pmp_locked,
         "pmp_allow": pmp_allow,
+        "effective_privilege": pmp_decision.effective_privilege.value,
         "expected_allowed": expected_allowed,
         "pte_permissions": scenario.pte_permissions,
         "security_focus": scenario.security_focus,
+        "smepmp_rule": scenario.smepmp_rule,
         "required_capabilities": [],
         "oracle_applicability": "valid",
         "expected": {

@@ -24,6 +24,14 @@ class EngineeringCliTest(unittest.TestCase):
             "schedule",
         )
         self.assertEqual(
+            parser.parse_args(["feedback", "--from-runs", "seed", "--out", "next"]).command,
+            "feedback",
+        )
+        self.assertEqual(
+            parser.parse_args(["feedback", "--from-runs", "seed", "--out", "next", "--signal-file", "whitebox.json"]).signal_file,
+            [Path("whitebox.json")],
+        )
+        self.assertEqual(
             parser.parse_args(
                 ["schedule", "--from-runs", "seed", "--out", "next", "--coverage-mode", "pairwise"]
             ).coverage_mode,

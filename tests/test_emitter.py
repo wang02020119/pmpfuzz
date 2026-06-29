@@ -1,7 +1,7 @@
 import unittest
 
 from pmpfuzz.emitter import AssemblyEmitter
-from pmpfuzz.scenario import ScenarioGenerator
+from pmpfuzz.scenario import MEM_BASE, ScenarioGenerator
 from pmpfuzz.mmu import PageTableEntry, Sv39Mapping, TranslationMode
 from pmpfuzz.pmp import Access, AddressMode, PmpEntry, Privilege
 from pmpfuzz.scenario import AccessProbe, PmpScenario
@@ -181,6 +181,16 @@ class AssemblyEmitterTest(unittest.TestCase):
         self.assertIn("stack_top:", asm)
         self.assertIn("result:", asm)
         self.assertIn("0x60000010", asm)
+
+    def test_fetch_target_uses_single_ecall_for_na4_boundary_probe(self):
+        scenario = ScenarioGenerator(seed=20260629, include_smepmp=False, profile="pmp-boundary").generate_batch(19)[18]
+
+        self.assertEqual(scenario.probe.access, Access.FETCH)
+        asm = AssemblyEmitter().emit(scenario)
+        target_offset = scenario.probe.physical_address - MEM_BASE
+
+        self.assertIn(f"    .org 0x{target_offset:x}\ntarget_region:\n    ecall", asm)
+        self.assertNotIn("target_region:\n    li a0, 0x51\n    ecall", asm)
 
     def test_xiangshan_goodtrap_backend_uses_xstrap_words_not_ebreak(self):
         scenario = ScenarioGenerator(seed=20260628, include_smepmp=False, profile="legacy-data").generate_batch(3)[2]

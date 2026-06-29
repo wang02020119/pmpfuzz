@@ -218,6 +218,7 @@ def _cmd_probe_dut(args: argparse.Namespace) -> int:
             smepmp = _runtime_smepmp_probe(args, dut_name, capability)
             capability["smepmp"] = smepmp
             capability["supported_capabilities"]["smepmp"] = smepmp["probe_status"] == "supported"
+            capability["supported_capabilities"]["smepmp_rlb"] = bool(smepmp["rlb"])
     write_json(args.out / "dut_capabilities.json", matrix)
     for dut_name, capability in matrix["duts"].items():
         smepmp = capability.get("smepmp") or {}
@@ -304,7 +305,7 @@ def _runtime_smepmp_probe(args: argparse.Namespace, dut_name: str, capability: d
         "csr_access": True,
         "mml": True,
         "mmwp": True,
-        "rlb": True,
+        "rlb": bool(static.get("rlb")),
         "warl_behavior": "runtime_pass" if result.status == "pass" else f"runtime_nonpass:{result.failure_class or result.status}",
         "probe_status": "supported",
     }

@@ -8,6 +8,7 @@ from pmpfuzz.capabilities import (
     DEFAULT_CAPABILITY_SCHEMA_VERSION,
     capability_for_dut,
     capability_matrix,
+    oracle_applicability_for_case,
     required_capabilities_for_case,
 )
 from pmpfuzz.schema import result_to_dict, scenario_to_case_dict, write_json
@@ -186,6 +187,15 @@ class CapabilityModelTest(unittest.TestCase):
 
         self.assertIn("unsupported", report)
         self.assertIn("Vulnerability found: `false`", report)
+
+    def test_smepmp_rlb_dependent_case_is_capability_gated(self):
+        scenario = ScenarioGenerator(seed=30, include_smepmp=True, profile="smepmp-mml-shared-code").generate_batch(1)[0]
+        case = scenario_to_case_dict(scenario, seed=30, index=0)
+        spike = capability_for_dut("spike", available=True)
+
+        self.assertIn("smepmp_rlb", required_capabilities_for_case(case))
+        self.assertFalse(spike["supported_capabilities"]["smepmp_rlb"])
+        self.assertEqual(oracle_applicability_for_case(case, spike), "unsupported")
 
 
 if __name__ == "__main__":

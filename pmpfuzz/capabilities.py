@@ -48,8 +48,16 @@ def capability_for_dut(
         elif build_config is not None:
             notes.append(f"build metadata: {build_config}")
     supported_capabilities = dict(spec["supported_capabilities"])
-    smepmp_probe = _smepmp_probe_result(dut, resolved_available, supported_capabilities.get("smepmp", False), probe_smepmp)
+    smepmp_static = spec.get("smepmp_features") or {}
+    smepmp_probe = _smepmp_probe_result(
+        dut,
+        resolved_available,
+        supported_capabilities.get("smepmp", False),
+        probe_smepmp,
+        static_rlb=bool(smepmp_static.get("rlb", supported_capabilities.get("smepmp", False))),
+    )
     supported_capabilities["smepmp"] = smepmp_probe["probe_status"] == "supported"
+    supported_capabilities["smepmp_rlb"] = bool(smepmp_probe["rlb"])
     capability = {
         "schema_version": DEFAULT_CAPABILITY_SCHEMA_VERSION,
         "dut": dut,
@@ -85,6 +93,8 @@ def required_capabilities_for_case(case: dict[str, Any]) -> list[str]:
     mseccfg = case.get("mseccfg") or {}
     if any(bool(mseccfg.get(bit)) for bit in ("mml", "mmwp", "rlb")) or "smepmp" in str(case.get("profile")):
         required.add("smepmp")
+    if bool(mseccfg.get("rlb")):
+        required.add("smepmp_rlb")
     return sorted(required)
 
 
@@ -137,7 +147,14 @@ def _default_available(dut: str, path: str) -> bool:
     return bool(path and Path(path).exists())
 
 
-def _smepmp_probe_result(dut: str, available: bool, statically_supported: bool, probe_smepmp: bool) -> dict[str, Any]:
+def _smepmp_probe_result(
+    dut: str,
+    available: bool,
+    statically_supported: bool,
+    probe_smepmp: bool,
+    *,
+    static_rlb: bool,
+) -> dict[str, Any]:
     if not available:
         status = "infra_unadapted"
     elif not probe_smepmp:
@@ -151,7 +168,7 @@ def _smepmp_probe_result(dut: str, available: bool, statically_supported: bool, 
         "csr_access": supported,
         "mml": supported,
         "mmwp": supported,
-        "rlb": supported,
+        "rlb": supported and static_rlb,
         "warl_behavior": "assumed_supported" if supported and probe_smepmp else ("static" if supported else "not_available"),
         "probe_status": status,
     }
@@ -174,12 +191,14 @@ _COMMON_FULL = {
     "u_mode": True,
     "sv39": True,
     "smepmp": False,
+    "smepmp_rlb": False,
 }
 
 _DUT_SPECS: dict[str, dict[str, Any]] = {
     "spike": {
         "path": DEFAULT_CAPABILITY_SPIKE,
         "supported_capabilities": {**_COMMON_FULL, "smepmp": True},
+        "smepmp_features": {"rlb": False},
         "finish_protocol": "tohost",
         "diagnostic_depth": "structured_tohost",
         "notes": ["reference ISA simulator; Smepmp availability still depends on selected --isa"],

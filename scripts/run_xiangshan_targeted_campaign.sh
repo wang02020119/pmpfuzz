@@ -42,6 +42,7 @@ run_one() {
     --dut "$dut" \
     --profiles "$PROFILES" \
     --count "$count" \
+    --seed "$SEED" \
     --jobs 1 \
     --no-smepmp \
     --per-case-timeout "$timeout_s" \

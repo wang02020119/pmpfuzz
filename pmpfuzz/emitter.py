@@ -77,7 +77,7 @@ class AssemblyEmitter:
         lines.extend(self._emit_stateful_trap_handler(scenario, backend))
         lines.extend(self._emit_stateful_m_data())
         lines.extend(self._emit_stateful_su_probe(scenario))
-        lines.extend(self._emit_stateful_target_region())
+        lines.extend(self._emit_stateful_target_region(scenario))
         if scenario.translation == TranslationMode.SV39:
             lines.extend(self._emit_sv39_tables(scenario))
         return "\n".join(lines) + "\n"
@@ -390,6 +390,13 @@ class AssemblyEmitter:
         )
         if scenario.stateful_sequence.get("fence") == "with-sfence":
             lines.append("    sfence.vma")
+        elif scenario.stateful_sequence.get("fence") == "with-sfence-fence-i":
+            lines.extend(
+                [
+                    "    sfence.vma",
+                    "    fence.i",
+                ]
+            )
         elif scenario.stateful_sequence.get("fence") == "no-fence-experimental":
             lines.append("no_fence_experimental:")
         lines.extend(
@@ -688,7 +695,17 @@ class AssemblyEmitter:
             lines.extend(self._emit_success_ecall())
         return lines
 
-    def _emit_stateful_target_region(self) -> list[str]:
+    def _emit_stateful_target_region(self, scenario: PmpScenario) -> list[str]:
+        if scenario.probe.access == Access.FETCH:
+            return [
+                f"    .org 0x{TARGET_BASE - MEM_BASE:x}",
+                "target_region:",
+                "    ecall",
+                "sentinel_word:",
+                "    .word 0x11223344",
+                "    .word 0",
+                "    .dword 0x99aabbccddeeff00",
+            ]
         return [
             f"    .org 0x{TARGET_BASE - MEM_BASE:x}",
             "target_region:",

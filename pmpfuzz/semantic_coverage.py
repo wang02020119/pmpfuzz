@@ -33,6 +33,10 @@ EXPERIMENTAL_PROFILES = (
     "legacy-fetch-experimental",
     "smepmp-table",
     "mixed-smepmp-mmu",
+    "xiangshan-fetch-pmp-boundary",
+    "xiangshan-itlb-stale-pmp",
+    "xiangshan-ptw-pmp-depth",
+    "xiangshan-side-effect",
 )
 
 PROFILE_TARGET_COUNTS = {
@@ -52,6 +56,10 @@ PROFILE_TARGET_COUNTS = {
     "smepmp-mml-shared-data": 12,
     "smepmp-locked-entry": 9,
     "smepmp-rlb-setup": 4,
+    "xiangshan-fetch-pmp-boundary": 96,
+    "xiangshan-itlb-stale-pmp": 8,
+    "xiangshan-ptw-pmp-depth": 96,
+    "xiangshan-side-effect": 8,
 }
 
 COVERAGE_MODES = ("semantic", "pairwise", "security-triples")

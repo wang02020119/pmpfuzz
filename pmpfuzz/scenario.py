@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from random import Random
 
 from .mmu import PageTableEntry, Sv39Mapping, TranslationMode
@@ -105,6 +105,13 @@ class ScenarioGenerator:
             return self._generate_tlb_stale_pmp(index)
         if self.profile == "ptw-stale-pmp":
             return self._generate_ptw_stale_pmp(index)
+        if self.profile in {
+            "xiangshan-fetch-pmp-boundary",
+            "xiangshan-itlb-stale-pmp",
+            "xiangshan-ptw-pmp-depth",
+            "xiangshan-side-effect",
+        }:
+            return self._generate_xiangshan_targeted(index)
         if self.profile == "tlb-fence":
             return self._generate_sv39(index, deny_page_walk=False, sfence_vma=index % 2 == 0)
         if self.profile == "mixed-smepmp-mmu":
@@ -789,6 +796,91 @@ class ScenarioGenerator:
             tags=("stale-ptw-pmp", fence),
         )
 
+    def _generate_xiangshan_targeted(self, index: int) -> PmpScenario:
+        if self.profile == "xiangshan-fetch-pmp-boundary":
+            boundary_index = 16 + (index % 8) + ((index // 8) % 3) * 24 + ((index // 24) % 2) * 72
+            scenario = self._generate_pmp_boundary(boundary_index)
+            return replace(
+                scenario,
+                name=f"scenario_{index:04d}",
+                profile=self.profile,
+                coverage_tags=(*scenario.coverage_tags, "xiangshan-target", "fetch-boundary"),
+                security_focus="xiangshan-fetch-pmp-boundary",
+            )
+
+        if self.profile == "xiangshan-itlb-stale-pmp":
+            fence = "with-sfence-fence-i" if index % 2 == 0 else "no-fence-experimental"
+            privilege = [Privilege.U, Privilege.S][(index // 2) % 2]
+            pte = PageTableEntry(
+                read=False,
+                write=False,
+                execute=True,
+                user=privilege == Privilege.U,
+                accessed=True,
+                dirty=False,
+            )
+            return self._generate_stateful_sv39(
+                index=index,
+                profile=self.profile,
+                privilege=privilege,
+                access=Access.FETCH,
+                pte=pte,
+                mutation="pmpcfg-deny-target",
+                fence=fence,
+                expected_cause=1,
+                stale_failure_class="STALE_PMP_PERMISSION",
+                tags=("xiangshan-target", "itlb-stale-pmp", "fetch", fence),
+            )
+
+        if self.profile == "xiangshan-ptw-pmp-depth":
+            access = [Access.FETCH, Access.LOAD, Access.STORE][index % 3]
+            privilege = [Privilege.U, Privilege.S][(index // 3) % 2]
+            deny_walk_index = (index // (3 * 2)) % 3
+            preload_modes = ("cold", "root-target", "denied-l1", "all")
+            preload_mode = preload_modes[(index // (3 * 2 * 3)) % len(preload_modes)]
+            mxr = bool((index // (3 * 2 * 3 * len(preload_modes))) % 2)
+            pte = PageTableEntry(
+                read=access in {Access.LOAD, Access.STORE},
+                write=access == Access.STORE,
+                execute=access == Access.FETCH or mxr,
+                user=privilege == Privilege.U,
+                accessed=True,
+                dirty=access == Access.STORE,
+            )
+            scenario = self._generate_sv39_custom(
+                index=index,
+                profile=self.profile,
+                access=access,
+                privilege=privilege,
+                pte=pte,
+                deny_page_walk=True,
+                deny_walk_index=deny_walk_index,
+                deny_locked=bool((index // (3 * 2 * 3 * len(preload_modes) * 2)) % 2),
+                sum_enabled=privilege == Privilege.S,
+                mxr=mxr,
+                preload_mode=preload_mode,
+                security_focus="xiangshan-ptw-pmp-depth",
+            )
+            return replace(
+                scenario,
+                coverage_tags=(*scenario.coverage_tags, "xiangshan-target", "ptw-depth"),
+                security_focus="xiangshan-ptw-pmp-depth",
+            )
+
+        if self.profile == "xiangshan-side-effect":
+            scenario = self._generate_pmp_side_effect(index)
+            sequence = dict(scenario.stateful_sequence or {})
+            sequence["kind"] = self.profile
+            return replace(
+                scenario,
+                profile=self.profile,
+                coverage_tags=(*scenario.coverage_tags, "xiangshan-target", "side-effect"),
+                security_focus="xiangshan-side-effect",
+                stateful_sequence=sequence,
+            )
+
+        raise ValueError(f"unsupported XiangShan targeted profile: {self.profile}")
+
     def _generate_stateful_sv39(
         self,
         *,
@@ -801,6 +893,7 @@ class ScenarioGenerator:
         expected_cause: int,
         stale_failure_class: str,
         tags: tuple[str, ...],
+        access: Access = Access.LOAD,
     ) -> PmpScenario:
         mapping = self._target_mapping(pte)
         entries = self._mml_harness_entries()
@@ -831,9 +924,9 @@ class ScenarioGenerator:
                 index=5,
                 address_mode=AddressMode.NAPOT,
                 pmpaddr=PmpEntry.encode_napot(base=TARGET_BASE, size=TARGET_SIZE),
-                read=True,
-                write=False,
-                execute=False,
+                read=access in {Access.LOAD, Access.STORE},
+                write=access == Access.STORE,
+                execute=access == Access.FETCH,
                 locked=False,
             )
         )
@@ -859,7 +952,7 @@ class ScenarioGenerator:
             entries=entries,
             privilege=privilege,
             probe=AccessProbe(
-                access=Access.LOAD,
+                access=access,
                 physical_address=TARGET_BASE,
                 virtual_address=TARGET_VA,
                 size=4,
@@ -874,7 +967,7 @@ class ScenarioGenerator:
             sum_enabled=privilege == Privilege.S,
             mxr=False,
             sfence_vma=True,
-            coverage_tags=("sv39", "stateful", "load", privilege.value, *tags),
+            coverage_tags=("sv39", "stateful", access.value, privilege.value, *tags),
             ptw_fault_level="L1" if mutation == "pmpcfg-deny-ptw" else None,
             preload_mode="warmup",
             pmp_match_mode=mutation,
@@ -1002,7 +1095,7 @@ class ScenarioGenerator:
         writes: list[dict[str, object]] = []
         if deny_target:
             after = [
-                PmpEntry(entry.index, entry.address_mode, entry.pmpaddr, False, False, entry.execute, entry.locked)
+                PmpEntry(entry.index, entry.address_mode, entry.pmpaddr, False, False, False, entry.locked)
                 if entry.index == 5
                 else entry
                 for entry in after

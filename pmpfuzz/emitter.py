@@ -712,19 +712,25 @@ class AssemblyEmitter:
         return lines
 
     def _emit_target_region(self, scenario: PmpScenario) -> list[str]:
+        if scenario.probe.access == Access.FETCH:
+            offset = scenario.probe.physical_address - MEM_BASE
+            if offset < 0:
+                raise ValueError("structured fetch probes must target addresses above MEM_BASE")
+            return [
+                f"    .org 0x{offset:x}",
+                "target_region:",
+                "    ecall",
+            ]
         lines = [
             f"    .org 0x{TARGET_BASE - MEM_BASE:x}",
             "target_region:",
         ]
-        if scenario.probe.access == Access.FETCH:
-            lines.extend(self._emit_success_ecall())
-        else:
-            lines.extend(
-                [
-                    "    .dword 0x1122334455667788",
-                    "    .dword 0x99aabbccddeeff00",
-                ]
-            )
+        lines.extend(
+            [
+                "    .dword 0x1122334455667788",
+                "    .dword 0x99aabbccddeeff00",
+            ]
+        )
         return lines
 
     def _emit_sv39_tables(self, scenario: PmpScenario) -> list[str]:

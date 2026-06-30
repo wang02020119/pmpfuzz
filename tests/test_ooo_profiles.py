@@ -109,6 +109,8 @@ class OoOMicroarchitectureProfileTest(unittest.TestCase):
         self.assertGreaterEqual({case["preload_mode"] for case in ptw_cases}, {"cold", "root-target", "denied-l1", "all"})
         self.assertTrue(any(not case["pte_permissions"]["valid"] for case in priority_cases))
         self.assertIn("page_cross", {case["probe_offset"] for case in cross_cases})
+        self.assertEqual({case["expected"]["stage"] for case in cross_cases[:2]}, {"address_misaligned"})
+        self.assertEqual({case["expected"]["trap_cause"] for case in cross_cases[:2]}, {4, 6})
         self.assertEqual({case["pte_permissions"]["accessed"] for case in ad_cases}, {False, True})
         self.assertIn(False, {case["pte_permissions"]["dirty"] for case in ad_cases})
 

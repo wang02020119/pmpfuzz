@@ -23,6 +23,7 @@ SECURITY_COVERAGE_KEYWORDS = (
 
 ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]+")
 COVERAGE_RE = re.compile(r"COVERAGE:\s*([^,\s]+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)")
+PERF_RE = re.compile(r"\[PERF[^\]]*\].*?:\s*([^,\n]+)\s*,\s*(-?\d+)")
 
 
 def extract_security_whitebox_signals(run_dir: Path, *, artifact_dir: Path | None = None) -> dict[str, Any]:
@@ -72,6 +73,7 @@ def _signals_from_artifact(case: dict[str, Any], result: dict[str, Any], path: P
     if is_trace:
         signals.extend(_commit_trace_signals(case, result, path, text))
     signals.extend(_coverage_point_signals(case, result, path, text))
+    signals.extend(_perf_counter_signals(case, result, path, text))
     return signals
 
 
@@ -204,6 +206,35 @@ def _coverage_point_signals(case: dict[str, Any], result: dict[str, Any], path: 
                     "coverage_accumulated": accumulated,
                 },
                 evidence={"artifact": str(path), "coverage_point": point},
+            )
+        )
+    return signals
+
+
+def _perf_counter_signals(case: dict[str, Any], result: dict[str, Any], path: Path, text: str) -> list[dict[str, Any]]:
+    signals = []
+    for line_number, line in enumerate(text.splitlines(), 1):
+        match = PERF_RE.search(line)
+        if not match:
+            continue
+        counter = match.group(1).strip()
+        value = int(match.group(2))
+        if value <= 0 or not _is_security_coverage_point(f"{counter} {line}"):
+            continue
+        signals.append(
+            _signal(
+                case=case,
+                result=result,
+                kind="security_perf_counter",
+                weight=35 + min(value, 50),
+                features={
+                    **_base_features(case, result),
+                    "security_chain": "rtl-security-perf",
+                    "artifact": "perf-log",
+                    "perf_counter": counter,
+                    "perf_value": value,
+                },
+                evidence={"artifact": str(path), "line": line_number, "text": line[:180]},
             )
         )
     return signals

@@ -371,14 +371,20 @@ def _strategy_for_whitebox_signal(signal: dict[str, Any]) -> str:
     features = signal.get("features") or {}
     kind = str(signal.get("kind") or "")
     security_chain = str(features.get("security_chain") or "")
+    perf_counter = str(features.get("perf_counter") or "").lower()
     profile = str(features.get("profile") or "")
     if "smepmp" in security_chain or profile.startswith("smepmp") or features.get("smepmp_rule"):
         return "smepmp-permission-neighborhood"
-    if "ptw" in security_chain or str(features.get("pmp_stage")) == "ptw" or kind.startswith("ptw_"):
+    if (
+        "ptw" in security_chain
+        or str(features.get("pmp_stage")) == "ptw"
+        or kind.startswith("ptw_")
+        or any(item in perf_counter for item in ("ptw", "tlb", "itlb", "dtlb"))
+    ):
         return "ptw-pmp-neighborhood"
-    if "side-effect" in security_chain or kind == "forbidden_side_effect_footprint":
+    if "side-effect" in security_chain or kind == "forbidden_side_effect_footprint" or "store" in perf_counter:
         return "stateful-permission-neighborhood"
-    if "trap" in security_chain or kind == "trap_commit_trace":
+    if "trap" in security_chain or kind == "trap_commit_trace" or any(item in perf_counter for item in ("exception", "trap")):
         return "wrong-mcause-neighborhood"
     return "semantic-neighborhood"
 

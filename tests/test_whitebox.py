@@ -92,6 +92,22 @@ class SecurityWhiteboxSignalsTest(unittest.TestCase):
         self.assertEqual(signal["features"]["perf_counter"], "PTW_refill")
         self.assertEqual(signal["features"]["perf_value"], 3)
 
+    def test_specific_tlb_perf_counter_ranks_above_generic_access_counter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression")
+            log = run_dir / "results" / case["name"] / "scenario.log"
+            log.write_text(
+                "[PERF ][time=10] SimTop.cpu.l2tlb: access,                    200\n"
+                "[PERF ][time=10] SimTop.cpu.fetch: stallCycles_fetch_icachePrefetch_itlbMiss,                    4\n",
+                encoding="ascii",
+            )
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        self.assertGreaterEqual(len(payload["signals"]), 2)
+        self.assertEqual(payload["signals"][0]["features"]["perf_counter"], "stallCycles_fetch_icachePrefetch_itlbMiss")
+
     def test_write_whitebox_signals_uses_default_run_subdir(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)

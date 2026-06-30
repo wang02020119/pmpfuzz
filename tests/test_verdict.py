@@ -77,6 +77,77 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(verdict["impact"], "denial_of_service / incorrect_execute_permission_handling")
         self.assertIn(case["name"], verdict["evidence"][0]["case"])
 
+    def test_boom_ooo_fetch_replay_failure_is_confirmed_with_spike_rocket_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(seed=20260630, include_smepmp=False, profile="ooo-fetch-replay-pmp").generate_batch(1)[
+                0
+            ]
+            case = scenario_to_case_dict(scenario, seed=20260630, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+
+            for dut, status, failure_class, observed_tohost in [
+                ("spike", "pass", None, None),
+                ("rocket-clean", "pass", None, None),
+                ("boom-clean", "fail", "sim_assert", 32768),
+            ]:
+                write_json(
+                    run_dir / "results" / f"{case['name']}_{dut}" / "result.json",
+                    result_to_dict(
+                        case=case,
+                        dut=dut,
+                        status=status,
+                        elapsed_seconds=0.1,
+                        returncode=0 if status == "pass" else 2,
+                        log=run_dir / "results" / f"{case['name']}_{dut}" / "case.log",
+                        reason=None if status == "pass" else "chipyard simulator reported failure",
+                        failure_class=failure_class,
+                        observed_tohost=observed_tohost,
+                    ),
+                )
+
+            verdict = verdict_for_run(run_dir)
+
+        self.assertTrue(verdict["has_vulnerability"])
+        self.assertEqual(verdict["verdict"], "confirmed_ooo_fetch_replay_failure")
+        self.assertEqual(verdict["impact"], "denial_of_service / incorrect_fetch_replay_permission_handling")
+        self.assertIn(case["name"], verdict["evidence"][0]["case"])
+
+    def test_boom_ooo_ptw_replay_hang_is_confirmed_with_spike_rocket_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(seed=20260630, include_smepmp=False, profile="ooo-ptw-replay-pmp-deny").generate_batch(1)[
+                0
+            ]
+            case = scenario_to_case_dict(scenario, seed=20260630, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+
+            for dut, status, failure_class in [
+                ("spike", "pass", None),
+                ("rocket-clean", "pass", None),
+                ("boom-clean", "infra_failure", "pipeline_hung"),
+            ]:
+                write_json(
+                    run_dir / "results" / f"{case['name']}_{dut}" / "result.json",
+                    result_to_dict(
+                        case=case,
+                        dut=dut,
+                        status=status,
+                        elapsed_seconds=0.1,
+                        returncode=0 if status == "pass" else 1,
+                        log=run_dir / "results" / f"{case['name']}_{dut}" / "case.log",
+                        reason=None if status == "pass" else "Pipeline has hung",
+                        failure_class=failure_class,
+                    ),
+                )
+
+            verdict = verdict_for_run(run_dir)
+
+        self.assertTrue(verdict["has_vulnerability"])
+        self.assertEqual(verdict["verdict"], "confirmed_ooo_ptw_replay_hang")
+        self.assertEqual(verdict["impact"], "denial_of_service / missing_precise_trap")
+        self.assertIn(case["name"], verdict["evidence"][0]["case"])
+
     def test_stateful_side_effect_failure_is_confirmed_vulnerability(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)

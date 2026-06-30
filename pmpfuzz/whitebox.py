@@ -226,7 +226,7 @@ def _perf_counter_signals(case: dict[str, Any], result: dict[str, Any], path: Pa
                 case=case,
                 result=result,
                 kind="security_perf_counter",
-                weight=35 + min(value, 50),
+                weight=_perf_counter_weight(counter, line, value),
                 features={
                     **_base_features(case, result),
                     "security_chain": "rtl-security-perf",
@@ -238,6 +238,22 @@ def _perf_counter_signals(case: dict[str, Any], result: dict[str, Any], path: Pa
             )
         )
     return signals
+
+
+def _perf_counter_weight(counter: str, line: str, value: int) -> int:
+    counter_text = counter.strip().lower()
+    line_text = line.lower()
+    if counter_text == "access":
+        return 20 + min(value, 10)
+    if any(keyword in counter_text for keyword in ("ptw", "tlb", "itlb", "dtlb")):
+        return 95 + min(value, 25)
+    if any(keyword in counter_text for keyword in ("exception", "trap", "pmp")):
+        return 85 + min(value, 25)
+    if "store" in counter_text:
+        return 75 + min(value, 25)
+    if any(keyword in line_text for keyword in ("exception", "trap", "pmp")):
+        return 65 + min(value, 20)
+    return 35 + min(value, 30)
 
 
 def _signal(
@@ -373,6 +389,7 @@ def _dedupe_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 str((signal.get("features") or {}).get("security_chain")),
                 str((signal.get("features") or {}).get("address")),
                 str((signal.get("features") or {}).get("coverage_point")),
+                str((signal.get("features") or {}).get("perf_counter")),
                 str((signal.get("features") or {}).get("ptw_level")),
             ]
         )

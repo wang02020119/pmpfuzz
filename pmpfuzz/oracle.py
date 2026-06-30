@@ -9,8 +9,11 @@ from .scenario import PmpScenario
 
 
 class TrapCause(IntEnum):
+    INSTRUCTION_ADDRESS_MISALIGNED = 0
     INSTRUCTION_ACCESS_FAULT = 1
+    LOAD_ADDRESS_MISALIGNED = 4
     LOAD_ACCESS_FAULT = 5
+    STORE_ADDRESS_MISALIGNED = 6
     STORE_ACCESS_FAULT = 7
     ECALL_FROM_U = 8
     ECALL_FROM_S = 9
@@ -31,6 +34,15 @@ class ExpectedOutcome:
 
 def evaluate_scenario(scenario: PmpScenario) -> ExpectedOutcome:
     pmp_model = PmpModel(scenario.entries, scenario.mseccfg)
+    probe_address = scenario.probe.effective_address()
+    if _is_misaligned(probe_address, scenario.probe.size):
+        return ExpectedOutcome(
+            allowed=False,
+            trap_cause=_misaligned_cause(scenario.probe.access),
+            stage="address_misaligned",
+            reason="access address is not naturally aligned",
+            physical_address=scenario.probe.physical_address,
+        )
 
     if scenario.translation == TranslationMode.SV39:
         if scenario.sv39 is None:
@@ -103,6 +115,22 @@ def _access_fault_cause(access: Access) -> TrapCause:
     if access == Access.FETCH:
         return TrapCause.INSTRUCTION_ACCESS_FAULT
     raise ValueError(f"unsupported access type: {access}")
+
+
+def _misaligned_cause(access: Access) -> TrapCause:
+    if access == Access.LOAD:
+        return TrapCause.LOAD_ADDRESS_MISALIGNED
+    if access == Access.STORE:
+        return TrapCause.STORE_ADDRESS_MISALIGNED
+    if access == Access.FETCH:
+        return TrapCause.INSTRUCTION_ADDRESS_MISALIGNED
+    raise ValueError(f"unsupported access type: {access}")
+
+
+def _is_misaligned(address: int, size: int) -> bool:
+    if size <= 1:
+        return False
+    return address % size != 0
 
 
 def _page_fault_cause(access: Access) -> TrapCause:

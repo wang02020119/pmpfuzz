@@ -427,6 +427,12 @@ def _score_ptw_pmp_candidate(features: dict[str, Any], candidate: dict[str, Any]
         score += 110
     elif profile == "xiangshan-fetch-pmp-boundary":
         score += 45
+    elif profile == "ooo-ptw-replay-pmp-deny":
+        score += 135
+    elif profile in {"ooo-itlb-stale-after-pmp-update", "ooo-dtlb-stale-after-pmp-update"}:
+        score += 105
+    elif profile in {"ooo-fetch-replay-pmp", "ooo-fence-race-matrix"}:
+        score += 70
     else:
         return 0
     if candidate.get("translation") == features.get("translation"):

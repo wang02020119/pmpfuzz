@@ -131,6 +131,53 @@ class BehaviorFeedbackTest(unittest.TestCase):
         self.assertEqual(schedule["entries"][0]["mutation_strategy"], "smepmp-permission-neighborhood")
         self.assertTrue(any(op.startswith("set-mseccfg-") for op in schedule["entries"][0]["mutation_ops"]))
 
+    def test_whitebox_itlb_signal_generates_xiangshan_ptw_neighborhood(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / "run"
+            scenario = ScenarioGenerator(seed=19, include_smepmp=False, profile="xiangshan-itlb-stale-pmp").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=19, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+            _write_result(run_dir, case, dut="xiangshan-clean", status="pass", failure_class=None)
+            signal_file = root / "whitebox_signals.json"
+            write_json(
+                signal_file,
+                {
+                    "schema_version": 1,
+                    "signals": [
+                        {
+                            "provider": "whitebox",
+                            "kind": "security_perf_counter",
+                            "case": case["name"],
+                            "dut": "xiangshan-clean",
+                            "weight": 120,
+                            "features": {
+                                "profile": case["profile"],
+                                "privilege": case["privilege"],
+                                "access": case["access"],
+                                "translation": case["translation"],
+                                "perf_counter": "stallCycles_fetch_icachePrefetch_itlbMiss",
+                                "security_chain": "rtl-security-perf",
+                                "failure_class": "pass",
+                            },
+                            "evidence": {"source": "unit"},
+                        }
+                    ],
+                },
+            )
+
+            schedule = build_feedback_schedule(
+                [run_dir],
+                target="xiangshan-targeted",
+                max_cases=4,
+                seed=20260630,
+                signal_files=[signal_file],
+            )
+
+        self.assertTrue(schedule["entries"])
+        self.assertEqual(schedule["entries"][0]["mutation_strategy"], "ptw-pmp-neighborhood")
+        self.assertIn(schedule["entries"][0]["profile"], {"xiangshan-itlb-stale-pmp", "xiangshan-ptw-pmp-depth"})
+
 
 def _write_boom_ptw_diff_run(run_dir: Path) -> dict:
     scenario = ScenarioGenerator(seed=20260629, include_smepmp=False, profile="boom-ptw-pmp-regression").generate_batch(1)[0]

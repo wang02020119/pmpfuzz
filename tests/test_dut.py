@@ -162,7 +162,7 @@ class DutAdapterTest(unittest.TestCase):
         self.assertIn("-i", command)
         self.assertIn("/tmp/case.elf", command)
 
-    def test_xiangshan_whitebox_artifact_command_enables_footprints_and_commit_trace(self):
+    def test_xiangshan_whitebox_artifact_command_enables_stable_commit_trace(self):
         dut = XiangShanDut(
             binary=Path("/xs/build/verilator-compile/emu"),
             simlen=100,
@@ -172,7 +172,7 @@ class DutAdapterTest(unittest.TestCase):
         command = dut.command_for(Path("/tmp/case.elf"), artifact_prefix=Path("/tmp/result/case"))
 
         self.assertIn("--dump-commit-trace", command)
-        self.assertIn("--dump-footprints=/tmp/result/case.footprints", command)
+        self.assertNotIn("--dump-footprints=/tmp/result/case.footprints", command)
 
     def test_default_xiangshan_emu_points_to_vanilla_tree(self):
         self.assertIn("/home/dubhe/wjs/xiangshan_vanilla/", DEFAULT_XIANGSHAN_EMU.as_posix())

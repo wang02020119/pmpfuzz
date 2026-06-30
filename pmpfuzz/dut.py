@@ -355,13 +355,7 @@ class XiangShanDut:
             _posix_arg(image),
         ]
         if self.whitebox_artifacts:
-            prefix = artifact_prefix or image.with_suffix("")
-            command.extend(
-                [
-                    "--dump-commit-trace",
-                    f"--dump-footprints={_posix_arg(prefix.with_suffix('.footprints'))}",
-                ]
-            )
+            command.append("--dump-commit-trace")
         return command
 
     def run(self, elf: Path, *, timeout_seconds: int, log_path: Path) -> DutRunResult:

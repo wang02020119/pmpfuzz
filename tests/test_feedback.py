@@ -178,6 +178,27 @@ class BehaviorFeedbackTest(unittest.TestCase):
         self.assertEqual(schedule["entries"][0]["mutation_strategy"], "ptw-pmp-neighborhood")
         self.assertIn(schedule["entries"][0]["profile"], {"xiangshan-itlb-stale-pmp", "xiangshan-ptw-pmp-depth"})
 
+    def test_boom_ooo_ptw_hang_generates_ooo_ptw_feedback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(seed=23, include_smepmp=False, profile="ooo-ptw-replay-pmp-deny").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=23, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+            _write_result(run_dir, case, dut="spike", status="pass", failure_class=None)
+            _write_result(run_dir, case, dut="rocket-clean", status="pass", failure_class=None)
+            _write_result(run_dir, case, dut="boom-clean", status="infra_failure", failure_class="pipeline_hung")
+
+            schedule = build_feedback_schedule(
+                [run_dir],
+                target="ooo-microarchitecture",
+                max_cases=4,
+                seed=20260630,
+            )
+
+        self.assertTrue(schedule["entries"])
+        self.assertEqual(schedule["entries"][0]["mutation_strategy"], "ptw-pmp-neighborhood")
+        self.assertIn(schedule["entries"][0]["profile"], {"ooo-ptw-replay-pmp-deny", "ooo-itlb-stale-after-pmp-update", "ooo-dtlb-stale-after-pmp-update"})
+
 
 def _write_boom_ptw_diff_run(run_dir: Path) -> dict:
     scenario = ScenarioGenerator(seed=20260629, include_smepmp=False, profile="boom-ptw-pmp-regression").generate_batch(1)[0]

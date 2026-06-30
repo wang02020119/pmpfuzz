@@ -57,11 +57,17 @@ class EngineeringCliTest(unittest.TestCase):
             parser.parse_args(["run", "--dut", "xiangshan-clean", "--out", "out"]).dut,
             "xiangshan-clean",
         )
+        self.assertTrue(parser.parse_args(["run", "--out", "out", "--whitebox-artifacts"]).whitebox_artifacts)
         self.assertEqual(
             parser.parse_args(
                 ["repro", "--case", "cases/scenario_0000", "--out", "out", "--simlen", "360000"]
             ).simlen,
             360000,
+        )
+        self.assertTrue(
+            parser.parse_args(
+                ["repro", "--case", "cases/scenario_0000", "--out", "out", "--whitebox-artifacts"]
+            ).whitebox_artifacts
         )
 
     def test_gen_command_writes_case_json_and_assembly(self):

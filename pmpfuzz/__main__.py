@@ -361,31 +361,45 @@ def _cmd_repro(args: argparse.Namespace) -> int:
     out_results = out / "results"
     out_cases.mkdir(parents=True, exist_ok=True)
     out_results.mkdir(parents=True, exist_ok=True)
-    source_asm = case_dir / f"{case['name']}.S"
-    asm = out_cases / source_asm.name
-    elf = out_cases / f"{case['name']}.elf"
-    shutil.copy2(source_asm, asm)
     write_json(out_cases / "case.json", case)
 
     root = Path(__file__).resolve().parents[1]
-    compile_run = subprocess.run(
-        ["sh", str(root / "scripts" / "compile_one.sh"), str(asm), str(elf)],
-        cwd=root,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=False,
-    )
-    if compile_run.returncode != 0:
-        (out / "compile.log").write_text(compile_run.stdout, encoding="ascii", errors="replace")
-        print(f"compile-failed out={out / 'compile.log'}")
-        return 1
+    compile_script = root / "scripts" / "compile_one.sh"
 
     any_failed = False
     for dut_name in [item.strip() for item in args.dut.split(",") if item.strip()]:
         result_dir = out_results / f"{case['name']}_{dut_name}"
         result_dir.mkdir(parents=True, exist_ok=True)
+        asm = out_cases / f"{case['name']}.{dut_name}.S"
+        elf = out_cases / f"{case['name']}.{dut_name}.elf"
         log = result_dir / f"{case['name']}.{dut_name}.log"
+        asm.write_text(_repro_assembly_for_dut(case, dut_name), encoding="ascii")
+        compile_run = subprocess.run(
+            ["sh", str(compile_script), str(asm), str(elf)],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+        if compile_run.returncode != 0:
+            log.write_text(compile_run.stdout, encoding="ascii", errors="replace")
+            write_json(
+                result_dir / "result.json",
+                result_to_dict(
+                    case=case,
+                    dut=dut_name,
+                    status="compile_fail",
+                    elapsed_seconds=0.0,
+                    returncode=compile_run.returncode,
+                    log=log,
+                    reason="compile failed",
+                    failure_class="compile_fail",
+                ),
+            )
+            any_failed = True
+            print(f"{dut_name}: compile_fail failure_class=compile_fail")
+            continue
         chipyard_dir = args.chipyard_dir or (
             DEFAULT_CLEAN_CHIPYARD_DIR if dut_name in CLEAN_CHIPYARD_DUTS else DEFAULT_CHIPYARD_DIR
         )
@@ -430,6 +444,37 @@ def _cmd_repro(args: argparse.Namespace) -> int:
 
     write_aggregate(out)
     return 1 if any_failed else 0
+
+
+def _repro_assembly_for_dut(case: dict, dut_name: str) -> str:
+    scenario = _scenario_from_case(case)
+    return AssemblyEmitter().emit(scenario, backend=_repro_backend_for_dut(dut_name))
+
+
+def _scenario_from_case(case: dict):
+    seed = int(case.get("seed", 1))
+    index = int(case.get("index", 0))
+    profile = str(case["profile"])
+    generator = ScenarioGenerator(seed=seed, include_smepmp=_case_uses_smepmp(case), profile=profile)
+    scenario = generator.generate_batch(index + 1)[index]
+    return replace(scenario, name=str(case["name"]))
+
+
+def _case_uses_smepmp(case: dict) -> bool:
+    if str(case.get("profile") or "").startswith("smepmp"):
+        return True
+    if case.get("smepmp_rule"):
+        return True
+    mseccfg = case.get("mseccfg") or {}
+    return any(bool(mseccfg.get(bit)) for bit in ("mml", "mmwp", "rlb"))
+
+
+def _repro_backend_for_dut(dut_name: str) -> str:
+    if dut_name == "rocket-cascade":
+        return "cascade-mmio"
+    if dut_name == "xiangshan-clean":
+        return "xiangshan-goodtrap"
+    return "tohost"
 
 
 def _selected_scenarios(args: argparse.Namespace):

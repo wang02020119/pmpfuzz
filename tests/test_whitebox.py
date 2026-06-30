@@ -92,6 +92,32 @@ class SecurityWhiteboxSignalsTest(unittest.TestCase):
         self.assertEqual(signal["features"]["perf_counter"], "PTW_refill")
         self.assertEqual(signal["features"]["perf_value"], 3)
 
+    def test_extracts_structured_source_probe_signal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression")
+            log = run_dir / "results" / case["name"] / "boom.log"
+            log.write_text(
+                "PMFUZZ_PROBE dut=boom-clean probe=ptw_pmp_check chain=sv39-ptw-pmp "
+                "stage=ptw level=L1 paddr=0x80014000 allow=0 match=3 cause=5\n",
+                encoding="ascii",
+            )
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        signal = payload["signals"][0]
+        self.assertEqual(signal["kind"], "source_probe")
+        self.assertEqual(signal["dut"], "boom-clean")
+        self.assertEqual(signal["features"]["security_chain"], "sv39-ptw-pmp")
+        self.assertEqual(signal["features"]["probe"], "ptw_pmp_check")
+        self.assertEqual(signal["features"]["pmp_stage"], "ptw")
+        self.assertEqual(signal["features"]["ptw_level"], "L1")
+        self.assertEqual(signal["features"]["address"], "0x80014000")
+        self.assertFalse(signal["features"]["pmp_allowed"])
+        self.assertEqual(signal["features"]["pmp_match_index"], 3)
+        self.assertEqual(signal["features"]["observed_mcause"], 5)
+        self.assertGreaterEqual(signal["weight"], 100)
+
     def test_specific_tlb_perf_counter_ranks_above_generic_access_counter(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)

@@ -19,6 +19,7 @@ from .scenario import ScenarioGenerator
 from .schema import read_json, result_to_dict, scenario_to_case_dict, write_aggregate, write_json
 from .semantic_coverage import CORE_STATEFUL_TARGET, scenarios_from_schedule, write_schedule
 from .triage import triage_run, write_report
+from .whitebox import write_whitebox_signals
 
 
 CLEAN_CHIPYARD_DUTS = {"rocket-clean", "boom-clean", "cva6", "cva6-clean"}
@@ -95,6 +96,11 @@ def build_parser() -> argparse.ArgumentParser:
     feedback.add_argument("--include-experimental", action="store_true")
     feedback.add_argument("--signal-file", type=Path, action="append", default=[])
 
+    whitebox = subparsers.add_parser("whitebox", help="extract security-chain whitebox signals from a run")
+    whitebox.add_argument("--run-dir", type=Path, required=True)
+    whitebox.add_argument("--out", type=Path, default=None)
+    whitebox.add_argument("--artifact-dir", type=Path, default=None)
+
     report = subparsers.add_parser("report", help="write a Markdown report for a campaign")
     report.add_argument("--run-dir", type=Path, required=True)
 
@@ -161,6 +167,10 @@ def main(argv: list[str] | None = None) -> int:
             signal_files=args.signal_file,
         )
         print(f"feedback={schedule_path.parent / 'feedback.json'} schedule={schedule_path}")
+        return 0
+    if args.command == "whitebox":
+        signal_path = write_whitebox_signals(args.run_dir, out_dir=args.out, artifact_dir=args.artifact_dir)
+        print(f"whitebox-signals={signal_path}")
         return 0
     if args.command == "report":
         write_aggregate(args.run_dir)

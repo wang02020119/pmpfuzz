@@ -314,8 +314,6 @@ def _candidate_cases(*, target: str, include_experimental: bool, seed: int) -> l
 
 def _rank_candidates_for_signal(signal: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     strategy = _strategy_for_signal(signal)
-    if strategy == "whitebox-placeholder":
-        return []
     ranked: list[dict[str, Any]] = []
     for candidate in candidates:
         if candidate.get("name") == signal.get("case"):
@@ -345,7 +343,7 @@ def _rank_candidates_for_signal(signal: dict[str, Any], candidates: list[dict[st
 
 def _strategy_for_signal(signal: dict[str, Any]) -> str:
     if signal.get("provider") == "whitebox":
-        return "whitebox-placeholder"
+        return _strategy_for_whitebox_signal(signal)
     features = signal.get("features") or {}
     failure_class = str(features.get("failure_class") or signal.get("kind") or "")
     profile = str(features.get("profile") or "")
@@ -366,6 +364,22 @@ def _strategy_for_signal(signal: dict[str, Any]) -> str:
         return "stateful-permission-neighborhood"
     if failure_class == "timeout":
         return "timeout-control"
+    return "semantic-neighborhood"
+
+
+def _strategy_for_whitebox_signal(signal: dict[str, Any]) -> str:
+    features = signal.get("features") or {}
+    kind = str(signal.get("kind") or "")
+    security_chain = str(features.get("security_chain") or "")
+    profile = str(features.get("profile") or "")
+    if "smepmp" in security_chain or profile.startswith("smepmp") or features.get("smepmp_rule"):
+        return "smepmp-permission-neighborhood"
+    if "ptw" in security_chain or str(features.get("pmp_stage")) == "ptw" or kind.startswith("ptw_"):
+        return "ptw-pmp-neighborhood"
+    if "side-effect" in security_chain or kind == "forbidden_side_effect_footprint":
+        return "stateful-permission-neighborhood"
+    if "trap" in security_chain or kind == "trap_commit_trace":
+        return "wrong-mcause-neighborhood"
     return "semantic-neighborhood"
 
 

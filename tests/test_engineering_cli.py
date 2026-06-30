@@ -181,6 +181,21 @@ class EngineeringCliTest(unittest.TestCase):
         self.assertIn("Combination Coverage Guidance", report_text)
         self.assertIn("Pairwise combo coverage", report_text)
 
+    def test_repro_reemits_dut_specific_assembly_backend(self):
+        from pmpfuzz.__main__ import _repro_assembly_for_dut
+
+        scenario = ScenarioGenerator(seed=20260630, include_smepmp=False, profile="ooo-fetch-replay-pmp").generate_batch(1)[
+            0
+        ]
+        case = scenario_to_case_dict(scenario, seed=20260630, index=0)
+
+        tohost_asm = _repro_assembly_for_dut(case, "boom-clean")
+        xiangshan_asm = _repro_assembly_for_dut(case, "xiangshan-clean")
+
+        self.assertNotIn(".word 0x0000006b", tohost_asm)
+        self.assertIn(".word 0x0000006b", xiangshan_asm)
+        self.assertIn("xiangshan_finish_good", xiangshan_asm)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -120,9 +120,10 @@ class SourceProbeTest(unittest.TestCase):
             )
 
             manifest = root / "out" / "source_probe_manifest.json"
+            exists = manifest.exists()
 
         self.assertEqual(rc, 0)
-        self.assertTrue(manifest.exists())
+        self.assertTrue(exists)
 
 
 def _write(path: Path, text: str) -> None:

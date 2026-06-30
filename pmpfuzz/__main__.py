@@ -11,13 +11,14 @@ from pathlib import Path
 
 from .capabilities import capability_for_dut, capability_matrix, oracle_applicability_for_result
 from .coverage import write_coverage
-from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_XIANGSHAN_EMU, make_dut
+from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_XIANGSHAN_EMU, XIANGSHAN_VANILLA_ROOT, make_dut
 from .emitter import AssemblyEmitter
 from .feedback import write_feedback
 from .runner import DEFAULT_SPIKE, RunnerConfig, parse_time_budget, run_campaign
 from .scenario import ScenarioGenerator
 from .schema import read_json, result_to_dict, scenario_to_case_dict, write_aggregate, write_json
 from .semantic_coverage import CORE_STATEFUL_TARGET, scenarios_from_schedule, write_schedule
+from .source_probe import write_source_probe_manifest
 from .triage import triage_run, write_report
 from .whitebox import write_whitebox_signals
 
@@ -47,6 +48,12 @@ def build_parser() -> argparse.ArgumentParser:
     probe_dut.add_argument("--out", type=Path, required=True)
     probe_dut.add_argument("--probe-smepmp", action="store_true")
     _add_common_env_args(probe_dut)
+
+    probe_source = subparsers.add_parser("probe-source", help="discover source-level probe insertion points")
+    probe_source.add_argument("--dut", default="xiangshan-clean,boom-clean,rocket-clean")
+    probe_source.add_argument("--out", type=Path, required=True)
+    probe_source.add_argument("--xiangshan-root", type=Path, default=None)
+    _add_common_env_args(probe_source)
 
     gen = subparsers.add_parser("gen", help="generate cases without running a DUT")
     _add_generation_args(gen)
@@ -132,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_env_check(args)
     if args.command == "probe-dut":
         return _cmd_probe_dut(args)
+    if args.command == "probe-source":
+        return _cmd_probe_source(args)
     if args.command == "gen":
         return _cmd_gen(args)
     if args.command == "run":
@@ -241,6 +250,31 @@ def _cmd_probe_dut(args: argparse.Namespace) -> int:
             f"oracle={capability['oracle_applicability']} smepmp={smepmp.get('probe_status', 'unknown')}"
         )
     return 0
+
+
+def _cmd_probe_source(args: argparse.Namespace) -> int:
+    duts = [item.strip() for item in args.dut.split(",") if item.strip()]
+    roots = _source_probe_roots(args, duts)
+    out = write_source_probe_manifest(duts, roots=roots, out_dir=args.out)
+    manifest = read_json(out)
+    summary = manifest["summary"]
+    print(
+        f"source-probes={out} total={summary['total']} found={summary['source_found']} "
+        f"missing={summary['source_missing'] + summary['root_missing']} pattern_missing={summary['pattern_missing']}"
+    )
+    return 0
+
+
+def _source_probe_roots(args: argparse.Namespace, duts: list[str]) -> dict[str, Path]:
+    roots: dict[str, Path] = {}
+    for dut_name in duts:
+        if dut_name == "xiangshan-clean":
+            roots[dut_name] = args.xiangshan_root or XIANGSHAN_VANILLA_ROOT
+        elif dut_name in {"boom-clean", "rocket-clean"}:
+            roots[dut_name] = args.chipyard_dir or DEFAULT_CLEAN_CHIPYARD_DIR
+        else:
+            roots[dut_name] = args.chipyard_dir or DEFAULT_CHIPYARD_DIR
+    return roots
 
 
 def _runtime_smepmp_probe(args: argparse.Namespace, dut_name: str, capability: dict) -> dict:

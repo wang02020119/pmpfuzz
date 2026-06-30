@@ -24,6 +24,7 @@ SECURITY_COVERAGE_KEYWORDS = (
 ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]+")
 COVERAGE_RE = re.compile(r"COVERAGE:\s*([^,\s]+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)")
 PERF_RE = re.compile(r"\[PERF[^\]]*\].*?:\s*([^,\n]+)\s*,\s*(-?\d+)")
+SOURCE_PROBE_RE = re.compile(r"\bPMFUZZ_PROBE\b\s+(.*)")
 
 
 def extract_security_whitebox_signals(run_dir: Path, *, artifact_dir: Path | None = None) -> dict[str, Any]:
@@ -72,6 +73,7 @@ def _signals_from_artifact(case: dict[str, Any], result: dict[str, Any], path: P
         signals.extend(_footprint_signals(case, result, path, text))
     if is_trace:
         signals.extend(_commit_trace_signals(case, result, path, text))
+    signals.extend(_source_probe_signals(case, result, path, text))
     signals.extend(_coverage_point_signals(case, result, path, text))
     signals.extend(_perf_counter_signals(case, result, path, text))
     return signals
@@ -240,6 +242,96 @@ def _perf_counter_signals(case: dict[str, Any], result: dict[str, Any], path: Pa
     return signals
 
 
+def _source_probe_signals(case: dict[str, Any], result: dict[str, Any], path: Path, text: str) -> list[dict[str, Any]]:
+    signals = []
+    for line_number, line in enumerate(text.splitlines(), 1):
+        match = SOURCE_PROBE_RE.search(line)
+        if not match:
+            continue
+        fields = _parse_source_probe_fields(match.group(1))
+        probe_result = {**result}
+        if fields.get("dut"):
+            probe_result["dut"] = fields["dut"]
+        signals.append(
+            _signal(
+                case=case,
+                result=probe_result,
+                kind="source_probe",
+                weight=_source_probe_weight(fields),
+                features={
+                    **_base_features(case, result),
+                    "security_chain": fields.get("chain") or _source_probe_chain(fields.get("probe")),
+                    "artifact": "source-probe-log",
+                    "probe": fields.get("probe"),
+                    "source_probe_dut": fields.get("dut"),
+                    "pmp_stage": fields.get("stage"),
+                    "ptw_level": fields.get("level"),
+                    "address": fields.get("paddr") or fields.get("addr"),
+                    "pmp_allowed": _parse_probe_bool(fields.get("allow")),
+                    "pmp_match_index": _parse_probe_int(fields.get("match")),
+                    "observed_mcause": _parse_probe_int(fields.get("cause")),
+                    "raw_fields": fields,
+                },
+                evidence={"artifact": str(path), "line": line_number, "text": line[:220]},
+            )
+        )
+    return signals
+
+
+def _parse_source_probe_fields(text: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for token in text.strip().split():
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        fields[key.strip()] = value.strip().rstrip(",")
+    return fields
+
+
+def _parse_probe_int(value: str | None) -> int | None:
+    if value in {None, ""}:
+        return None
+    try:
+        return int(str(value), 0)
+    except ValueError:
+        return None
+
+
+def _parse_probe_bool(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    lowered = str(value).lower()
+    if lowered in {"1", "true", "yes", "allow", "allowed"}:
+        return True
+    if lowered in {"0", "false", "no", "deny", "denied"}:
+        return False
+    return None
+
+
+def _source_probe_chain(probe: str | None) -> str:
+    lower = (probe or "").lower()
+    if "ptw" in lower and "pmp" in lower:
+        return "sv39-ptw-pmp"
+    if "ptw" in lower:
+        return "ptw-request"
+    if "tlb" in lower or "exception" in lower or "ae" in lower:
+        return "exception-arbitration"
+    if "pmp" in lower:
+        return "pmp-check"
+    return "source-probe"
+
+
+def _source_probe_weight(fields: dict[str, str]) -> int:
+    denied = _parse_probe_bool(fields.get("allow")) is False
+    cause = _parse_probe_int(fields.get("cause"))
+    stage = (fields.get("stage") or "").lower()
+    if denied or cause is not None:
+        return 115
+    if stage == "ptw":
+        return 100
+    return 85
+
+
 def _perf_counter_weight(counter: str, line: str, value: int) -> int:
     counter_text = counter.strip().lower()
     line_text = line.lower()
@@ -388,6 +480,7 @@ def _dedupe_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 str(signal.get("dut")),
                 str((signal.get("features") or {}).get("security_chain")),
                 str((signal.get("features") or {}).get("address")),
+                str((signal.get("features") or {}).get("probe")),
                 str((signal.get("features") or {}).get("coverage_point")),
                 str((signal.get("features") or {}).get("perf_counter")),
                 str((signal.get("features") or {}).get("ptw_level")),

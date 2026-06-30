@@ -8,7 +8,7 @@ from typing import Any
 from .oracle import contract_trace_for_scenario, evaluate_scenario
 from .pmp import Access, PmpEntry, PmpModel
 from .scenario import M_DATA_BASE, M_DATA_SIZE, M_TEXT_BASE, M_TEXT_SIZE, SU_CODE_BASE, SU_CODE_SIZE, PmpScenario
-from .semantic_coverage import combo_bins_for_case, semantic_bins_for_case
+from .semantic_coverage import combo_bins_for_case, contract_predicates_for_case, semantic_bins_for_case
 from .capabilities import oracle_applicability_for_case, required_capabilities_for_case
 
 
@@ -118,6 +118,7 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
     data["oracle_applicability"] = oracle_applicability_for_case(data)
     data["semantic_bins"] = semantic_bins_for_case(data)
     data["combo_bins"] = combo_bins_for_case(data)
+    data["contract_predicates"] = contract_predicates_for_case(data)
     return data
 
 

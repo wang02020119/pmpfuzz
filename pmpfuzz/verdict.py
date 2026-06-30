@@ -49,6 +49,31 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
                     "reason": "Spike and Rocket pass while BOOM fails an allowed PMP NA4 fetch boundary probe",
                 }
             )
+        if _is_confirmed_boom_ooo_fetch_replay_failure(case, spike, rocket, boom):
+            evidence.append(
+                {
+                    "kind": "confirmed_ooo_fetch_replay_failure",
+                    "case": name,
+                    "profile": case.get("profile"),
+                    "boom_failure_class": boom.get("failure_class"),
+                    "observed_tohost": boom.get("observed_tohost"),
+                    "expected": "successful fetch replay and ecall completion",
+                    "reason": "Spike and Rocket pass while BOOM fails an allowed OoO fetch replay PMP probe",
+                }
+            )
+        if _is_confirmed_boom_ooo_ptw_replay_hang(case, spike, rocket, boom):
+            evidence.append(
+                {
+                    "kind": "confirmed_ooo_ptw_replay_hang",
+                    "case": name,
+                    "profile": case.get("profile"),
+                    "access": case.get("access"),
+                    "ptw_fault_level": case.get("ptw_fault_level"),
+                    "boom_failure_class": boom.get("failure_class"),
+                    "expected": _expected_trap_label(case),
+                    "reason": "Spike and Rocket pass while BOOM hangs on an OoO PTW replay PMP-denied walk",
+                }
+            )
         if _is_related_wrong_mcause(case, boom):
             related.append(
                 {
@@ -98,6 +123,26 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
             "impact": "denial_of_service / incorrect_execute_permission_handling",
             "expected": "successful fetch and ecall completion",
             "evidence": fetch_boundary,
+            "related_evidence": related,
+        }
+    ooo_fetch = [item for item in evidence if item.get("kind") == "confirmed_ooo_fetch_replay_failure"]
+    if ooo_fetch:
+        return {
+            "verdict": "confirmed_ooo_fetch_replay_failure",
+            "has_vulnerability": True,
+            "impact": "denial_of_service / incorrect_fetch_replay_permission_handling",
+            "expected": "successful fetch replay and ecall completion",
+            "evidence": ooo_fetch,
+            "related_evidence": related,
+        }
+    ooo_ptw = [item for item in evidence if item.get("kind") == "confirmed_ooo_ptw_replay_hang"]
+    if ooo_ptw:
+        return {
+            "verdict": "confirmed_ooo_ptw_replay_hang",
+            "has_vulnerability": True,
+            "impact": "denial_of_service / missing_precise_trap",
+            "expected": "precise PTW access fault",
+            "evidence": ooo_ptw,
             "related_evidence": related,
         }
     if evidence:
@@ -306,6 +351,52 @@ def _is_confirmed_boom_pmp_fetch_boundary_failure(
     )
 
 
+def _is_confirmed_boom_ooo_fetch_replay_failure(
+    case: dict[str, Any],
+    spike: dict[str, Any] | None,
+    rocket: dict[str, Any] | None,
+    boom: dict[str, Any] | None,
+) -> bool:
+    if not spike or not rocket or not boom:
+        return False
+    return (
+        _is_valid_oracle_result(spike)
+        and _is_valid_oracle_result(rocket)
+        and _is_valid_oracle_result(boom)
+        and spike.get("status") == "pass"
+        and rocket.get("status") == "pass"
+        and boom.get("status") not in {"pass", "setup_unsupported"}
+        and boom.get("failure_class") in {"sim_assert", "tohost_fail", "infra_failure", "pipeline_hung"}
+        and case.get("profile") == "ooo-fetch-replay-pmp"
+        and case.get("translation") == "bare"
+        and case.get("access") == "fetch"
+        and bool(case.get("expected_allowed"))
+    )
+
+
+def _is_confirmed_boom_ooo_ptw_replay_hang(
+    case: dict[str, Any],
+    spike: dict[str, Any] | None,
+    rocket: dict[str, Any] | None,
+    boom: dict[str, Any] | None,
+) -> bool:
+    if not spike or not rocket or not boom:
+        return False
+    expected = case.get("expected") or {}
+    return (
+        _is_valid_oracle_result(spike)
+        and _is_valid_oracle_result(rocket)
+        and _is_valid_oracle_result(boom)
+        and spike.get("status") == "pass"
+        and rocket.get("status") == "pass"
+        and boom.get("failure_class") == "pipeline_hung"
+        and case.get("profile") == "ooo-ptw-replay-pmp-deny"
+        and case.get("translation") == "sv39"
+        and expected.get("stage") == "page_table_walk"
+        and expected.get("trap_cause") in {1, 5, 7}
+    )
+
+
 def _is_related_wrong_mcause(case: dict[str, Any], boom: dict[str, Any] | None) -> bool:
     if not boom:
         return False
@@ -320,3 +411,12 @@ def _is_related_wrong_mcause(case: dict[str, Any], boom: dict[str, Any] | None) 
 
 def _is_valid_oracle_result(result: dict[str, Any]) -> bool:
     return (result.get("oracle_applicability") or "valid") == "valid"
+
+
+def _expected_trap_label(case: dict[str, Any]) -> str:
+    cause = (case.get("expected") or {}).get("trap_cause")
+    return {
+        1: "instruction access fault",
+        5: "load access fault",
+        7: "store/AMO access fault",
+    }.get(cause, "precise PTW access fault")

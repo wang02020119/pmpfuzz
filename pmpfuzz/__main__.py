@@ -67,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     repro.add_argument("--out", type=Path, required=True)
     repro.add_argument("--per-case-timeout", type=int, default=60)
     repro.add_argument("--dut-bin", type=Path, default=None)
+    repro.add_argument("--simlen", type=int, default=100000)
     repro.add_argument("--no-smepmp", action="store_true")
     _add_common_env_args(repro)
 
@@ -394,6 +395,7 @@ def _cmd_repro(args: argparse.Namespace) -> int:
             isa=args.isa or ("rv64gc" if args.no_smepmp else "rv64gc_smepmp"),
             chipyard_dir=chipyard_dir,
             dut_bin=args.dut_bin,
+            simlen=args.simlen,
         )
         start = time.monotonic()
         dut_result = dut.run(elf, timeout_seconds=args.per_case_timeout, log_path=log)

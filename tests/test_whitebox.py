@@ -74,6 +74,24 @@ class SecurityWhiteboxSignalsTest(unittest.TestCase):
         self.assertEqual(schedule["entries"][0]["source_signal"]["provider"], "whitebox")
         self.assertEqual(schedule["entries"][0]["mutation_strategy"], "ptw-pmp-neighborhood")
 
+    def test_extracts_security_perf_counter_from_xiangshan_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression")
+            log = run_dir / "results" / case["name"] / "scenario.log"
+            log.write_text(
+                "[PERF ][time=10] SimTop.cpu.l2tlb: PTW_refill,                    3\n",
+                encoding="ascii",
+            )
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        signal = payload["signals"][0]
+        self.assertEqual(signal["kind"], "security_perf_counter")
+        self.assertEqual(signal["features"]["security_chain"], "rtl-security-perf")
+        self.assertEqual(signal["features"]["perf_counter"], "PTW_refill")
+        self.assertEqual(signal["features"]["perf_value"], 3)
+
     def test_write_whitebox_signals_uses_default_run_subdir(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)

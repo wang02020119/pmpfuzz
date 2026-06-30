@@ -333,13 +333,20 @@ class CascadeRocketDut:
 
 
 class XiangShanDut:
-    def __init__(self, *, binary: Path = DEFAULT_XIANGSHAN_EMU, simlen: int = 100000) -> None:
+    def __init__(
+        self,
+        *,
+        binary: Path = DEFAULT_XIANGSHAN_EMU,
+        simlen: int = 100000,
+        whitebox_artifacts: bool = False,
+    ) -> None:
         self.name = "xiangshan-clean"
         self.binary = resolve_xiangshan_binary(binary)
         self.simlen = simlen
+        self.whitebox_artifacts = whitebox_artifacts
 
-    def command_for(self, image: Path) -> list[str]:
-        return [
+    def command_for(self, image: Path, *, artifact_prefix: Path | None = None) -> list[str]:
+        command = [
             _posix_arg(self.binary),
             "--no-diff",
             "-C",
@@ -347,11 +354,20 @@ class XiangShanDut:
             "-i",
             _posix_arg(image),
         ]
+        if self.whitebox_artifacts:
+            prefix = artifact_prefix or image.with_suffix("")
+            command.extend(
+                [
+                    "--dump-commit-trace",
+                    f"--dump-footprints={_posix_arg(prefix.with_suffix('.footprints'))}",
+                ]
+            )
+        return command
 
     def run(self, elf: Path, *, timeout_seconds: int, log_path: Path) -> DutRunResult:
         start = time.monotonic()
         timed_out, returncode, stdout = _run_command_to_log(
-            self.command_for(elf),
+            self.command_for(elf, artifact_prefix=log_path.with_suffix("")),
             timeout_seconds=timeout_seconds,
             log_path=log_path,
         )
@@ -388,6 +404,7 @@ def make_dut(
     chipyard_dir: Path = DEFAULT_CHIPYARD_DIR,
     dut_bin: Path | None = None,
     simlen: int = 100000,
+    whitebox_artifacts: bool = False,
 ) -> SpikeDut | ChipyardMakeDut | CascadeRocketDut | XiangShanDut:
     if dut == "spike":
         return SpikeDut(spike=spike, isa=isa)
@@ -433,7 +450,11 @@ def make_dut(
     if dut == "rocket-cascade":
         return CascadeRocketDut(binary=dut_bin or DEFAULT_CASCADE_ROCKET, simlen=simlen)
     if dut == "xiangshan-clean":
-        return XiangShanDut(binary=dut_bin or DEFAULT_XIANGSHAN_EMU, simlen=simlen)
+        return XiangShanDut(
+            binary=dut_bin or DEFAULT_XIANGSHAN_EMU,
+            simlen=simlen,
+            whitebox_artifacts=whitebox_artifacts,
+        )
     raise ValueError(f"unsupported DUT: {dut}")
 
 

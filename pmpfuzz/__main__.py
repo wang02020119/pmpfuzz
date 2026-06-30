@@ -61,6 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--per-case-timeout", type=int, default=10)
     run.add_argument("--dut-bin", type=Path, default=None)
     run.add_argument("--simlen", type=int, default=100000)
+    run.add_argument("--whitebox-artifacts", action="store_true")
 
     repro = subparsers.add_parser("repro", help="reproduce one generated case on one or more DUTs")
     repro.add_argument("--case", type=Path, required=True)
@@ -70,6 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     repro.add_argument("--dut-bin", type=Path, default=None)
     repro.add_argument("--simlen", type=int, default=100000)
     repro.add_argument("--no-smepmp", action="store_true")
+    repro.add_argument("--whitebox-artifacts", action="store_true")
     _add_common_env_args(repro)
 
     triage = subparsers.add_parser("triage", help="classify and deduplicate campaign failures")
@@ -354,6 +356,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         include_smepmp=not args.no_smepmp,
         indices=_parse_indices(args.indices),
         schedule=args.schedule,
+        whitebox_artifacts=args.whitebox_artifacts,
     )
     results = run_campaign(config)
     failed = [result for result in results if result.status not in {"pass", "setup_unsupported"}]
@@ -420,6 +423,7 @@ def _cmd_repro(args: argparse.Namespace) -> int:
             chipyard_dir=chipyard_dir,
             dut_bin=args.dut_bin,
             simlen=args.simlen,
+            whitebox_artifacts=args.whitebox_artifacts,
         )
         start = time.monotonic()
         dut_result = dut.run(elf, timeout_seconds=args.per_case_timeout, log_path=log)

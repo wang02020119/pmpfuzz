@@ -47,6 +47,7 @@ class RunnerConfig:
     include_smepmp: bool = True
     indices: tuple[int, ...] | None = None
     schedule: Path | None = None
+    whitebox_artifacts: bool = False
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
             "chipyard_dir": str(config.chipyard_dir),
             "include_smepmp": config.include_smepmp,
             "schedule": str(config.schedule) if config.schedule else None,
+            "whitebox_artifacts": config.whitebox_artifacts,
         },
     )
     dut_capability = capability_for_dut(config.dut, path=config.dut_bin) if config.dut_bin else capability_for_dut(config.dut)
@@ -205,6 +207,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
         chipyard_dir=config.chipyard_dir,
         dut_bin=config.dut_bin,
         simlen=config.simlen,
+        whitebox_artifacts=config.whitebox_artifacts,
     )
     emitter_backend = _emitter_backend_for_dut(config.dut)
     indexed_scenarios = _scenario_plan(config)

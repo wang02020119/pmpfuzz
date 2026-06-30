@@ -5,6 +5,7 @@ from pathlib import Path
 from pmpfuzz.coverage import coverage_from_run, write_coverage
 from pmpfuzz.schema import result_to_dict, scenario_to_case_dict, write_json
 from pmpfuzz.scenario import ScenarioGenerator
+from pmpfuzz.semantic_coverage import XIANGSHAN_TARGETED_TARGET, target_profiles
 
 
 class CoverageTest(unittest.TestCase):
@@ -66,6 +67,21 @@ class CoverageTest(unittest.TestCase):
         self.assertIn(case["smepmp_rule"], coverage["smepmp_rules"])
         self.assertIn(case["effective_privilege"], coverage["effective_privileges"])
         self.assertIn(case["pmp_match_result"], coverage["pmp_match_results"])
+
+    def test_xiangshan_targeted_runs_use_xiangshan_target_coverage_space(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            profile = "xiangshan-fetch-pmp-boundary"
+            scenario = ScenarioGenerator(seed=20260630, include_smepmp=False, profile=profile).generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=20260630, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+
+            coverage = coverage_from_run(run_dir)
+
+        self.assertEqual(coverage["target"], XIANGSHAN_TARGETED_TARGET)
+        self.assertIn(profile, target_profiles(XIANGSHAN_TARGETED_TARGET))
+        self.assertGreater(coverage["covered_target_bins"], 0)
+        self.assertLess(coverage["missing_target_bins"], coverage["target_bins"])
 
 
 if __name__ == "__main__":

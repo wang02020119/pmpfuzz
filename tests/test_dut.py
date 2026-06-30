@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 
+from pmpfuzz.diagnostics import FailureClass, PASS_TOHOST, encode_tohost_failure
 from pmpfuzz.dut import (
     CascadeRocketDut,
     ChipyardMakeDut,
@@ -179,6 +180,32 @@ class DutAdapterTest(unittest.TestCase):
         no_marker = parse_xiangshan_log("Guest cycle spent: 20,001", returncode=0)
         self.assertEqual(no_marker.status, "infra_failure")
         self.assertEqual(no_marker.failure_class, "infra_unadapted")
+
+    def test_xiangshan_log_parser_extracts_structured_pmpfuzz_diag(self):
+        payload = encode_tohost_failure(FailureClass.WRONG_MCAUSE, mcause=13, mtval=0x80008000)
+        result = parse_xiangshan_log(
+            f"PMFUZZ_DIAG tohost=0x{payload:x} mcause=0xd mtval=0x80008000\n"
+            "HIT BAD TRAP at pc = 0x80004000\n",
+            returncode=0,
+        )
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(result.failure_class, "wrong_mcause")
+        self.assertEqual(result.observed_tohost, payload)
+        self.assertEqual(result.observed_mcause, 13)
+        self.assertEqual(result.observed_mtval, 0x80008000)
+        self.assertIn("PMFUZZ_DIAG", result.reason)
+
+    def test_xiangshan_log_parser_records_goodtrap_pc_and_pass_diag(self):
+        result = parse_xiangshan_log(
+            f"PMFUZZ_DIAG tohost=0x{PASS_TOHOST:x} mcause=0x0 mtval=0x0\n"
+            "HIT GOOD TRAP at pc = 0x80000088\n",
+            returncode=0,
+        )
+
+        self.assertEqual(result.status, "pass")
+        self.assertEqual(result.observed_tohost, PASS_TOHOST)
+        self.assertIn("0x80000088", result.reason)
 
     def test_cascade_rocket_command_uses_simlen_and_binary_env(self):
         dut = CascadeRocketDut(binary=Path("/rocket/Vtop_tiny_soc"), simlen=5000)

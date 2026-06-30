@@ -5,7 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .oracle import evaluate_scenario
+from .oracle import contract_trace_for_scenario, evaluate_scenario
 from .pmp import Access, PmpEntry, PmpModel
 from .scenario import M_DATA_BASE, M_DATA_SIZE, M_TEXT_BASE, M_TEXT_SIZE, SU_CODE_BASE, SU_CODE_SIZE, PmpScenario
 from .semantic_coverage import combo_bins_for_case, semantic_bins_for_case
@@ -102,6 +102,7 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
             "reason": expected_reason,
             "physical_address": expected_pa,
         },
+        "contract_trace": contract_trace_for_scenario(scenario),
     }
     if scenario.sv39 is not None:
         data["sv39"] = {

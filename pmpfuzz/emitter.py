@@ -322,9 +322,11 @@ class AssemblyEmitter:
     def _emit_probe(self, scenario: PmpScenario) -> list[str]:
         address = scenario.probe.effective_address()
         if scenario.probe.access == Access.LOAD:
-            return [f"    li t0, 0x{address:x}", "    lw t1, 0(t0)"]
+            load = "ld" if scenario.probe.size == 8 else "lw"
+            return [f"    li t0, 0x{address:x}", f"    {load} t1, 0(t0)"]
         if scenario.probe.access == Access.STORE:
-            return [f"    li t0, 0x{address:x}", "    li t1, 0x5a5a5a5a", "    sw t1, 0(t0)"]
+            store = "sd" if scenario.probe.size == 8 else "sw"
+            return [f"    li t0, 0x{address:x}", "    li t1, 0x5a5a5a5a", f"    {store} t1, 0(t0)"]
         if scenario.probe.access == Access.FETCH:
             return [f"    li t0, 0x{address:x}", "    jalr zero, 0(t0)"]
         raise ValueError(f"unsupported access type: {scenario.probe.access}")

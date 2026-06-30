@@ -12,6 +12,8 @@ from .scenario import PmpScenario, ScenarioGenerator
 
 
 CORE_STATEFUL_TARGET = "core-stateful"
+XIANGSHAN_TARGETED_TARGET = "xiangshan-targeted"
+OOO_MICROARCH_TARGET = "ooo-microarchitecture"
 
 CORE_STATEFUL_PROFILES = (
     "pmp-boundary",
@@ -33,10 +35,24 @@ EXPERIMENTAL_PROFILES = (
     "legacy-fetch-experimental",
     "smepmp-table",
     "mixed-smepmp-mmu",
+)
+
+XIANGSHAN_TARGETED_PROFILES = (
     "xiangshan-fetch-pmp-boundary",
     "xiangshan-itlb-stale-pmp",
     "xiangshan-ptw-pmp-depth",
     "xiangshan-side-effect",
+)
+
+OOO_MICROARCH_PROFILES = (
+    "ooo-fetch-replay-pmp",
+    "ooo-itlb-stale-after-pmp-update",
+    "ooo-dtlb-stale-after-pmp-update",
+    "ooo-ptw-replay-pmp-deny",
+    "ooo-exception-priority",
+    "ooo-misaligned-page-cross-pmp",
+    "ooo-ad-bit-side-effect",
+    "ooo-fence-race-matrix",
 )
 
 PROFILE_TARGET_COUNTS = {
@@ -60,6 +76,14 @@ PROFILE_TARGET_COUNTS = {
     "xiangshan-itlb-stale-pmp": 8,
     "xiangshan-ptw-pmp-depth": 96,
     "xiangshan-side-effect": 8,
+    "ooo-fetch-replay-pmp": 96,
+    "ooo-itlb-stale-after-pmp-update": 8,
+    "ooo-dtlb-stale-after-pmp-update": 8,
+    "ooo-ptw-replay-pmp-deny": 96,
+    "ooo-exception-priority": 24,
+    "ooo-misaligned-page-cross-pmp": 12,
+    "ooo-ad-bit-side-effect": 16,
+    "ooo-fence-race-matrix": 18,
 }
 
 COVERAGE_MODES = ("semantic", "pairwise", "security-triples")
@@ -469,11 +493,17 @@ def target_combo_bins(
 
 
 def target_profiles(target: str, include_experimental: bool = False) -> tuple[str, ...]:
+    if target == XIANGSHAN_TARGETED_TARGET:
+        return XIANGSHAN_TARGETED_PROFILES
+    if target == OOO_MICROARCH_TARGET:
+        return OOO_MICROARCH_PROFILES
     if target != CORE_STATEFUL_TARGET:
         raise ValueError(f"unsupported semantic coverage target: {target}")
     profiles = list(CORE_STATEFUL_PROFILES)
     if include_experimental:
         profiles.extend(EXPERIMENTAL_PROFILES)
+        profiles.extend(XIANGSHAN_TARGETED_PROFILES)
+        profiles.extend(OOO_MICROARCH_PROFILES)
     return tuple(profiles)
 
 

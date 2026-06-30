@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .diagnostics import classify_log_failure, decode_tohost_payload, failed_tohost_from_log
+from .diagnostics import PASS_TOHOST, classify_log_failure, decode_tohost_payload, failed_tohost_from_log
 
 
 DEFAULT_CHIPYARD_DIR = Path("/home/dubhe/wjs/boom_host_deploy/cascade-chipyard")
@@ -545,6 +545,9 @@ def parse_chipyard_log(text: str, returncode: int) -> ParsedDutLog:
 
 
 def parse_xiangshan_log(text: str, returncode: int) -> ParsedDutLog:
+    structured = _xiangshan_structured_diag(text, returncode)
+    if structured is not None:
+        return structured
     code = failed_tohost_from_log(text)
     if code is not None:
         decoded = decode_tohost_payload(code)
@@ -557,13 +560,15 @@ def parse_xiangshan_log(text: str, returncode: int) -> ParsedDutLog:
             observed_mtval=decoded.observed_mtval if decoded else None,
             observed_tohost=code,
         )
-    if "HIT GOOD TRAP" in text or "good trap" in text.lower():
-        return ParsedDutLog("pass")
-    if "HIT BAD TRAP" in text or "bad trap" in text.lower():
+    good_pc = _xiangshan_trap_pc(text, "GOOD")
+    if good_pc is not None or "good trap" in text.lower():
+        return ParsedDutLog("pass", PASS_TOHOST, f"xiangshan good trap pc={good_pc}" if good_pc else "xiangshan good trap")
+    bad_pc = _xiangshan_trap_pc(text, "BAD")
+    if bad_pc is not None or "bad trap" in text.lower():
         return ParsedDutLog(
             "fail",
             None,
-            "xiangshan reported bad trap",
+            f"xiangshan reported bad trap pc={bad_pc}" if bad_pc else "xiangshan reported bad trap",
             failure_class="xiangshan_bad_trap",
         )
     if "EXCEEDING CYCLE/INSTR LIMIT" in text:
@@ -586,3 +591,48 @@ def parse_xiangshan_log(text: str, returncode: int) -> ParsedDutLog:
         "xiangshan finished without a recognizable pass/fail marker",
         failure_class="infra_unadapted",
     )
+
+
+def _xiangshan_structured_diag(text: str, returncode: int) -> ParsedDutLog | None:
+    match = re.search(
+        r"PMFUZZ_DIAG\b(?=.*\btohost=(0x[0-9a-fA-F]+|\d+))"
+        r"(?:(?=.*\bmcause=(0x[0-9a-fA-F]+|\d+)))?"
+        r"(?:(?=.*\bmtval=(0x[0-9a-fA-F]+|\d+)))?",
+        text,
+    )
+    if not match:
+        return None
+    tohost = _parse_int(match.group(1))
+    mcause = _parse_int(match.group(2)) if match.group(2) else None
+    mtval = _parse_int(match.group(3)) if match.group(3) else None
+    if tohost == PASS_TOHOST:
+        pc = _xiangshan_trap_pc(text, "GOOD")
+        return ParsedDutLog(
+            "pass",
+            PASS_TOHOST,
+            f"PMFUZZ_DIAG pass pc={pc}" if pc else "PMFUZZ_DIAG pass",
+            observed_mcause=mcause,
+            observed_mtval=mtval,
+            observed_tohost=PASS_TOHOST,
+        )
+
+    decoded_payload = tohost >> 1 if tohost & 0x1 else tohost
+    decoded = decode_tohost_payload(decoded_payload)
+    return ParsedDutLog(
+        "fail",
+        tohost,
+        "PMFUZZ_DIAG failure",
+        failure_class=classify_log_failure(text, returncode, decoded),
+        observed_mcause=mcause if mcause is not None else (decoded.observed_mcause if decoded else None),
+        observed_mtval=mtval if mtval is not None else (decoded.observed_mtval if decoded else None),
+        observed_tohost=tohost,
+    )
+
+
+def _xiangshan_trap_pc(text: str, kind: str) -> str | None:
+    match = re.search(rf"HIT {kind} TRAP at pc\s*=\s*(0x[0-9a-fA-F]+)", text)
+    return match.group(1) if match else None
+
+
+def _parse_int(text: str) -> int:
+    return int(text, 0)

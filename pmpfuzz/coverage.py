@@ -5,6 +5,10 @@ from typing import Any
 
 from .semantic_coverage import (
     CORE_STATEFUL_TARGET,
+    OOO_MICROARCH_TARGET,
+    OOO_MICROARCH_PROFILES,
+    XIANGSHAN_TARGETED_PROFILES,
+    XIANGSHAN_TARGETED_TARGET,
     combo_bins_for_case,
     combination_gap_from_runs,
     coverage_gap_from_runs,
@@ -94,8 +98,9 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         _bump(coverage["statuses"], result.get("status"))
         _bump(coverage["failure_classes"], result.get("failure_class"))
 
-    gap = coverage_gap_from_runs([run_dir], target=CORE_STATEFUL_TARGET)
-    combo_gap = combination_gap_from_runs([run_dir], target=CORE_STATEFUL_TARGET, coverage_mode="pairwise")
+    target = _target_for_cases(cases)
+    gap = coverage_gap_from_runs([run_dir], target=target)
+    combo_gap = combination_gap_from_runs([run_dir], target=target, coverage_mode="pairwise")
     coverage.update(
         {
             "target": gap["target"],
@@ -116,6 +121,15 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         }
     )
     return coverage
+
+
+def _target_for_cases(cases: list[dict[str, Any]]) -> str:
+    profiles = {str(case.get("profile") or "") for case in cases if case.get("profile")}
+    if profiles and profiles <= set(XIANGSHAN_TARGETED_PROFILES):
+        return XIANGSHAN_TARGETED_TARGET
+    if profiles and profiles <= set(OOO_MICROARCH_PROFILES):
+        return OOO_MICROARCH_TARGET
+    return CORE_STATEFUL_TARGET
 
 
 def write_coverage(run_dir: Path) -> Path:

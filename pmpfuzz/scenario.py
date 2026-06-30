@@ -112,6 +112,17 @@ class ScenarioGenerator:
             "xiangshan-side-effect",
         }:
             return self._generate_xiangshan_targeted(index)
+        if self.profile in {
+            "ooo-fetch-replay-pmp",
+            "ooo-itlb-stale-after-pmp-update",
+            "ooo-dtlb-stale-after-pmp-update",
+            "ooo-ptw-replay-pmp-deny",
+            "ooo-exception-priority",
+            "ooo-misaligned-page-cross-pmp",
+            "ooo-ad-bit-side-effect",
+            "ooo-fence-race-matrix",
+        }:
+            return self._generate_ooo_targeted(index)
         if self.profile == "tlb-fence":
             return self._generate_sv39(index, deny_page_walk=False, sfence_vma=index % 2 == 0)
         if self.profile == "mixed-smepmp-mmu":
@@ -880,6 +891,209 @@ class ScenarioGenerator:
             )
 
         raise ValueError(f"unsupported XiangShan targeted profile: {self.profile}")
+
+    def _generate_ooo_targeted(self, index: int) -> PmpScenario:
+        if self.profile == "ooo-fetch-replay-pmp":
+            boundary_index = 16 + (index % 8) + ((index // 8) % 3) * 24 + ((index // 24) % 2) * 72
+            scenario = self._generate_pmp_boundary(boundary_index)
+            return replace(
+                scenario,
+                name=f"scenario_{index:04d}",
+                profile=self.profile,
+                coverage_tags=(*scenario.coverage_tags, "ooo-target", "fetch-replay"),
+                security_focus=self.profile,
+            )
+
+        if self.profile == "ooo-itlb-stale-after-pmp-update":
+            privilege = [Privilege.U, Privilege.S][(index // 2) % 2]
+            fence = "with-sfence-fence-i" if index % 2 == 0 else "no-fence-experimental"
+            pte = PageTableEntry(
+                read=False,
+                write=False,
+                execute=True,
+                user=privilege == Privilege.U,
+                accessed=True,
+                dirty=False,
+            )
+            return self._generate_stateful_sv39(
+                index=index,
+                profile=self.profile,
+                privilege=privilege,
+                pte=pte,
+                mutation="pmpcfg-deny-target",
+                fence=fence,
+                expected_cause=1,
+                stale_failure_class="STALE_PMP_PERMISSION",
+                tags=("ooo-target", "itlb-stale", "fetch", fence),
+                access=Access.FETCH,
+            )
+
+        if self.profile == "ooo-dtlb-stale-after-pmp-update":
+            access = [Access.LOAD, Access.STORE][index % 2]
+            privilege = [Privilege.U, Privilege.S][(index // 2) % 2]
+            fence = "with-sfence" if (index // 4) % 2 == 0 else "no-fence-experimental"
+            pte = PageTableEntry(
+                read=True,
+                write=access == Access.STORE,
+                execute=False,
+                user=privilege == Privilege.U,
+                accessed=True,
+                dirty=access == Access.STORE,
+            )
+            return self._generate_stateful_sv39(
+                index=index,
+                profile=self.profile,
+                privilege=privilege,
+                pte=pte,
+                mutation="pmpcfg-deny-target",
+                fence=fence,
+                expected_cause=5 if access == Access.LOAD else 7,
+                stale_failure_class="STALE_PMP_PERMISSION",
+                tags=("ooo-target", "dtlb-stale", access.value, fence),
+                access=access,
+            )
+
+        if self.profile == "ooo-ptw-replay-pmp-deny":
+            access = [Access.FETCH, Access.LOAD, Access.STORE][index % 3]
+            privilege = [Privilege.U, Privilege.S][(index // 3) % 2]
+            deny_walk_index = (index // (3 * 2)) % 3
+            preload_modes = ("cold", "root-target", "denied-l1", "all")
+            preload_mode = preload_modes[(index // (3 * 2 * 3)) % len(preload_modes)]
+            mxr = bool((index // (3 * 2 * 3 * len(preload_modes))) % 2)
+            pte = PageTableEntry(
+                read=access in {Access.LOAD, Access.STORE},
+                write=access == Access.STORE,
+                execute=access == Access.FETCH or mxr,
+                user=privilege == Privilege.U,
+                accessed=True,
+                dirty=access == Access.STORE,
+            )
+            scenario = self._generate_sv39_custom(
+                index=index,
+                profile=self.profile,
+                access=access,
+                privilege=privilege,
+                pte=pte,
+                deny_page_walk=True,
+                deny_walk_index=deny_walk_index,
+                deny_locked=bool((index // (3 * 2 * 3 * len(preload_modes) * 2)) % 2),
+                sum_enabled=privilege == Privilege.S,
+                mxr=mxr,
+                preload_mode=preload_mode,
+                security_focus=self.profile,
+            )
+            return replace(scenario, coverage_tags=(*scenario.coverage_tags, "ooo-target", "ptw-replay"))
+
+        if self.profile == "ooo-exception-priority":
+            access = [Access.FETCH, Access.LOAD, Access.STORE][index % 3]
+            privilege = [Privilege.U, Privilege.S][(index // 3) % 2]
+            pte_variants = (
+                PageTableEntry(read=True, write=False, execute=True, user=privilege == Privilege.U, accessed=True, dirty=False, valid=False),
+                PageTableEntry(read=True, write=False, execute=False, user=privilege == Privilege.U, accessed=False, dirty=False),
+                PageTableEntry(read=True, write=True, execute=False, user=privilege == Privilege.U, accessed=True, dirty=False),
+                PageTableEntry(read=False, write=True, execute=False, user=privilege == Privilege.U, accessed=True, dirty=True),
+            )
+            pte = pte_variants[(index // (3 * 2)) % len(pte_variants)]
+            scenario = self._generate_sv39_custom(
+                index=index,
+                profile=self.profile,
+                access=access,
+                privilege=privilege,
+                pte=pte,
+                deny_page_walk=False,
+                sum_enabled=privilege == Privilege.S,
+                mxr=bool((index // (3 * 2 * len(pte_variants))) % 2),
+                security_focus=self.profile,
+            )
+            return replace(scenario, coverage_tags=(*scenario.coverage_tags, "ooo-target", "exception-priority"))
+
+        if self.profile == "ooo-misaligned-page-cross-pmp":
+            access = [Access.LOAD, Access.STORE][index % 2]
+            privilege = [Privilege.U, Privilege.S][(index // 2) % 2]
+            target = PmpEntry(
+                index=3,
+                address_mode=AddressMode.NAPOT,
+                pmpaddr=PmpEntry.encode_napot(base=TARGET_BASE, size=TARGET_SIZE),
+                read=True,
+                write=True,
+                execute=False,
+                locked=bool((index // 4) % 2),
+            )
+            return PmpScenario(
+                name=f"scenario_{index:04d}",
+                entries=self._mml_harness_entries() + [target],
+                privilege=privilege,
+                probe=AccessProbe(
+                    access=access,
+                    physical_address=TARGET_BASE + TARGET_SIZE - 4,
+                    size=8,
+                    offset_name="page_cross",
+                ),
+                mprv=False,
+                mpp=Privilege.M,
+                mseccfg=Mseccfg(),
+                profile=self.profile,
+                coverage_tags=("ooo-target", "misaligned", "page-cross", access.value, privilege.value),
+                pmp_match_mode="page-cross-pmp",
+                security_focus=self.profile,
+            )
+
+        if self.profile == "ooo-ad-bit-side-effect":
+            access = [Access.LOAD, Access.STORE][index % 2]
+            privilege = [Privilege.U, Privilege.S][(index // 2) % 2]
+            accessed = bool((index // 4) % 2)
+            dirty = bool((index // 8) % 2) if access == Access.STORE else False
+            pte = PageTableEntry(
+                read=True,
+                write=access == Access.STORE,
+                execute=False,
+                user=privilege == Privilege.U,
+                accessed=accessed,
+                dirty=dirty,
+            )
+            scenario = self._generate_sv39_custom(
+                index=index * 4 + 1,
+                profile=self.profile,
+                access=access,
+                privilege=privilege,
+                pte=pte,
+                deny_page_walk=False,
+                sum_enabled=privilege == Privilege.S,
+                security_focus=self.profile,
+            )
+            return replace(
+                scenario,
+                name=f"scenario_{index:04d}",
+                coverage_tags=(*scenario.coverage_tags, "ooo-target", "ad-bit-side-effect"),
+            )
+
+        if self.profile == "ooo-fence-race-matrix":
+            fences = ("with-sfence", "with-sfence-fence-i", "no-fence-experimental")
+            fence = fences[index % len(fences)]
+            access = [Access.FETCH, Access.LOAD, Access.STORE][(index // len(fences)) % 3]
+            privilege = [Privilege.U, Privilege.S][(index // (len(fences) * 3)) % 2]
+            pte = PageTableEntry(
+                read=access in {Access.LOAD, Access.STORE},
+                write=access == Access.STORE,
+                execute=access == Access.FETCH,
+                user=privilege == Privilege.U,
+                accessed=True,
+                dirty=access == Access.STORE,
+            )
+            return self._generate_stateful_sv39(
+                index=index,
+                profile=self.profile,
+                privilege=privilege,
+                pte=pte,
+                mutation="pmpcfg-deny-target",
+                fence=fence,
+                expected_cause={Access.FETCH: 1, Access.LOAD: 5, Access.STORE: 7}[access],
+                stale_failure_class="STALE_PMP_PERMISSION",
+                tags=("ooo-target", "fence-race", access.value, fence),
+                access=access,
+            )
+
+        raise ValueError(f"unsupported OoO targeted profile: {self.profile}")
 
     def _generate_stateful_sv39(
         self,

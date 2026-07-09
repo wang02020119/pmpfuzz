@@ -44,6 +44,19 @@ def _posix_arg(path: Path) -> str:
     return path.as_posix()
 
 
+def _with_extra_sim_flag(make_vars: list[str], flag: str) -> list[str]:
+    for index, make_var in enumerate(make_vars):
+        if not make_var.startswith("EXTRA_SIM_FLAGS="):
+            continue
+        value = make_var.removeprefix("EXTRA_SIM_FLAGS=")
+        if flag in value.split():
+            return make_vars
+        make_vars[index] = f"EXTRA_SIM_FLAGS={value} {flag}".rstrip()
+        return make_vars
+    make_vars.append(f"EXTRA_SIM_FLAGS={flag}")
+    return make_vars
+
+
 def _subprocess_output_text(output: str | bytes | None) -> str:
     if output is None:
         return ""
@@ -216,6 +229,7 @@ class ChipyardDirectDut:
         riscv: Path = DEFAULT_RISCV,
         java_home: Path = DEFAULT_JAVA_HOME,
         max_cycles: int = 10_000_000,
+        whitebox_artifacts: bool = False,
     ) -> None:
         self.name = dut_name
         self.chipyard_dir = chipyard_dir
@@ -225,6 +239,7 @@ class ChipyardDirectDut:
         self.riscv = riscv
         self.java_home = java_home
         self.max_cycles = max_cycles
+        self.whitebox_artifacts = whitebox_artifacts
 
     def simulator_path(self) -> Path:
         if self.simulator_binary is not None:
@@ -238,8 +253,10 @@ class ChipyardDirectDut:
 
     def command_for(self, elf: Path) -> list[str]:
         dramsim_ini = self.chipyard_dir / "generators" / "testchipip" / "src" / "main" / "resources" / "dramsim2_ini"
-        return [
-            _posix_arg(self.simulator_path()),
+        command = [_posix_arg(self.simulator_path())]
+        if self.whitebox_artifacts:
+            command.append("+verbose")
+        command.extend([
             "+permissive",
             "+dramsim",
             f"+dramsim_ini_dir={_posix_arg(dramsim_ini)}",
@@ -247,7 +264,8 @@ class ChipyardDirectDut:
             f"+loadmem={_posix_arg(elf)}",
             "+permissive-off",
             _posix_arg(elf),
-        ]
+        ])
+        return command
 
     def env(self) -> dict[str, str]:
         env = os.environ.copy()
@@ -313,6 +331,7 @@ class ChipyardMakeDut:
         make_vars: tuple[str, ...] = (),
         target: str = "run-binary-fast-hex",
         set_verilator_bin_env: bool = True,
+        whitebox_artifacts: bool = False,
     ) -> None:
         self.name = dut_name
         self.chipyard_dir = chipyard_dir
@@ -323,9 +342,13 @@ class ChipyardMakeDut:
         self.make_vars = make_vars
         self.target = target
         self.set_verilator_bin_env = set_verilator_bin_env
+        self.whitebox_artifacts = whitebox_artifacts
 
     def command_for(self, elf: Path) -> list[str]:
-        return ["make", f"CONFIG={self.config}", f"BINARY={_posix_arg(elf)}", *self.make_vars, self.target]
+        make_vars = list(self.make_vars)
+        if self.whitebox_artifacts:
+            make_vars = _with_extra_sim_flag(make_vars, "+verbose")
+        return ["make", f"CONFIG={self.config}", f"BINARY={_posix_arg(elf)}", *make_vars, self.target]
 
     def env(self) -> dict[str, str]:
         env = os.environ.copy()
@@ -509,6 +532,7 @@ def make_dut(
                 "PLATFORM_OPTS=--timing",
                 "EXTRA_SIM_CXXFLAGS=-std=c++17",
             ),
+            whitebox_artifacts=whitebox_artifacts,
         )
     if dut == "rocket-clean":
         return ChipyardMakeDut(
@@ -518,6 +542,7 @@ def make_dut(
             verilator_bin_dir=chipyard_dir / ".conda-env" / "bin",
             make_vars=("VERILATOR_THREADS=1",),
             set_verilator_bin_env=False,
+            whitebox_artifacts=whitebox_artifacts,
         )
     if dut == "boom-clean":
         return ChipyardMakeDut(
@@ -527,6 +552,7 @@ def make_dut(
             verilator_bin_dir=chipyard_dir / ".conda-env" / "bin",
             make_vars=("VERILATOR_THREADS=1",),
             set_verilator_bin_env=False,
+            whitebox_artifacts=whitebox_artifacts,
         )
     if dut in {"cva6", "cva6-clean"}:
         return ChipyardDirectDut(
@@ -535,6 +561,7 @@ def make_dut(
             config="CVA6Config",
             simulator_names=("simulator-chipyard.harness-CVA6Config", "simulator-chipyard-CVA6Config"),
             simulator_binary=dut_bin,
+            whitebox_artifacts=whitebox_artifacts,
         )
     if dut == "rocket-cascade":
         return CascadeRocketDut(binary=dut_bin or DEFAULT_CASCADE_ROCKET, simlen=simlen)

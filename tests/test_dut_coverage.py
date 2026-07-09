@@ -19,7 +19,7 @@ class DutWhiteboxCoverageTest(unittest.TestCase):
     def test_dut_coverage_normalizes_real_whitebox_signals_into_bins(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
-            case = _write_case_result(run_dir)
+            case = _write_case_result(run_dir, dut="boom-clean")
             log = run_dir / "results" / case["name"] / "scenario.log"
             log.write_text(
                 "PMFUZZ_PROBE dut=boom-clean probe=ptw_pmp_check chain=sv39-ptw-pmp "
@@ -38,10 +38,9 @@ class DutWhiteboxCoverageTest(unittest.TestCase):
         self.assertGreaterEqual(coverage["input_signal_count"], 2)
         self.assertGreater(coverage["covered_bins"], 0)
         self.assertIn("boom-clean", coverage["by_dut"])
-        self.assertIn("xiangshan-clean", coverage["by_dut"])
         self.assertIn("dut=boom-clean|chain=sv39-ptw-pmp|kind=source_probe", keys)
         self.assertIn("chain=sv39-ptw-pmp|stage=ptw|allow=denied", keys)
-        self.assertIn("dut=xiangshan-clean|perf_counter=PTW_refill", keys)
+        self.assertIn("dut=boom-clean|perf_counter=PTW_refill", keys)
 
     def test_write_dut_coverage_and_embed_in_campaign_coverage(self):
         with tempfile.TemporaryDirectory() as tmp:

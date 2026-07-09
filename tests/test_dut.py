@@ -110,6 +110,33 @@ class DutAdapterTest(unittest.TestCase):
         self.assertIn("VERILATOR_THREADS=1", command)
         self.assertNotIn("PLATFORM_OPTS=--timing", command)
 
+    def test_clean_chipyard_make_duts_enable_verbose_logs_for_whitebox_artifacts(self):
+        for dut_name, config in (("rocket-clean", "RocketConfig"), ("boom-clean", "SmallBoomV3Config")):
+            with self.subTest(dut=dut_name):
+                dut = make_dut(
+                    dut=dut_name,
+                    spike="spike",
+                    isa="rv64gc",
+                    chipyard_dir=Path("/clean-chipyard"),
+                    whitebox_artifacts=True,
+                )
+
+                command = dut.command_for(Path("/tmp/case.elf"))
+
+                self.assertIsInstance(dut, ChipyardMakeDut)
+                self.assertEqual(dut.config, config)
+                self.assertIn("EXTRA_SIM_FLAGS=+verbose", command)
+
+    def test_clean_chipyard_make_duts_keep_verbose_logs_off_by_default(self):
+        dut = make_dut(
+            dut="rocket-clean",
+            spike="spike",
+            isa="rv64gc",
+            chipyard_dir=Path("/clean-chipyard"),
+        )
+
+        self.assertNotIn("EXTRA_SIM_FLAGS=+verbose", dut.command_for(Path("/tmp/case.elf")))
+
     def test_clean_boom_dut_uses_small_boom_config(self):
         dut = make_dut(
             dut="boom-clean",
@@ -136,6 +163,33 @@ class DutAdapterTest(unittest.TestCase):
         self.assertIn("+dramsim", command)
         self.assertIn("+loadmem=/tmp/case.elf", command)
         self.assertNotIn("verilator_cva6_wrapper.sh", " ".join(command))
+
+    def test_cva6_direct_dut_enables_verbose_logs_for_whitebox_artifacts(self):
+        dut = make_dut(
+            dut="cva6-clean",
+            spike="spike",
+            isa="rv64gc",
+            chipyard_dir=Path("/clean-chipyard"),
+            dut_bin=Path("/tmp/cva6-sim"),
+            whitebox_artifacts=True,
+        )
+
+        command = dut.command_for(Path("/tmp/case.elf"))
+
+        self.assertIsInstance(dut, ChipyardDirectDut)
+        self.assertIn("+verbose", command)
+        self.assertLess(command.index("+verbose"), command.index("+permissive"))
+
+    def test_cva6_direct_dut_keeps_verbose_logs_off_by_default(self):
+        dut = make_dut(
+            dut="cva6-clean",
+            spike="spike",
+            isa="rv64gc",
+            chipyard_dir=Path("/clean-chipyard"),
+            dut_bin=Path("/tmp/cva6-sim"),
+        )
+
+        self.assertNotIn("+verbose", dut.command_for(Path("/tmp/case.elf")))
 
     def test_cva6_clean_alias_uses_direct_simulator_binary_when_provided(self):
         dut = make_dut(

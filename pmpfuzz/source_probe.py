@@ -543,7 +543,7 @@ def _boom_lsu_tlb_pmp_check(text: str) -> tuple[str | None, str]:
         "  for (w <- 0 until memWidth) {",
         "    when (io.req(w).valid || do_refill) {",
         '      printf("PMFUZZ_PROBE dut=boom-clean probe=boom_lsu_tlb_pmp_check chain=pmp-check stage=lsu addr=0x%x prv=%d r=%d w=%d x=%d\\n",',
-        "        mpu_physaddr(w), pmp(w).io.prv, prot_r(w), prot_w(w), prot_x(w))",
+        "        mpu_physaddr(w), Mux(usingVM.B && (do_refill || io.req(w).bits.passthrough), PRV.S.U, priv), prot_r(w), prot_w(w), prot_x(w))",
         "    }",
         "  }",
     ]

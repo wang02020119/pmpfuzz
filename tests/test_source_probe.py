@@ -221,6 +221,7 @@ class SourceProbeTest(unittest.TestCase):
             self.assertIn("PMFUZZ_PROBE dut=boom-clean probe=boom_ptw_ae_array", patch_text)
             self.assertIn("PMFUZZ_PROBE dut=boom-clean probe=boom_ptw_request", patch_text)
             self.assertIn("PMFUZZ_PROBE dut=cva6-clean probe=cva6_ptw_exception", patch_text)
+            self.assertNotIn("pmp(w).io.prv", patch_text)
             self.assertTrue(instrumentation_json.exists())
             self.assertEqual(current, original)
 

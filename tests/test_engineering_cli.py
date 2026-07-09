@@ -38,6 +38,12 @@ class EngineeringCliTest(unittest.TestCase):
             "pairwise",
         )
         self.assertEqual(
+            parser.parse_args(
+                ["schedule", "--from-runs", "seed", "--out", "next", "--coverage-mode", "predicates"]
+            ).coverage_mode,
+            "predicates",
+        )
+        self.assertEqual(
             parser.parse_args(["gen", "--out", "out", "--profiles", "legacy-data,pmp-boundary"]).profiles,
             "legacy-data,pmp-boundary",
         )

@@ -182,6 +182,27 @@ def render_markdown_report(run_dir: Path) -> str:
     if not coverage.get("top_combo_gaps"):
         lines.append("- none")
 
+    lines.extend(
+        [
+            "",
+            "## Contract Predicate Coverage",
+            "",
+            f"- Predicate coverage: {coverage.get('covered_target_predicates', 0)}/"
+            f"{coverage.get('target_predicates', 0)} ({coverage.get('predicate_coverage_rate', 0.0)})",
+            f"- Missing contract predicates: {coverage.get('missing_target_predicates', 0)}",
+            f"- Suggested predicate scheduler: `python3 -m pmpfuzz schedule --from-runs {run_dir} "
+            f"--target {coverage.get('target') or 'core-stateful'} --coverage-mode predicates "
+            f"--max-cases 64 --seed 20260628 --out runs/predicate_next`",
+            "",
+            "Top predicate gaps:",
+            "",
+        ]
+    )
+    for gap in coverage.get("top_predicate_gaps", [])[:10]:
+        lines.append(f"- `{gap}`")
+    if not coverage.get("top_predicate_gaps"):
+        lines.append("- none")
+
     behavior = behavior_guidance_summary(run_dir)
     lines.extend(
         [

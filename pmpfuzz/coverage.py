@@ -11,7 +11,9 @@ from .semantic_coverage import (
     XIANGSHAN_TARGETED_TARGET,
     combo_bins_for_case,
     combination_gap_from_runs,
+    contract_predicates_for_case,
     coverage_gap_from_runs,
+    predicate_gap_from_runs,
     semantic_bins_for_case,
 )
 from .schema import read_json, write_json
@@ -63,6 +65,7 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         "pmp_match_results": {},
         "semantic_bins": {},
         "combo_bins": {},
+        "contract_predicates": {},
     }
 
     for case in cases:
@@ -80,6 +83,8 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
             _bump(coverage["semantic_bins"], semantic_bin)
         for combo_bin in combo_bins_for_case(case):
             _bump(coverage["combo_bins"], combo_bin)
+        for predicate in contract_predicates_for_case(case):
+            _bump(coverage["contract_predicates"], predicate)
         mseccfg = case.get("mseccfg") or {}
         _bump(coverage["smepmp_mml"], int(bool(mseccfg.get("mml"))))
         _bump(coverage["smepmp_mmwp"], int(bool(mseccfg.get("mmwp"))))
@@ -101,6 +106,7 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
     target = _target_for_cases(cases)
     gap = coverage_gap_from_runs([run_dir], target=target)
     combo_gap = combination_gap_from_runs([run_dir], target=target, coverage_mode="pairwise")
+    predicate_gap = predicate_gap_from_runs([run_dir], target=target)
     coverage.update(
         {
             "target": gap["target"],
@@ -118,6 +124,13 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
             "missing_target_combo_bins": combo_gap["missing_target_combo_bins"],
             "combo_coverage_rate": combo_gap["combo_coverage_rate"],
             "top_combo_gaps": combo_gap["top_combo_gaps"],
+            "target_predicates": predicate_gap["total_target_predicates"],
+            "covered_predicates": predicate_gap["covered_predicates"],
+            "covered_target_predicates": predicate_gap["covered_target_predicates"],
+            "missing_predicates": predicate_gap["missing_predicates"],
+            "missing_target_predicates": predicate_gap["missing_target_predicates"],
+            "predicate_coverage_rate": predicate_gap["predicate_coverage_rate"],
+            "top_predicate_gaps": predicate_gap["top_predicate_gaps"],
         }
     )
     return coverage

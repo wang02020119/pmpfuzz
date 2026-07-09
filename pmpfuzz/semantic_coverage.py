@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable
 
-from .oracle import evaluate_scenario
+from .oracle import contract_trace_for_scenario, evaluate_scenario
 from .pmp import Access, PmpEntry, PmpModel
 from .scenario import PmpScenario, ScenarioGenerator
 
@@ -86,7 +86,7 @@ PROFILE_TARGET_COUNTS = {
     "ooo-fence-race-matrix": 18,
 }
 
-COVERAGE_MODES = ("semantic", "pairwise", "security-triples")
+COVERAGE_MODES = ("semantic", "pairwise", "security-triples", "predicates")
 
 
 def semantic_bins_for_case(case: dict[str, Any]) -> list[str]:
@@ -187,6 +187,117 @@ def combo_bins_for_case(case: dict[str, Any], *, coverage_mode: str = "all") -> 
     raise ValueError(f"unsupported coverage mode for combo bins: {coverage_mode}")
 
 
+def contract_predicates_for_case(case: dict[str, Any]) -> list[str]:
+    explicit = case.get("contract_predicates")
+    if explicit:
+        return sorted({str(item) for item in explicit if str(item)})
+
+    predicates: set[str] = set()
+    trace = case.get("contract_trace") or {}
+    mode = trace.get("translation_mode") or case.get("translation")
+    if mode:
+        predicates.add(f"contract.translation.{mode}")
+    trap_priority = trace.get("trap_priority")
+    if trap_priority and trap_priority != "none":
+        predicates.add(f"trap.{trap_priority}")
+    if trap_priority == "misaligned":
+        predicates.add("trap.misaligned_priority_over_permission")
+
+    privilege = str(case.get("privilege") or trace.get("privilege") or "")
+    effective = str(trace.get("effective_privilege") or case.get("effective_privilege") or privilege)
+    if privilege and effective and privilege != effective:
+        predicates.add("pmp.mprv_changes_effective_privilege")
+
+    pmp_checks = list(trace.get("pmp_checks") or [])
+    mseccfg = case.get("mseccfg") or {}
+    for check in pmp_checks:
+        if not isinstance(check, dict):
+            continue
+        stage = str(check.get("stage") or "unknown")
+        match_mode = str(check.get("match_mode") or "unknown")
+        allowed = bool(check.get("allowed"))
+        check_effective = str(check.get("effective_privilege") or effective)
+        predicates.add(f"pmp.{stage}_{'allow' if allowed else 'deny'}")
+        if match_mode != "unknown":
+            predicates.add(f"pmp.{stage}_match_{match_mode}")
+        if match_mode == "no-match":
+            if check_effective in {"S", "U"} and not allowed:
+                predicates.add("pmp.su_no_match_default_deny")
+            if check_effective == "M" and allowed:
+                predicates.add("pmp.m_no_match_default_allow")
+            if check_effective == "M" and not allowed and bool(mseccfg.get("mmwp")):
+                predicates.add("pmp.m_no_match_mmwp_deny")
+        if stage == "ptw" and not allowed:
+            predicates.add("sv39.ptw_pmp_deny_before_final")
+        if stage == "final" and not allowed:
+            predicates.add("sv39.final_pmp_deny_after_translation")
+
+    pmp_match_mode = str(case.get("pmp_match_mode") or "")
+    if pmp_match_mode == "first-match-overlap":
+        predicates.add("pmp.first_match_overlap")
+    if pmp_match_mode in {"tor", "na4", "napot"}:
+        predicates.add(f"pmp.{pmp_match_mode}_boundary")
+    if case.get("pmp_locked"):
+        predicates.add("pmp.locked_entry_affects_access")
+
+    pte = trace.get("pte_decision") or {}
+    if isinstance(pte, dict):
+        decision = str(pte.get("decision") or "")
+        if decision == "ok":
+            predicates.add("sv39.pte_permission_ok")
+        elif decision == "invalid":
+            predicates.add("sv39.pte_invalid_page_fault")
+        elif decision == "reserved_write_without_read":
+            predicates.add("sv39.pte_reserved_page_fault")
+        elif decision == "permission":
+            predicates.add("sv39.pte_permission_page_fault")
+        elif decision == "user":
+            predicates.add("sv39.pte_user_page_fault")
+        elif decision == "accessed":
+            predicates.add("sv39.pte_accessed_page_fault")
+        elif decision == "dirty":
+            predicates.add("sv39.pte_dirty_page_fault")
+        elif decision == "sum":
+            predicates.add("sv39.sum_changes_permission_decision")
+        if pte.get("mxr"):
+            predicates.add("sv39.mxr_permission_context")
+        if pte.get("sum"):
+            predicates.add("sv39.sum_permission_context")
+
+    side_effect = trace.get("side_effect_policy")
+    if side_effect == "forbidden":
+        predicates.add("memory.denied_store_no_side_effect")
+
+    stateful = trace.get("stateful") or case.get("stateful_sequence") or {}
+    if isinstance(stateful, dict) and stateful:
+        mutation = str(stateful.get("mutation") or "")
+        fence = str(stateful.get("fence") or "")
+        expected_final = str(stateful.get("expected_final") or "")
+        stale_class = stateful.get("stale_failure_class")
+        if expected_final == "trap_no_side_effect":
+            predicates.add("stateful.denied_store_no_side_effect")
+        if stale_class and fence in {"with-sfence", "with-sfence-fence-i"}:
+            predicates.add("stateful.stale_permission_forbidden_after_fence")
+        if fence == "no-fence-experimental":
+            predicates.add("stateful.no_fence_experimental_observation")
+        if mutation and mutation != "none":
+            predicates.add(f"stateful.mutation.{mutation}")
+        if fence:
+            predicates.add(f"stateful.fence.{fence}")
+
+    smepmp_rule = case.get("smepmp_rule")
+    if smepmp_rule:
+        predicates.add(f"smepmp.{smepmp_rule}")
+    if bool(mseccfg.get("mml")):
+        predicates.add("smepmp.mml_enabled")
+    if bool(mseccfg.get("mmwp")):
+        predicates.add("smepmp.mmwp_enabled")
+    if bool(mseccfg.get("rlb")):
+        predicates.add("smepmp.rlb_enabled")
+
+    return sorted(predicates)
+
+
 def semantic_bins_for_scenario(scenario: PmpScenario) -> list[str]:
     case: dict[str, Any] = {
         "profile": scenario.profile,
@@ -246,6 +357,38 @@ def combo_bins_for_scenario(scenario: PmpScenario, *, coverage_mode: str = "all"
         "stateful_sequence": scenario.stateful_sequence,
     }
     return combo_bins_for_case(case, coverage_mode=coverage_mode)
+
+
+def contract_predicates_for_scenario(scenario: PmpScenario) -> list[str]:
+    pmp_locked, pmp_allow = _pmp_metadata_for_scenario(scenario)
+    outcome = evaluate_scenario(scenario)
+    if scenario.stateful_sequence is not None:
+        expected_allowed = scenario.stateful_sequence.get("expected_final") == "store_side_effect"
+    else:
+        expected_allowed = outcome.allowed
+    case: dict[str, Any] = {
+        "profile": scenario.profile,
+        "privilege": scenario.privilege.value,
+        "access": scenario.probe.access.value,
+        "translation": scenario.translation.value,
+        "mprv": scenario.mprv,
+        "mpp": scenario.mpp.value,
+        "sum_enabled": scenario.sum_enabled,
+        "mxr": scenario.mxr,
+        "mseccfg": {
+            "mml": scenario.mseccfg.mml,
+            "mmwp": scenario.mseccfg.mmwp,
+            "rlb": scenario.mseccfg.rlb,
+        },
+        "pmp_match_mode": scenario.pmp_match_mode,
+        "pmp_locked": pmp_locked,
+        "pmp_allow": pmp_allow,
+        "expected_allowed": expected_allowed,
+        "smepmp_rule": scenario.smepmp_rule,
+        "stateful_sequence": scenario.stateful_sequence,
+        "contract_trace": contract_trace_for_scenario(scenario),
+    }
+    return contract_predicates_for_case(case)
 
 
 def coverage_gap_from_runs(
@@ -329,6 +472,43 @@ def combination_gap_from_runs(
     }
 
 
+def predicate_gap_from_runs(
+    run_dirs: Iterable[Path],
+    *,
+    target: str = CORE_STATEFUL_TARGET,
+    include_experimental: bool = False,
+    seed: int = 20260628,
+) -> dict[str, Any]:
+    target_predicates = set(
+        target_contract_predicates(target=target, include_experimental=include_experimental, seed=seed)
+    )
+    observed: set[str] = set()
+    run_dir_text: list[str] = []
+    for run_dir in run_dirs:
+        run_dir = Path(run_dir)
+        run_dir_text.append(str(run_dir))
+        for case_path in sorted((run_dir / "cases").glob("*/case.json")):
+            observed.update(contract_predicates_for_case(_read_json(case_path)))
+
+    covered = observed & target_predicates
+    missing = target_predicates - covered
+    coverage_rate = round(len(covered) / len(target_predicates), 6) if target_predicates else 1.0
+    return {
+        "schema_version": 1,
+        "target": target,
+        "include_experimental": include_experimental,
+        "run_dirs": run_dir_text,
+        "total_target_predicates": len(target_predicates),
+        "observed_predicates": sorted(observed),
+        "covered_predicates": sorted(covered),
+        "covered_target_predicates": len(covered),
+        "missing_predicates": sorted(missing),
+        "missing_target_predicates": len(missing),
+        "predicate_coverage_rate": coverage_rate,
+        "top_predicate_gaps": sorted(missing)[:25],
+    }
+
+
 def build_schedule(
     run_dirs: Iterable[Path],
     *,
@@ -345,6 +525,14 @@ def build_schedule(
     combo_gap = None
     if coverage_mode == "semantic":
         missing = set(semantic_gap["missing_bins"])
+    elif coverage_mode == "predicates":
+        predicate_gap = predicate_gap_from_runs(
+            run_dirs,
+            target=target,
+            include_experimental=include_experimental,
+            seed=seed,
+        )
+        missing = set(predicate_gap["missing_predicates"])
     else:
         combo_gap = combination_gap_from_runs(
             run_dirs,
@@ -366,6 +554,8 @@ def build_schedule(
             candidate_bins = (
                 set(candidate["semantic_bins"])
                 if coverage_mode == "semantic"
+                else set(candidate["contract_predicates"])
+                if coverage_mode == "predicates"
                 else set(combo_bins_for_case(candidate, coverage_mode=coverage_mode))
             )
             gain = candidate_bins & missing
@@ -405,6 +595,15 @@ def build_schedule(
                 "combo_coverage_rate_before": combo_gap["combo_coverage_rate"],
             }
         )
+    if coverage_mode == "predicates":
+        schedule.update(
+            {
+                "total_target_predicates": predicate_gap["total_target_predicates"],
+                "covered_target_predicates_before": predicate_gap["covered_target_predicates"],
+                "missing_target_predicates_before": predicate_gap["missing_target_predicates"],
+                "predicate_coverage_rate_before": predicate_gap["predicate_coverage_rate"],
+            }
+        )
     return schedule
 
 
@@ -421,6 +620,8 @@ def write_schedule(
     out_dir = Path(out_dir)
     if coverage_mode == "semantic":
         gap = coverage_gap_from_runs(run_dirs, target=target, include_experimental=include_experimental, seed=seed)
+    elif coverage_mode == "predicates":
+        gap = predicate_gap_from_runs(run_dirs, target=target, include_experimental=include_experimental, seed=seed)
     else:
         gap = combination_gap_from_runs(
             run_dirs,
@@ -492,6 +693,18 @@ def target_combo_bins(
     return sorted(bins)
 
 
+def target_contract_predicates(
+    *,
+    target: str = CORE_STATEFUL_TARGET,
+    include_experimental: bool = False,
+    seed: int = 20260628,
+) -> list[str]:
+    predicates: set[str] = set()
+    for candidate in _target_candidates(target=target, include_experimental=include_experimental, seed=seed):
+        predicates.update(candidate["contract_predicates"])
+    return sorted(predicates)
+
+
 def target_profiles(target: str, include_experimental: bool = False) -> tuple[str, ...]:
     if target == XIANGSHAN_TARGETED_TARGET:
         return XIANGSHAN_TARGETED_PROFILES
@@ -520,6 +733,7 @@ def _target_candidates(*, target: str, include_experimental: bool, seed: int) ->
                     "name": f"{profile}__{scenario.name}",
                     "semantic_bins": semantic_bins_for_scenario(scenario),
                     "combo_bins": combo_bins_for_scenario(scenario),
+                    "contract_predicates": contract_predicates_for_scenario(scenario),
                 }
             )
     return candidates
@@ -534,15 +748,23 @@ def _schedule_entry(candidate: dict[str, Any], gain: set[str], seed: int, *, cov
         "include_smepmp": str(candidate.get("profile") or "").startswith("smepmp"),
         "semantic_bins": candidate["semantic_bins"],
         "combo_bins": candidate["combo_bins"],
+        "contract_predicates": candidate.get("contract_predicates") or [],
         "coverage_mode": coverage_mode,
     }
     if coverage_mode == "semantic":
         entry["covers_missing_bins"] = sorted(gain)
         entry["covers_missing_combo_bins"] = []
+        entry["covers_missing_predicates"] = []
         entry["reason"] = f"covers {len(gain)} missing semantic bins"
+    elif coverage_mode == "predicates":
+        entry["covers_missing_bins"] = []
+        entry["covers_missing_combo_bins"] = []
+        entry["covers_missing_predicates"] = sorted(gain)
+        entry["reason"] = f"covers {len(gain)} missing contract predicates"
     else:
         entry["covers_missing_bins"] = []
         entry["covers_missing_combo_bins"] = sorted(gain)
+        entry["covers_missing_predicates"] = []
         entry["reason"] = f"covers {len(gain)} missing {coverage_mode} combo bins"
     return entry
 

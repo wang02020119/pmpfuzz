@@ -94,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.add_argument("--seed", type=int, default=20260628)
     schedule.add_argument("--out", type=Path, required=True)
     schedule.add_argument("--include-experimental", action="store_true")
-    schedule.add_argument("--coverage-mode", choices=["semantic", "pairwise", "security-triples"], default="semantic")
+    schedule.add_argument("--coverage-mode", choices=["semantic", "pairwise", "security-triples", "predicates"], default="semantic")
 
     feedback = subparsers.add_parser("feedback", help="build the next behavior feedback-guided campaign")
     feedback.add_argument("--from-runs", required=True, help="comma-separated run or repro directories")

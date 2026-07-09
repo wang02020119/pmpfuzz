@@ -33,8 +33,9 @@ class CoverageTest(unittest.TestCase):
             out_exists = out.exists()
 
         self.assertEqual(coverage["total_cases"], 1)
-        self.assertEqual(coverage["schema_version"], 3)
+        self.assertEqual(coverage["schema_version"], 4)
         self.assertEqual(coverage["profiles"]["pmp-boundary"], 1)
+        self.assertEqual(coverage["dut_whitebox"]["provider"], "dut-whitebox")
         self.assertIn("pmp", coverage["coverage_tags"])
         self.assertIn("combo2:profile=pmp-boundary|priv=U|access=load", coverage["combo_bins"])
         self.assertGreater(coverage["target_combo_bins"], coverage["covered_target_combo_bins"])

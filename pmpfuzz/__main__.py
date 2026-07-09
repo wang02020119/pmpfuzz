@@ -12,6 +12,7 @@ from pathlib import Path
 from .capabilities import capability_for_dut, capability_matrix, oracle_applicability_for_result
 from .coverage import write_coverage
 from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_XIANGSHAN_EMU, XIANGSHAN_VANILLA_ROOT, make_dut
+from .dut_coverage import write_dut_coverage
 from .emitter import AssemblyEmitter
 from .feedback import write_feedback
 from .runner import DEFAULT_SPIKE, RunnerConfig, parse_time_budget, run_campaign
@@ -87,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
     coverage = subparsers.add_parser("coverage", help="write coverage bins for a campaign")
     coverage.add_argument("--run-dir", type=Path, required=True)
 
+    dut_coverage = subparsers.add_parser("dut-coverage", help="write observed whitebox DUT coverage for a campaign")
+    dut_coverage.add_argument("--run-dir", type=Path, required=True)
+    dut_coverage.add_argument("--out", type=Path, default=None)
+    dut_coverage.add_argument("--artifact-dir", type=Path, default=None)
+
     schedule = subparsers.add_parser("schedule", help="build the next semantic coverage-guided campaign")
     schedule.add_argument("--from-runs", required=True, help="comma-separated run directories")
     schedule.add_argument("--target", default=CORE_STATEFUL_TARGET)
@@ -154,6 +160,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "coverage":
         out = write_coverage(args.run_dir)
         print(f"coverage={out}")
+        return 0
+    if args.command == "dut-coverage":
+        out = write_dut_coverage(args.run_dir, out_dir=args.out, artifact_dir=args.artifact_dir)
+        print(f"dut-coverage={out}")
         return 0
     if args.command == "schedule":
         schedule_path = write_schedule(
@@ -393,6 +403,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         whitebox_artifacts=args.whitebox_artifacts,
     )
     results = run_campaign(config)
+    if args.whitebox_artifacts:
+        signal_path, dut_coverage_path = _write_observed_whitebox_outputs(config.out)
+        print(f"whitebox-signals={signal_path} dut-coverage={dut_coverage_path}")
     failed = [result for result in results if result.status not in {"pass", "setup_unsupported"}]
     print(
         f"campaign-total={len(results)} pass={sum(1 for result in results if result.status == 'pass')} "
@@ -491,7 +504,14 @@ def _cmd_repro(args: argparse.Namespace) -> int:
         print(f"{dut_name}: {dut_result.status} failure_class={dut_result.failure_class}")
 
     write_aggregate(out)
+    if args.whitebox_artifacts:
+        signal_path, dut_coverage_path = _write_observed_whitebox_outputs(out)
+        print(f"whitebox-signals={signal_path} dut-coverage={dut_coverage_path}")
     return 1 if any_failed else 0
+
+
+def _write_observed_whitebox_outputs(run_dir: Path) -> tuple[Path, Path]:
+    return write_whitebox_signals(run_dir), write_dut_coverage(run_dir)
 
 
 def _repro_assembly_for_dut(case: dict, dut_name: str) -> str:

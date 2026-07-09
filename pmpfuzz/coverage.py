@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .dut_coverage import dut_coverage_from_run
 from .semantic_coverage import (
     CORE_STATEFUL_TARGET,
     OOO_MICROARCH_TARGET,
@@ -38,7 +39,7 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         results.append(read_json(result_path))
 
     coverage: dict[str, Any] = {
-        "schema_version": 3,
+        "schema_version": 4,
         "run_dir": str(run_dir),
         "total_cases": len(cases),
         "total_results": len(results),
@@ -131,6 +132,7 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
             "missing_target_predicates": predicate_gap["missing_target_predicates"],
             "predicate_coverage_rate": predicate_gap["predicate_coverage_rate"],
             "top_predicate_gaps": predicate_gap["top_predicate_gaps"],
+            "dut_whitebox": dut_coverage_from_run(run_dir),
         }
     )
     return coverage

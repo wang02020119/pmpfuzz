@@ -16,9 +16,11 @@ class SourceProbeTest(unittest.TestCase):
         self.assertIn("xiangshan-clean", by_dut)
         self.assertIn("boom-clean", by_dut)
         self.assertIn("rocket-clean", by_dut)
+        self.assertIn("cva6-clean", by_dut)
         self.assertIn("pmp-check", by_dut["xiangshan-clean"])
         self.assertIn("ptw-request", by_dut["boom-clean"])
         self.assertIn("exception-arbitration", by_dut["rocket-clean"])
+        self.assertIn("pmp-csr", by_dut["cva6-clean"])
         self.assertTrue(all("PMFUZZ_PROBE" in spec.instrumentation_hint for spec in specs))
 
     def test_discovers_source_probe_sites_in_fake_dut_trees(self):
@@ -52,16 +54,28 @@ class SourceProbeTest(unittest.TestCase):
                 chipyard / "generators/rocket-chip/src/main/scala/rocket/TLB.scala",
                 "val ptw_ae_array = Reg(Vec(nWays, Bool()))\n",
             )
+            _write(
+                chipyard / "generators/cva6/src/main/resources/cva6/vsrc/CVA6CoreBlackbox.preprocessed.sv",
+                "assign pmpcfg_o = pmpcfg_q;\n"
+                "always_comb begin : exception_handling exception_o.valid = access_exception; end\n"
+                "assign flush_tlb_o = sfence_vma_i;\n",
+            )
 
             manifest = discover_source_probes(
-                ["xiangshan-clean", "boom-clean", "rocket-clean"],
-                roots={"xiangshan-clean": xiangshan, "boom-clean": chipyard, "rocket-clean": chipyard},
+                ["xiangshan-clean", "boom-clean", "rocket-clean", "cva6-clean"],
+                roots={
+                    "xiangshan-clean": xiangshan,
+                    "boom-clean": chipyard,
+                    "rocket-clean": chipyard,
+                    "cva6-clean": chipyard,
+                },
             )
 
         found = [probe for probe in manifest["probes"] if probe["status"] == "source_found"]
         self.assertGreaterEqual(len(found), 6)
         self.assertTrue(any(probe["probe_id"] == "boom_ptw_response_ae" for probe in found))
         self.assertTrue(any(probe["probe_id"] == "rocket_ptw_access_exception" for probe in found))
+        self.assertTrue(any(probe["probe_id"] == "cva6_pmp_csr_state" for probe in found))
         self.assertTrue(all(probe["line"] >= 1 for probe in found))
         self.assertTrue(all(probe["matched_text"] for probe in found))
         self.assertTrue(all("PMFUZZ_PROBE" in probe["instrumentation_hint"] for probe in found))
@@ -85,10 +99,10 @@ class SourceProbeTest(unittest.TestCase):
     def test_cli_accepts_probe_source_command(self):
         parser = build_parser()
 
-        args = parser.parse_args(["probe-source", "--dut", "xiangshan-clean,boom-clean,rocket-clean", "--out", "out"])
+        args = parser.parse_args(["probe-source", "--dut", "xiangshan-clean,boom-clean,rocket-clean,cva6-clean", "--out", "out"])
 
         self.assertEqual(args.command, "probe-source")
-        self.assertEqual(args.dut, "xiangshan-clean,boom-clean,rocket-clean")
+        self.assertEqual(args.dut, "xiangshan-clean,boom-clean,rocket-clean,cva6-clean")
         self.assertEqual(args.out, Path("out"))
 
     def test_cli_writes_probe_source_manifest_with_explicit_roots(self):

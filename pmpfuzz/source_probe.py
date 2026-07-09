@@ -195,6 +195,54 @@ def default_source_probe_specs() -> tuple[SourceProbeSpec, ...]:
                 'chain=tlb-permission priv=%s access=%s mxr=%d sum=%d allow=%d\\n", ...)'
             ),
         ),
+        SourceProbeSpec(
+            probe_id="cva6_pmp_csr_state",
+            dut="cva6-clean",
+            security_chain="pmp-csr",
+            purpose="Observe CVA6 PMP CSR state that controls pmpcfg/pmpaddr effective rules.",
+            path_candidates=(
+                "generators/cva6/src/main/resources/cva6/vsrc/CVA6CoreBlackbox.preprocessed.sv",
+                "generators/cva6/src/main/resources/cva6/vsrc/CVA6CoreBlackbox.sv",
+            ),
+            patterns=("pmpcfg_o", "pmpaddr_o", "pmpcfg_q", "pmpaddr_q"),
+            signal_keys=("entry", "cfg", "addr", "locked"),
+            instrumentation_hint=(
+                'printf("PMFUZZ_PROBE dut=cva6-clean probe=cva6_pmp_csr_state '
+                'chain=pmp-csr entry=%d cfg=0x%x addr=0x%x\\n", ...)'
+            ),
+        ),
+        SourceProbeSpec(
+            probe_id="cva6_ptw_exception",
+            dut="cva6-clean",
+            security_chain="ptw-response",
+            purpose="Observe CVA6 PTW/TLB access exceptions that decide page-walk PMP outcomes.",
+            path_candidates=(
+                "generators/cva6/src/main/resources/cva6/vsrc/CVA6CoreBlackbox.preprocessed.sv",
+                "generators/cva6/src/main/resources/cva6/vsrc/cva6/src/ptw.sv",
+            ),
+            patterns=("ptw", "access_exception", "exception_o", "flush_tlb_o"),
+            signal_keys=("stage", "level", "cause", "addr", "exception"),
+            instrumentation_hint=(
+                'printf("PMFUZZ_PROBE dut=cva6-clean probe=cva6_ptw_exception '
+                'chain=ptw-response stage=ptw level=%s cause=%d paddr=0x%x\\n", ...)'
+            ),
+        ),
+        SourceProbeSpec(
+            probe_id="cva6_tlb_exception_arbitration",
+            dut="cva6-clean",
+            security_chain="exception-arbitration",
+            purpose="Observe CVA6 TLB exception priority around page/access faults and sfence flushes.",
+            path_candidates=(
+                "generators/cva6/src/main/resources/cva6/vsrc/CVA6CoreBlackbox.preprocessed.sv",
+                "generators/cva6/src/main/resources/cva6/vsrc/cva6/src/tlb.sv",
+            ),
+            patterns=("tlb", "exception", "flush_tlb", "access_exception"),
+            signal_keys=("stage", "cause", "pf", "af", "flush"),
+            instrumentation_hint=(
+                'printf("PMFUZZ_PROBE dut=cva6-clean probe=cva6_tlb_exception_arbitration '
+                'chain=exception-arbitration stage=%s cause=%d af=%d pf=%d\\n", ...)'
+            ),
+        ),
     )
 
 

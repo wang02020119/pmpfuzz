@@ -134,6 +134,35 @@ class SecurityWhiteboxSignalsTest(unittest.TestCase):
         self.assertGreaterEqual(len(payload["signals"]), 2)
         self.assertEqual(payload["signals"][0]["features"]["perf_counter"], "stallCycles_fetch_icachePrefetch_itlbMiss")
 
+    def test_extracts_rtl_assertion_signal_from_verilator_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(
+                run_dir,
+                profile="boom-ptw-pmp-regression",
+                dut="boom-clean",
+                status="infra_failure",
+                failure_class="pipeline_hung",
+            )
+            log = run_dir / "results" / case["name"] / "scenario.log"
+            log.write_text(
+                "[20049000] %Error: BoomCore.sv:1411: Assertion failed in "
+                "TOP.TestDriver.testHarness.tile.core: Assertion failed: Pipeline has hung.\n"
+                '    at core.scala:1330 assert (!(idle_cycles.value(13)), "Pipeline has hung.")\n',
+                encoding="ascii",
+            )
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        signal = payload["signals"][0]
+        self.assertEqual(signal["kind"], "rtl_assertion")
+        self.assertEqual(signal["dut"], "boom-clean")
+        self.assertEqual(signal["features"]["security_chain"], "rtl-assertion")
+        self.assertEqual(signal["features"]["assertion_file"], "BoomCore.sv")
+        self.assertEqual(signal["features"]["assertion_line"], 1411)
+        self.assertIn("Pipeline has hung", signal["features"]["assertion_message"])
+        self.assertGreaterEqual(signal["weight"], 100)
+
     def test_write_whitebox_signals_uses_default_run_subdir(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
@@ -149,19 +178,26 @@ class SecurityWhiteboxSignalsTest(unittest.TestCase):
         self.assertEqual(path.parent.name, "whitebox")
 
 
-def _write_case_result(run_dir: Path, *, profile: str) -> dict:
+def _write_case_result(
+    run_dir: Path,
+    *,
+    profile: str,
+    dut: str = "xiangshan-clean",
+    status: str = "pass",
+    failure_class: str | None = None,
+) -> dict:
     scenario = ScenarioGenerator(seed=20260630, include_smepmp=False, profile=profile).generate_batch(1)[0]
     case = scenario_to_case_dict(scenario, seed=20260630, index=0)
     write_json(run_dir / "cases" / case["name"] / "case.json", case)
     result = result_to_dict(
         case=case,
-        dut="xiangshan-clean",
-        status="pass",
+        dut=dut,
+        status=status,
         elapsed_seconds=0.1,
-        returncode=0,
+        returncode=0 if status == "pass" else 1,
         log=run_dir / "results" / case["name"] / "case.log",
         reason=None,
-        failure_class=None,
+        failure_class=failure_class,
         oracle_applicability="valid",
     )
     write_json(run_dir / "results" / case["name"] / "result.json", result)

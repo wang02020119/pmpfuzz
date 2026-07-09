@@ -25,6 +25,9 @@ ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]+")
 COVERAGE_RE = re.compile(r"COVERAGE:\s*([^,\s]+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)")
 PERF_RE = re.compile(r"\[PERF[^\]]*\].*?:\s*([^,\n]+)\s*,\s*(-?\d+)")
 SOURCE_PROBE_RE = re.compile(r"\bPMFUZZ_PROBE\b\s+(.*)")
+RTL_ASSERTION_RE = re.compile(
+    r"%Error:\s*(?P<file>[^:\n]+):(?P<line>\d+):\s*Assertion failed(?: in (?P<scope>.*?))?:\s*(?P<message>.*)"
+)
 
 
 def extract_security_whitebox_signals(run_dir: Path, *, artifact_dir: Path | None = None) -> dict[str, Any]:
@@ -76,6 +79,7 @@ def _signals_from_artifact(case: dict[str, Any], result: dict[str, Any], path: P
     signals.extend(_source_probe_signals(case, result, path, text))
     signals.extend(_coverage_point_signals(case, result, path, text))
     signals.extend(_perf_counter_signals(case, result, path, text))
+    signals.extend(_rtl_assertion_signals(case, result, path, text))
     return signals
 
 
@@ -278,6 +282,36 @@ def _source_probe_signals(case: dict[str, Any], result: dict[str, Any], path: Pa
     return signals
 
 
+def _rtl_assertion_signals(case: dict[str, Any], result: dict[str, Any], path: Path, text: str) -> list[dict[str, Any]]:
+    signals = []
+    for line_number, line in enumerate(text.splitlines(), 1):
+        match = RTL_ASSERTION_RE.search(line)
+        if not match:
+            continue
+        message = match.group("message").strip()
+        if not _is_whitebox_assertion_relevant(message, result):
+            continue
+        signals.append(
+            _signal(
+                case=case,
+                result=result,
+                kind="rtl_assertion",
+                weight=_rtl_assertion_weight(message, result),
+                features={
+                    **_base_features(case, result),
+                    "security_chain": "rtl-assertion",
+                    "artifact": "rtl-log",
+                    "assertion_file": match.group("file").strip(),
+                    "assertion_line": int(match.group("line")),
+                    "assertion_scope": (match.group("scope") or "").strip() or None,
+                    "assertion_message": message,
+                },
+                evidence={"artifact": str(path), "line": line_number, "text": line[:220]},
+            )
+        )
+    return signals
+
+
 def _parse_source_probe_fields(text: str) -> dict[str, str]:
     fields: dict[str, str] = {}
     for token in text.strip().split():
@@ -346,6 +380,23 @@ def _perf_counter_weight(counter: str, line: str, value: int) -> int:
     if any(keyword in line_text for keyword in ("exception", "trap", "pmp")):
         return 65 + min(value, 20)
     return 35 + min(value, 30)
+
+
+def _is_whitebox_assertion_relevant(message: str, result: dict[str, Any]) -> bool:
+    failure_class = str(result.get("failure_class") or "").lower()
+    message_lower = message.lower()
+    if failure_class in {"pipeline_hung", "rtl_assertion"}:
+        return True
+    return _is_security_coverage_point(message_lower)
+
+
+def _rtl_assertion_weight(message: str, result: dict[str, Any]) -> int:
+    failure_class = str(result.get("failure_class") or "").lower()
+    if failure_class == "pipeline_hung" or "pipeline has hung" in message.lower():
+        return 105
+    if _is_security_coverage_point(message):
+        return 90
+    return 70
 
 
 def _signal(
@@ -484,6 +535,8 @@ def _dedupe_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 str((signal.get("features") or {}).get("coverage_point")),
                 str((signal.get("features") or {}).get("perf_counter")),
                 str((signal.get("features") or {}).get("ptw_level")),
+                str((signal.get("features") or {}).get("assertion_file")),
+                str((signal.get("features") or {}).get("assertion_line")),
             ]
         )
         if key not in unique or int(signal.get("weight") or 0) > int(unique[key].get("weight") or 0):

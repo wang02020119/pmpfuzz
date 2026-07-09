@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_env_args(probe_dut)
 
     probe_source = subparsers.add_parser("probe-source", help="discover source-level probe insertion points")
-    probe_source.add_argument("--dut", default="xiangshan-clean,boom-clean,rocket-clean")
+    probe_source.add_argument("--dut", default="xiangshan-clean,boom-clean,rocket-clean,cva6-clean")
     probe_source.add_argument("--out", type=Path, required=True)
     probe_source.add_argument("--xiangshan-root", type=Path, default=None)
     _add_common_env_args(probe_source)
@@ -291,7 +291,7 @@ def _source_probe_roots(args: argparse.Namespace, duts: list[str]) -> dict[str, 
     for dut_name in duts:
         if dut_name == "xiangshan-clean":
             roots[dut_name] = args.xiangshan_root or XIANGSHAN_VANILLA_ROOT
-        elif dut_name in {"boom-clean", "rocket-clean"}:
+        elif dut_name in {"boom-clean", "rocket-clean", "cva6-clean", "cva6"}:
             roots[dut_name] = args.chipyard_dir or DEFAULT_CLEAN_CHIPYARD_DIR
         else:
             roots[dut_name] = args.chipyard_dir or DEFAULT_CHIPYARD_DIR

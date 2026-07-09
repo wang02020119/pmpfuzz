@@ -178,7 +178,8 @@ class DutAdapterTest(unittest.TestCase):
 
         self.assertIsInstance(dut, ChipyardDirectDut)
         self.assertIn("+verbose", command)
-        self.assertLess(command.index("+verbose"), command.index("+permissive"))
+        self.assertLess(command.index("+permissive"), command.index("+verbose"))
+        self.assertLess(command.index("+verbose"), command.index("+permissive-off"))
 
     def test_cva6_direct_dut_keeps_verbose_logs_off_by_default(self):
         dut = make_dut(

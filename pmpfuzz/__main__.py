@@ -12,7 +12,7 @@ from pathlib import Path
 from .capabilities import capability_for_dut, capability_matrix, oracle_applicability_for_result
 from .coverage import write_coverage
 from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_XIANGSHAN_EMU, XIANGSHAN_VANILLA_ROOT, make_dut
-from .dut_coverage import write_dut_coverage
+from .dut_coverage import write_dut_coverage, write_dut_coverage_matrix
 from .emitter import AssemblyEmitter
 from .feedback import write_feedback
 from .runner import DEFAULT_SPIKE, RunnerConfig, parse_time_budget, run_campaign
@@ -93,6 +93,13 @@ def build_parser() -> argparse.ArgumentParser:
     dut_coverage.add_argument("--out", type=Path, default=None)
     dut_coverage.add_argument("--artifact-dir", type=Path, default=None)
 
+    dut_coverage_matrix = subparsers.add_parser(
+        "dut-coverage-matrix",
+        help="write a cross-DUT observed whitebox coverage matrix",
+    )
+    dut_coverage_matrix.add_argument("--from-runs", required=True, help="comma-separated run directories")
+    dut_coverage_matrix.add_argument("--out", type=Path, required=True)
+
     schedule = subparsers.add_parser("schedule", help="build the next semantic coverage-guided campaign")
     schedule.add_argument("--from-runs", required=True, help="comma-separated run directories")
     schedule.add_argument("--target", default=CORE_STATEFUL_TARGET)
@@ -164,6 +171,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "dut-coverage":
         out = write_dut_coverage(args.run_dir, out_dir=args.out, artifact_dir=args.artifact_dir)
         print(f"dut-coverage={out}")
+        return 0
+    if args.command == "dut-coverage-matrix":
+        out = write_dut_coverage_matrix(_parse_run_dirs(args.from_runs), out_dir=args.out)
+        print(f"dut-coverage-matrix={out}")
         return 0
     if args.command == "schedule":
         schedule_path = write_schedule(

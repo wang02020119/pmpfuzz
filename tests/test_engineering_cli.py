@@ -21,6 +21,10 @@ class EngineeringCliTest(unittest.TestCase):
         self.assertEqual(parser.parse_args(["coverage", "--run-dir", "out"]).command, "coverage")
         self.assertEqual(parser.parse_args(["dut-coverage", "--run-dir", "out"]).command, "dut-coverage")
         self.assertEqual(
+            parser.parse_args(["dut-coverage-matrix", "--from-runs", "a,b", "--out", "out"]).command,
+            "dut-coverage-matrix",
+        )
+        self.assertEqual(
             parser.parse_args(["schedule", "--from-runs", "seed", "--out", "next"]).command,
             "schedule",
         )

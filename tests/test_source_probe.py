@@ -217,6 +217,8 @@ class SourceProbeTest(unittest.TestCase):
 
             self.assertGreaterEqual(len(instrumented), 5)
             self.assertIn("PMFUZZ_PROBE dut=rocket-clean probe=rocket_pmp_checker", patch_text)
+            self.assertIn("PMFUZZ_PROBE dut=boom-clean probe=boom_lsu_tlb_pmp_check", patch_text)
+            self.assertIn("PMFUZZ_PROBE dut=boom-clean probe=boom_ptw_ae_array", patch_text)
             self.assertIn("PMFUZZ_PROBE dut=boom-clean probe=boom_ptw_request", patch_text)
             self.assertIn("PMFUZZ_PROBE dut=cva6-clean probe=cva6_ptw_exception", patch_text)
             self.assertTrue(instrumentation_json.exists())

@@ -19,7 +19,7 @@ from .runner import DEFAULT_SPIKE, RunnerConfig, parse_time_budget, run_campaign
 from .scenario import ScenarioGenerator
 from .schema import read_json, result_to_dict, scenario_to_case_dict, write_aggregate, write_json
 from .semantic_coverage import CORE_STATEFUL_TARGET, scenarios_from_schedule, write_schedule
-from .source_probe import write_source_probe_manifest
+from .source_probe import write_source_probe_instrumentation, write_source_probe_manifest
 from .triage import triage_run, write_report
 from .whitebox import write_whitebox_signals
 
@@ -55,6 +55,15 @@ def build_parser() -> argparse.ArgumentParser:
     probe_source.add_argument("--out", type=Path, required=True)
     probe_source.add_argument("--xiangshan-root", type=Path, default=None)
     _add_common_env_args(probe_source)
+
+    source_probe_instrument = subparsers.add_parser(
+        "source-probe-instrument",
+        help="write source-level PMFUZZ_PROBE instrumentation patches",
+    )
+    source_probe_instrument.add_argument("--dut", default="rocket-clean,boom-clean,cva6-clean")
+    source_probe_instrument.add_argument("--out", type=Path, required=True)
+    source_probe_instrument.add_argument("--xiangshan-root", type=Path, default=None)
+    _add_common_env_args(source_probe_instrument)
 
     gen = subparsers.add_parser("gen", help="generate cases without running a DUT")
     _add_generation_args(gen)
@@ -154,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_probe_dut(args)
     if args.command == "probe-source":
         return _cmd_probe_source(args)
+    if args.command == "source-probe-instrument":
+        return _cmd_source_probe_instrument(args)
     if args.command == "gen":
         return _cmd_gen(args)
     if args.command == "run":
@@ -282,6 +293,19 @@ def _cmd_probe_source(args: argparse.Namespace) -> int:
     print(
         f"source-probes={out} total={summary['total']} found={summary['source_found']} "
         f"missing={summary['source_missing'] + summary['root_missing']} pattern_missing={summary['pattern_missing']}"
+    )
+    return 0
+
+
+def _cmd_source_probe_instrument(args: argparse.Namespace) -> int:
+    duts = [item.strip() for item in args.dut.split(",") if item.strip()]
+    roots = _source_probe_roots(args, duts)
+    payload = write_source_probe_instrumentation(duts, roots=roots, out_dir=args.out)
+    summary = payload["summary"]
+    print(
+        f"source-probe-instrumentation={args.out / 'source_probe_instrumentation.json'} "
+        f"instrumented={summary['instrumented']} patches={summary['patch_count']} "
+        f"unsupported={summary['unsupported_template']} anchor_missing={summary['anchor_missing']}"
     )
     return 0
 

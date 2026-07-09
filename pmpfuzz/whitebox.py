@@ -253,9 +253,8 @@ def _source_probe_signals(case: dict[str, Any], result: dict[str, Any], path: Pa
         if not match:
             continue
         fields = _parse_source_probe_fields(match.group(1))
-        probe_result = {**result}
-        if fields.get("dut"):
-            probe_result["dut"] = fields["dut"]
+        reported_dut = fields.get("dut")
+        probe_result = _source_probe_result(result, reported_dut)
         signals.append(
             _signal(
                 case=case,
@@ -267,7 +266,8 @@ def _source_probe_signals(case: dict[str, Any], result: dict[str, Any], path: Pa
                     "security_chain": fields.get("chain") or _source_probe_chain(fields.get("probe")),
                     "artifact": "source-probe-log",
                     "probe": fields.get("probe"),
-                    "source_probe_dut": fields.get("dut"),
+                    "source_probe_dut": probe_result.get("dut"),
+                    "source_probe_reported_dut": reported_dut,
                     "pmp_stage": fields.get("stage"),
                     "ptw_level": fields.get("level"),
                     "address": fields.get("paddr") or fields.get("addr"),
@@ -280,6 +280,14 @@ def _source_probe_signals(case: dict[str, Any], result: dict[str, Any], path: Pa
             )
         )
     return signals
+
+
+def _source_probe_result(result: dict[str, Any], reported_dut: str | None) -> dict[str, Any]:
+    probe_result = {**result}
+    result_dut = str(probe_result.get("dut") or "")
+    if (not result_dut or result_dut == "unknown") and reported_dut:
+        probe_result["dut"] = reported_dut
+    return probe_result
 
 
 def _rtl_assertion_signals(case: dict[str, Any], result: dict[str, Any], path: Path, text: str) -> list[dict[str, Any]]:

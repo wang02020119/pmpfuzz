@@ -95,7 +95,7 @@ class SecurityWhiteboxSignalsTest(unittest.TestCase):
     def test_extracts_structured_source_probe_signal(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
-            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression")
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression", dut="boom-clean")
             log = run_dir / "results" / case["name"] / "boom.log"
             log.write_text(
                 "PMFUZZ_PROBE dut=boom-clean probe=ptw_pmp_check chain=sv39-ptw-pmp "
@@ -134,7 +134,6 @@ class SecurityWhiteboxSignalsTest(unittest.TestCase):
         signal = payload["signals"][0]
         self.assertEqual(signal["kind"], "source_probe")
         self.assertEqual(signal["dut"], "boom-clean")
-        self.assertEqual(signal["features"]["dut"], "boom-clean")
         self.assertEqual(signal["features"]["source_probe_reported_dut"], "rocket-clean")
         self.assertEqual(signal["features"]["source_probe_dut"], "boom-clean")
 

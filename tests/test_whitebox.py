@@ -118,6 +118,26 @@ class SecurityWhiteboxSignalsTest(unittest.TestCase):
         self.assertEqual(signal["features"]["observed_mcause"], 5)
         self.assertGreaterEqual(signal["weight"], 100)
 
+    def test_source_probe_signal_uses_result_dut_when_shared_source_reports_static_dut(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression", dut="boom-clean")
+            log = run_dir / "results" / case["name"] / "boom.log"
+            log.write_text(
+                "PMFUZZ_PROBE dut=rocket-clean probe=rocket_pmp_checker chain=pmp-check "
+                "stage=pmp addr=0x10000 prv=3 size=3 r=1 w=1 x=1\n",
+                encoding="ascii",
+            )
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        signal = payload["signals"][0]
+        self.assertEqual(signal["kind"], "source_probe")
+        self.assertEqual(signal["dut"], "boom-clean")
+        self.assertEqual(signal["features"]["dut"], "boom-clean")
+        self.assertEqual(signal["features"]["source_probe_reported_dut"], "rocket-clean")
+        self.assertEqual(signal["features"]["source_probe_dut"], "boom-clean")
+
     def test_specific_tlb_perf_counter_ranks_above_generic_access_counter(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)

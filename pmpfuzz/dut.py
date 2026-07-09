@@ -253,11 +253,10 @@ class ChipyardDirectDut:
 
     def command_for(self, elf: Path) -> list[str]:
         dramsim_ini = self.chipyard_dir / "generators" / "testchipip" / "src" / "main" / "resources" / "dramsim2_ini"
-        command = [_posix_arg(self.simulator_path())]
+        command = [_posix_arg(self.simulator_path()), "+permissive"]
         if self.whitebox_artifacts:
             command.append("+verbose")
         command.extend([
-            "+permissive",
             "+dramsim",
             f"+dramsim_ini_dir={_posix_arg(dramsim_ini)}",
             f"+max-cycles={self.max_cycles}",

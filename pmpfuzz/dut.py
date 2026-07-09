@@ -204,6 +204,102 @@ class SpikeDut:
         )
 
 
+class ChipyardDirectDut:
+    def __init__(
+        self,
+        *,
+        dut_name: str,
+        chipyard_dir: Path = DEFAULT_CLEAN_CHIPYARD_DIR,
+        config: str,
+        simulator_names: tuple[str, ...],
+        simulator_binary: Path | None = None,
+        riscv: Path = DEFAULT_RISCV,
+        java_home: Path = DEFAULT_JAVA_HOME,
+        max_cycles: int = 10_000_000,
+    ) -> None:
+        self.name = dut_name
+        self.chipyard_dir = chipyard_dir
+        self.config = config
+        self.simulator_names = simulator_names
+        self.simulator_binary = simulator_binary
+        self.riscv = riscv
+        self.java_home = java_home
+        self.max_cycles = max_cycles
+
+    def simulator_path(self) -> Path:
+        if self.simulator_binary is not None:
+            return self.simulator_binary
+        sim_dir = self.chipyard_dir / "sims" / "verilator"
+        candidates = tuple(sim_dir / name for name in self.simulator_names)
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0]
+
+    def command_for(self, elf: Path) -> list[str]:
+        dramsim_ini = self.chipyard_dir / "generators" / "testchipip" / "src" / "main" / "resources" / "dramsim2_ini"
+        return [
+            _posix_arg(self.simulator_path()),
+            "+permissive",
+            "+dramsim",
+            f"+dramsim_ini_dir={_posix_arg(dramsim_ini)}",
+            f"+max-cycles={self.max_cycles}",
+            f"+loadmem={_posix_arg(elf)}",
+            "+permissive-off",
+            _posix_arg(elf),
+        ]
+
+    def env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        env["RISCV"] = _posix_arg(self.riscv)
+        env["JAVA_HOME"] = _posix_arg(self.java_home)
+        conda_bin = self.chipyard_dir / ".conda-env" / "bin"
+        circt_bin = self.chipyard_dir / "tools" / "circt" / "bin"
+        path_prefix = [
+            self.java_home / "bin",
+            self.riscv / "bin",
+        ]
+        if circt_bin.exists():
+            path_prefix.append(circt_bin)
+        if conda_bin.exists():
+            path_prefix.append(conda_bin)
+        env["PATH"] = ":".join(_posix_arg(path) for path in path_prefix) + f":{env.get('PATH', '')}"
+        return env
+
+    def run(self, elf: Path, *, timeout_seconds: int, log_path: Path) -> DutRunResult:
+        start = time.monotonic()
+        timed_out, returncode, stdout = _run_command_to_log(
+            self.command_for(elf),
+            cwd=self.chipyard_dir / "sims" / "verilator",
+            env=self.env(),
+            timeout_seconds=timeout_seconds,
+            log_path=log_path,
+        )
+        if timed_out:
+            return DutRunResult(
+                dut=self.name,
+                status="timeout",
+                elapsed_seconds=time.monotonic() - start,
+                log=str(log_path),
+                failure_class="timeout",
+                reason="chipyard direct simulator timeout",
+            )
+        parsed = parse_chipyard_log(stdout, returncode or 0)
+        return DutRunResult(
+            dut=self.name,
+            status=parsed.status,
+            elapsed_seconds=time.monotonic() - start,
+            returncode=returncode,
+            observed_code=parsed.observed_code,
+            failure_class=parsed.failure_class,
+            observed_mcause=parsed.observed_mcause,
+            observed_mtval=parsed.observed_mtval,
+            observed_tohost=parsed.observed_tohost,
+            log=str(log_path),
+            reason=parsed.reason,
+        )
+
+
 class ChipyardMakeDut:
     def __init__(
         self,
@@ -399,7 +495,7 @@ def make_dut(
     dut_bin: Path | None = None,
     simlen: int = 100000,
     whitebox_artifacts: bool = False,
-) -> SpikeDut | ChipyardMakeDut | CascadeRocketDut | XiangShanDut:
+) -> SpikeDut | ChipyardDirectDut | ChipyardMakeDut | CascadeRocketDut | XiangShanDut:
     if dut == "spike":
         return SpikeDut(spike=spike, isa=isa)
     if dut == "rocket":
@@ -433,13 +529,12 @@ def make_dut(
             set_verilator_bin_env=False,
         )
     if dut in {"cva6", "cva6-clean"}:
-        return ChipyardMakeDut(
+        return ChipyardDirectDut(
             dut_name=dut,
             chipyard_dir=chipyard_dir,
             config="CVA6Config",
-            verilator_bin_dir=chipyard_dir / ".conda-env" / "bin",
-            make_vars=("VERILATOR_THREADS=1",),
-            set_verilator_bin_env=False,
+            simulator_names=("simulator-chipyard.harness-CVA6Config", "simulator-chipyard-CVA6Config"),
+            simulator_binary=dut_bin,
         )
     if dut == "rocket-cascade":
         return CascadeRocketDut(binary=dut_bin or DEFAULT_CASCADE_ROCKET, simlen=simlen)

@@ -4,6 +4,7 @@ from pathlib import Path
 from pmpfuzz.diagnostics import FailureClass, PASS_TOHOST, encode_tohost_failure
 from pmpfuzz.dut import (
     CascadeRocketDut,
+    ChipyardDirectDut,
     ChipyardMakeDut,
     DEFAULT_XIANGSHAN_EMU,
     XiangShanDut,
@@ -129,20 +130,28 @@ class DutAdapterTest(unittest.TestCase):
 
         command = dut.command_for(Path("/tmp/case.elf"))
 
+        self.assertIsInstance(dut, ChipyardDirectDut)
         self.assertEqual(dut.config, "CVA6Config")
-        self.assertIn("VERILATOR_THREADS=1", command)
+        self.assertEqual(command[0], "/clean-chipyard/sims/verilator/simulator-chipyard.harness-CVA6Config")
+        self.assertIn("+dramsim", command)
+        self.assertIn("+loadmem=/tmp/case.elf", command)
         self.assertNotIn("verilator_cva6_wrapper.sh", " ".join(command))
 
-    def test_cva6_clean_alias_uses_cva6_config(self):
+    def test_cva6_clean_alias_uses_direct_simulator_binary_when_provided(self):
         dut = make_dut(
             dut="cva6-clean",
             spike="spike",
             isa="rv64gc",
             chipyard_dir=Path("/clean-chipyard"),
+            dut_bin=Path("/tmp/cva6-sim"),
         )
 
+        command = dut.command_for(Path("/tmp/case.elf"))
+
+        self.assertIsInstance(dut, ChipyardDirectDut)
         self.assertEqual(dut.name, "cva6-clean")
         self.assertEqual(dut.config, "CVA6Config")
+        self.assertEqual(command[0], "/tmp/cva6-sim")
 
     def test_xiangshan_clean_uses_direct_openxiangshan_emu(self):
         dut = make_dut(

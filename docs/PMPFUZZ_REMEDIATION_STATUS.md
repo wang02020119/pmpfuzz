@@ -3,6 +3,7 @@
 更新时间：2026-07-10  
 分支：`feature/real-whitebox-dut-coverage`  
 RED 测试检查点：`e7cb550 test: add reproducers for PMP security verdict flaws`
+GREEN 修复检查点：`1158a8f fix: harden PMP oracle and DUT evidence pipeline`
 
 ## 本轮整改范围
 
@@ -47,7 +48,7 @@ RED 测试检查点：`e7cb550 test: add reproducers for PMP security verdict fl
    `python -m coverage run --source=pmpfuzz -m unittest discover -s tests`
    `python -m coverage report --show-missing`
 6. 执行 `compileall`、`git diff --check`、差异审查，更新本文件。
-7. 当前剩余动作：创建 GREEN 修复提交；不要提交用户原有的 `paper/` 目录。
+7. 六项整改与 GREEN 提交已经完成；后续若继续扩大实验矩阵，从本文件和上述两个检查点续跑。不要提交用户原有的 `paper/` 目录。
 
 ## 工作区约束
 

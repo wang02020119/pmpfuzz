@@ -1,7 +1,7 @@
 # PMPFuzz 整改续跑记录
 
-更新时间：2026-07-10  
-分支：`feature/real-whitebox-dut-coverage`  
+更新时间：2026-07-10
+分支：`feature/real-whitebox-dut-coverage`
 RED 测试检查点：`e7cb550 test: add reproducers for PMP security verdict flaws`
 GREEN 修复检查点：`1158a8f fix: harden PMP oracle and DUT evidence pipeline`
 

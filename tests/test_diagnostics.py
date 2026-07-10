@@ -2,15 +2,37 @@ import unittest
 
 from pmpfuzz.diagnostics import (
     FailureClass,
+    ObservationKind,
+    ObservationPhase,
     classify_log_failure,
+    decode_observation_payload,
     decode_tohost_payload,
     encode_failure_payload,
+    encode_observation_payload,
     encode_tohost_failure,
 )
 from pmpfuzz.dut import parse_chipyard_log
 
 
 class DiagnosticsTest(unittest.TestCase):
+    def test_observation_payload_round_trips_raw_trap_event(self):
+        payload = encode_observation_payload(
+            ObservationKind.TRAP,
+            mcause=5,
+            mtval=0x80013000,
+            mepc=0x80004024,
+            phase=ObservationPhase.PROBE,
+        )
+
+        event = decode_observation_payload(payload)
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.kind, ObservationKind.TRAP)
+        self.assertEqual(event.mcause, 5)
+        self.assertEqual(event.mtval, 0x80013000)
+        self.assertEqual(event.mepc_low, 0x4024)
+        self.assertEqual(event.phase, ObservationPhase.PROBE)
+
     def test_tohost_failure_payload_round_trips_class_mcause_and_mtval(self):
         payload = encode_failure_payload(FailureClass.WRONG_MCAUSE, mcause=13, mtval=0x80001234)
         decoded = decode_tohost_payload(payload)

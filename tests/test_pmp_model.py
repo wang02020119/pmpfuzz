@@ -64,6 +64,41 @@ class PmpModelTest(unittest.TestCase):
         self.assertFalse(result.allowed)
         self.assertEqual(result.match_index, 0)
 
+    def test_partial_overlap_with_lower_entry_fails_instead_of_falling_through(self):
+        model = PmpModel(
+            entries=[
+                PmpEntry(
+                    index=0,
+                    address_mode=AddressMode.NAPOT,
+                    pmpaddr=PmpEntry.encode_napot(base=0x1000, size=8),
+                    read=False,
+                    write=False,
+                    execute=False,
+                    locked=False,
+                ),
+                PmpEntry(
+                    index=1,
+                    address_mode=AddressMode.NAPOT,
+                    pmpaddr=PmpEntry.encode_napot(base=0x1000, size=0x1000),
+                    read=True,
+                    write=True,
+                    execute=True,
+                    locked=False,
+                ),
+            ]
+        )
+
+        result = model.check(
+            privilege=Privilege.U,
+            access=Access.LOAD,
+            physical_address=0x1000,
+            size=16,
+        )
+
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.match_index, 0)
+        self.assertIn("partially", result.reason)
+
     def test_napot_encoding_covers_the_full_requested_power_of_two_region(self):
         model = PmpModel(
             entries=[

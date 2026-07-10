@@ -1,5 +1,7 @@
+import inspect
 import unittest
 
+import pmpfuzz.emitter as emitter_module
 from pmpfuzz.emitter import AssemblyEmitter
 from pmpfuzz.scenario import MEM_BASE, ScenarioGenerator
 from pmpfuzz.mmu import PageTableEntry, Sv39Mapping, TranslationMode
@@ -8,6 +10,12 @@ from pmpfuzz.scenario import AccessProbe, PmpScenario
 
 
 class AssemblyEmitterTest(unittest.TestCase):
+    def test_emitter_reports_observations_without_importing_oracle_decisions(self):
+        source = inspect.getsource(emitter_module)
+
+        self.assertNotIn("evaluate_scenario", source)
+        self.assertNotIn("expected_cause", source)
+
     def test_emits_machine_mode_probe_with_trap_handler_and_tohost(self):
         scenario = PmpScenario(
             name="deny_s_load",

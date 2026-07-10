@@ -1,7 +1,14 @@
 import unittest
 from pathlib import Path
 
-from pmpfuzz.diagnostics import FailureClass, PASS_TOHOST, encode_tohost_failure
+from pmpfuzz.diagnostics import (
+    FailureClass,
+    ObservationKind,
+    ObservationPhase,
+    PASS_TOHOST,
+    encode_observation_payload,
+    encode_tohost_failure,
+)
 from pmpfuzz.dut import (
     CascadeRocketDut,
     ChipyardDirectDut,
@@ -47,6 +54,29 @@ class DutAdapterTest(unittest.TestCase):
         self.assertEqual(parse_chipyard_log("*** PASSED ***", returncode=0).status, "pass")
         self.assertEqual(parse_chipyard_log("*** FAILED *** (tohost = 3)", returncode=0).status, "fail")
         self.assertEqual(parse_chipyard_log("assert failed", returncode=1).status, "infra_failure")
+
+    def test_empty_success_logs_are_infrastructure_failures(self):
+        for parser in (parse_spike_log, parse_chipyard_log):
+            with self.subTest(parser=parser.__name__):
+                result = parser("", returncode=0)
+                self.assertEqual(result.status, "infra_failure")
+                self.assertEqual(result.failure_class, "missing_completion_marker")
+
+    def test_observation_payload_is_returned_for_host_side_judgment(self):
+        payload = encode_observation_payload(
+            ObservationKind.TRAP,
+            mcause=5,
+            mtval=0x80013000,
+            mepc=0x80004020,
+            phase=ObservationPhase.PROBE,
+        )
+
+        result = parse_chipyard_log(f"*** FAILED *** (tohost = {payload})", returncode=1)
+
+        self.assertEqual(result.status, "observed")
+        self.assertIsNotNone(result.observation)
+        self.assertEqual(result.observation.kind, ObservationKind.TRAP)
+        self.assertEqual(result.observation.mcause, 5)
 
     def test_spike_log_parser_treats_failed_marker_as_fail_even_with_zero_returncode(self):
         result = parse_spike_log("*** FAILED *** (tohost = 16384)\n", returncode=0)

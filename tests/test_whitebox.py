@@ -10,6 +10,60 @@ from pmpfuzz.whitebox import extract_security_whitebox_signals, write_whitebox_s
 
 
 class SecurityWhiteboxSignalsTest(unittest.TestCase):
+    def test_artifacts_are_bound_to_their_own_dut_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(
+                seed=20260630,
+                include_smepmp=False,
+                profile="boom-ptw-pmp-regression",
+            ).generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=20260630, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+
+            for dut, filename in (("rocket-clean", "rocket.log"), ("boom-clean", "boom.log")):
+                result_dir = run_dir / "results" / f"{case['name']}_{dut}"
+                log = result_dir / filename
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text(
+                    f"PMFUZZ_PROBE dut={dut} probe=pmp_check chain=pmp-check stage=pmp addr=0x80008000 allow=1\n",
+                    encoding="ascii",
+                )
+                write_json(
+                    result_dir / "result.json",
+                    result_to_dict(
+                        case=case,
+                        dut=dut,
+                        status="pass",
+                        elapsed_seconds=0.1,
+                        returncode=0,
+                        log=log,
+                        reason=None,
+                    ),
+                )
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        pairs = {
+            (signal["dut"], Path(signal["evidence"]["artifact"]).name)
+            for signal in payload["signals"]
+            if signal["kind"] == "source_probe"
+        }
+        self.assertEqual(pairs, {("rocket-clean", "rocket.log"), ("boom-clean", "boom.log")})
+
+    def test_zero_covered_security_point_does_not_create_a_signal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression")
+            log = run_dir / "results" / case["name"] / "coverage.log"
+            log.write_text("COVERAGE: pmp_gate, 10, 0, 0\n", encoding="ascii")
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        self.assertFalse(
+            any(signal["kind"] == "security_coverage_point" for signal in payload["signals"])
+        )
+
     def test_extracts_ptw_pmp_footprint_signal(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)

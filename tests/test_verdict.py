@@ -8,7 +8,7 @@ from pmpfuzz.verdict import verdict_for_run
 
 
 class VerdictTest(unittest.TestCase):
-    def test_boom_ptw_pmp_hang_is_confirmed_new_failure_mode_with_spike_rocket_pass(self):
+    def test_boom_ptw_pmp_hang_is_anomaly_candidate_not_confirmed_vulnerability(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             scenario = ScenarioGenerator(seed=1, include_smepmp=False, profile="boom-ptw-pmp-regression").generate_batch(1)[
@@ -38,12 +38,11 @@ class VerdictTest(unittest.TestCase):
 
             verdict = verdict_for_run(run_dir)
 
-        self.assertTrue(verdict["has_vulnerability"])
-        self.assertEqual(verdict["verdict"], "confirmed_new_failure_mode")
-        self.assertEqual(verdict["impact"], "denial_of_service / missing_precise_trap")
-        self.assertIn(case["name"], verdict["evidence"][0]["case"])
+        self.assertFalse(verdict["has_vulnerability"])
+        self.assertEqual(verdict["verdict"], "anomaly_candidate")
+        self.assertIn(case["name"], verdict["related_evidence"][0]["case"])
 
-    def test_boom_pmp_na4_fetch_failure_is_confirmed_with_spike_rocket_pass(self):
+    def test_boom_pmp_na4_fetch_failure_is_candidate_without_confirmation_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             scenario = ScenarioGenerator(seed=20260629, include_smepmp=False, profile="pmp-boundary").generate_batch(19)[18]
@@ -72,12 +71,11 @@ class VerdictTest(unittest.TestCase):
 
             verdict = verdict_for_run(run_dir)
 
-        self.assertTrue(verdict["has_vulnerability"])
-        self.assertEqual(verdict["verdict"], "confirmed_pmp_fetch_boundary_failure")
-        self.assertEqual(verdict["impact"], "denial_of_service / incorrect_execute_permission_handling")
-        self.assertIn(case["name"], verdict["evidence"][0]["case"])
+        self.assertFalse(verdict["has_vulnerability"])
+        self.assertEqual(verdict["verdict"], "anomaly_candidate")
+        self.assertIn(case["name"], verdict["related_evidence"][0]["case"])
 
-    def test_boom_ooo_fetch_replay_failure_is_confirmed_with_spike_rocket_pass(self):
+    def test_boom_ooo_fetch_replay_failure_is_candidate_without_confirmation_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             scenario = ScenarioGenerator(seed=20260630, include_smepmp=False, profile="ooo-fetch-replay-pmp").generate_batch(1)[
@@ -108,12 +106,11 @@ class VerdictTest(unittest.TestCase):
 
             verdict = verdict_for_run(run_dir)
 
-        self.assertTrue(verdict["has_vulnerability"])
-        self.assertEqual(verdict["verdict"], "confirmed_ooo_fetch_replay_failure")
-        self.assertEqual(verdict["impact"], "denial_of_service / incorrect_fetch_replay_permission_handling")
-        self.assertIn(case["name"], verdict["evidence"][0]["case"])
+        self.assertFalse(verdict["has_vulnerability"])
+        self.assertEqual(verdict["verdict"], "anomaly_candidate")
+        self.assertIn(case["name"], verdict["related_evidence"][0]["case"])
 
-    def test_boom_ooo_ptw_replay_hang_is_confirmed_with_spike_rocket_pass(self):
+    def test_boom_ooo_ptw_replay_hang_is_candidate_without_confirmation_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             scenario = ScenarioGenerator(seed=20260630, include_smepmp=False, profile="ooo-ptw-replay-pmp-deny").generate_batch(1)[
@@ -143,12 +140,11 @@ class VerdictTest(unittest.TestCase):
 
             verdict = verdict_for_run(run_dir)
 
-        self.assertTrue(verdict["has_vulnerability"])
-        self.assertEqual(verdict["verdict"], "confirmed_ooo_ptw_replay_hang")
-        self.assertEqual(verdict["impact"], "denial_of_service / missing_precise_trap")
-        self.assertIn(case["name"], verdict["evidence"][0]["case"])
+        self.assertFalse(verdict["has_vulnerability"])
+        self.assertEqual(verdict["verdict"], "anomaly_candidate")
+        self.assertIn(case["name"], verdict["related_evidence"][0]["case"])
 
-    def test_stateful_side_effect_failure_is_confirmed_vulnerability(self):
+    def test_stateful_side_effect_failure_is_candidate_without_replay_confirmation(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             scenario = ScenarioGenerator(seed=7, include_smepmp=False, profile="pmp-side-effect").generate_batch(1)[0]
@@ -175,10 +171,10 @@ class VerdictTest(unittest.TestCase):
 
             verdict = verdict_for_run(run_dir)
 
-        self.assertTrue(verdict["has_vulnerability"])
-        self.assertEqual(verdict["verdict"], "confirmed_side_effect_failure")
+        self.assertFalse(verdict["has_vulnerability"])
+        self.assertEqual(verdict["verdict"], "anomaly_candidate")
 
-    def test_smepmp_permission_failure_is_confirmed_with_spike_pass(self):
+    def test_smepmp_permission_failure_is_candidate_without_replay_confirmation(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             scenario = ScenarioGenerator(seed=13, include_smepmp=True, profile="smepmp-mmwp-mmode-default-deny").generate_batch(1)[0]
@@ -205,9 +201,42 @@ class VerdictTest(unittest.TestCase):
 
             verdict = verdict_for_run(run_dir)
 
-        self.assertTrue(verdict["has_vulnerability"])
-        self.assertEqual(verdict["verdict"], "confirmed_smepmp_permission_failure")
-        self.assertEqual(verdict["impact"], "wrong_smepmp_permission")
+        self.assertFalse(verdict["has_vulnerability"])
+        self.assertEqual(verdict["verdict"], "anomaly_candidate")
+
+    def test_smepmp_compile_failure_is_infrastructure_not_security_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(
+                seed=13,
+                include_smepmp=True,
+                profile="smepmp-mmwp-mmode-default-deny",
+            ).generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=13, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+
+            for dut, status, failure_class in [
+                ("spike", "pass", None),
+                ("rocket-clean", "compile_fail", "compile_fail"),
+            ]:
+                write_json(
+                    run_dir / "results" / f"{case['name']}_{dut}" / "result.json",
+                    result_to_dict(
+                        case=case,
+                        dut=dut,
+                        status=status,
+                        elapsed_seconds=0.1,
+                        returncode=0 if status == "pass" else 1,
+                        log=run_dir / "results" / f"{case['name']}_{dut}" / "case.log",
+                        reason=failure_class,
+                        failure_class=failure_class,
+                    ),
+                )
+
+            verdict = verdict_for_run(run_dir)
+
+        self.assertFalse(verdict["has_vulnerability"])
+        self.assertEqual(verdict["verdict"], "no_confirmed_vulnerability")
 
     def test_no_fence_stale_permission_is_experimental_not_confirmed(self):
         with tempfile.TemporaryDirectory() as tmp:

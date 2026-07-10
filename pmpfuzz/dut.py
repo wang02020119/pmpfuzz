@@ -8,7 +8,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .diagnostics import PASS_TOHOST, classify_log_failure, decode_tohost_payload, failed_tohost_from_log
+from .diagnostics import (
+    PASS_TOHOST,
+    ObservedEvent,
+    classify_log_failure,
+    decode_observation_payload,
+    decode_tohost_payload,
+    failed_tohost_from_log,
+)
 
 
 DEFAULT_CHIPYARD_DIR = Path("/home/dubhe/wjs/boom_host_deploy/cascade-chipyard")
@@ -162,6 +169,10 @@ class ParsedDutLog:
     observed_mcause: int | None = None
     observed_mtval: int | None = None
     observed_tohost: int | None = None
+    observation: ObservedEvent | None = None
+    observed_stage: str | None = None
+    observed_ptw_level: str | None = None
+    observed_fault_address: int | None = None
 
 
 @dataclass(frozen=True)
@@ -177,6 +188,10 @@ class DutRunResult:
     observed_tohost: int | None = None
     log: str | None = None
     reason: str | None = None
+    observation: ObservedEvent | None = None
+    observed_stage: str | None = None
+    observed_ptw_level: str | None = None
+    observed_fault_address: int | None = None
 
 
 class SpikeDut:
@@ -211,6 +226,10 @@ class SpikeDut:
             observed_tohost=parsed.observed_tohost,
             observed_mcause=parsed.observed_mcause,
             observed_mtval=parsed.observed_mtval,
+            observation=parsed.observation,
+            observed_stage=parsed.observed_stage,
+            observed_ptw_level=parsed.observed_ptw_level,
+            observed_fault_address=parsed.observed_fault_address,
             failure_class=parsed.failure_class,
             log=str(log_path),
             reason=parsed.reason,
@@ -312,6 +331,10 @@ class ChipyardDirectDut:
             observed_mcause=parsed.observed_mcause,
             observed_mtval=parsed.observed_mtval,
             observed_tohost=parsed.observed_tohost,
+            observation=parsed.observation,
+            observed_stage=parsed.observed_stage,
+            observed_ptw_level=parsed.observed_ptw_level,
+            observed_fault_address=parsed.observed_fault_address,
             log=str(log_path),
             reason=parsed.reason,
         )
@@ -398,6 +421,10 @@ class ChipyardMakeDut:
             observed_mcause=parsed.observed_mcause,
             observed_mtval=parsed.observed_mtval,
             observed_tohost=parsed.observed_tohost,
+            observation=parsed.observation,
+            observed_stage=parsed.observed_stage,
+            observed_ptw_level=parsed.observed_ptw_level,
+            observed_fault_address=parsed.observed_fault_address,
             log=str(log_path),
             reason=parsed.reason,
         )
@@ -445,6 +472,10 @@ class CascadeRocketDut:
             observed_mcause=parsed.observed_mcause,
             observed_mtval=parsed.observed_mtval,
             observed_tohost=parsed.observed_tohost,
+            observation=parsed.observation,
+            observed_stage=parsed.observed_stage,
+            observed_ptw_level=parsed.observed_ptw_level,
+            observed_fault_address=parsed.observed_fault_address,
             log=str(log_path),
             reason=parsed.reason,
         )
@@ -503,6 +534,10 @@ class XiangShanDut:
             observed_mcause=parsed.observed_mcause,
             observed_mtval=parsed.observed_mtval,
             observed_tohost=parsed.observed_tohost,
+            observation=parsed.observation,
+            observed_stage=parsed.observed_stage,
+            observed_ptw_level=parsed.observed_ptw_level,
+            observed_fault_address=parsed.observed_fault_address,
             log=str(log_path),
             reason=parsed.reason,
         )
@@ -628,6 +663,15 @@ def parse_cascade_log(text: str, returncode: int) -> ParsedDutLog:
         return ParsedDutLog("infra_failure", observed_code, "cascade simulator did not observe stop request")
     if observed_code is None:
         return ParsedDutLog("infra_failure", None, "cascade simulator did not dump a result code")
+    observation_payload = observed_code >> 1 if observed_code & 0x1 else observed_code
+    observation = decode_observation_payload(observation_payload)
+    if observation is not None:
+        return _parsed_observation(
+            observed_code,
+            observation,
+            text,
+            reason="cascade returned raw DUT observation",
+        )
     if observed_code == 1:
         return ParsedDutLog("pass", observed_code)
     return ParsedDutLog("fail", observed_code, f"cascade result code {observed_code}")
@@ -636,6 +680,9 @@ def parse_cascade_log(text: str, returncode: int) -> ParsedDutLog:
 def parse_spike_log(text: str, returncode: int) -> ParsedDutLog:
     code = failed_tohost_from_log(text)
     if code is not None:
+        observation = decode_observation_payload(code)
+        if observation is not None:
+            return _parsed_observation(code, observation, text, reason="spike returned raw DUT observation")
         decoded = decode_tohost_payload(code)
         return ParsedDutLog(
             "fail",
@@ -648,17 +695,27 @@ def parse_spike_log(text: str, returncode: int) -> ParsedDutLog:
         )
     if returncode != 0:
         return ParsedDutLog(
-            "fail",
+            "infra_failure",
             None,
             "spike returned non-zero",
             failure_class=classify_log_failure(text, returncode),
         )
-    return ParsedDutLog("pass")
+    if "*** PASSED ***" in text:
+        return ParsedDutLog("pass", PASS_TOHOST, "spike reported explicit pass marker")
+    return ParsedDutLog(
+        "infra_failure",
+        None,
+        "spike finished without a completion marker",
+        failure_class="missing_completion_marker",
+    )
 
 
 def parse_chipyard_log(text: str, returncode: int) -> ParsedDutLog:
     code = failed_tohost_from_log(text)
     if code is not None:
+        observation = decode_observation_payload(code)
+        if observation is not None:
+            return _parsed_observation(code, observation, text, reason="chipyard returned raw DUT observation")
         decoded = decode_tohost_payload(code)
         failure_class = classify_log_failure(text, returncode, decoded)
         return ParsedDutLog(
@@ -677,7 +734,14 @@ def parse_chipyard_log(text: str, returncode: int) -> ParsedDutLog:
             f"chipyard simulator returned {returncode}",
             failure_class=classify_log_failure(text, returncode),
         )
-    return ParsedDutLog("pass")
+    if "*** PASSED ***" in text:
+        return ParsedDutLog("pass", PASS_TOHOST, "chipyard reported explicit pass marker")
+    return ParsedDutLog(
+        "infra_failure",
+        None,
+        "chipyard finished without a completion marker",
+        failure_class="missing_completion_marker",
+    )
 
 
 def parse_xiangshan_log(text: str, returncode: int) -> ParsedDutLog:
@@ -686,6 +750,9 @@ def parse_xiangshan_log(text: str, returncode: int) -> ParsedDutLog:
         return structured
     code = failed_tohost_from_log(text)
     if code is not None:
+        observation = decode_observation_payload(code)
+        if observation is not None:
+            return _parsed_observation(code, observation, text, reason="xiangshan returned raw DUT observation")
         decoded = decode_tohost_payload(code)
         return ParsedDutLog(
             "fail",
@@ -753,6 +820,14 @@ def _xiangshan_structured_diag(text: str, returncode: int) -> ParsedDutLog | Non
         )
 
     decoded_payload = tohost >> 1 if tohost & 0x1 else tohost
+    observation = decode_observation_payload(decoded_payload)
+    if observation is not None:
+        return _parsed_observation(
+            tohost,
+            observation,
+            text,
+            reason="PMFUZZ_DIAG raw DUT observation",
+        )
     decoded = decode_tohost_payload(decoded_payload)
     return ParsedDutLog(
         "fail",
@@ -763,6 +838,49 @@ def _xiangshan_structured_diag(text: str, returncode: int) -> ParsedDutLog | Non
         observed_mtval=mtval if mtval is not None else (decoded.observed_mtval if decoded else None),
         observed_tohost=tohost,
     )
+
+
+def _parsed_observation(
+    observed_tohost: int,
+    observation: ObservedEvent,
+    text: str,
+    *,
+    reason: str,
+) -> ParsedDutLog:
+    stage, level, address = _source_probe_fault(text)
+    return ParsedDutLog(
+        "observed",
+        observed_tohost,
+        reason,
+        observed_mcause=observation.mcause,
+        observed_tohost=observed_tohost,
+        observation=observation,
+        observed_stage=stage,
+        observed_ptw_level=level,
+        observed_fault_address=address,
+    )
+
+
+def _source_probe_fault(text: str) -> tuple[str | None, str | None, int | None]:
+    candidates: list[dict[str, str]] = []
+    for line in text.splitlines():
+        if "PMFUZZ_PROBE" not in line:
+            continue
+        fields = dict(re.findall(r"([A-Za-z_][A-Za-z0-9_]*)=([^\s]+)", line))
+        if fields.get("exception") == "1":
+            candidates.append(fields)
+    if not candidates:
+        return None, None, None
+    fields = candidates[-1]
+    address_text = fields.get("paddr") or fields.get("addr")
+    try:
+        address = int(address_text, 0) if address_text is not None else None
+    except ValueError:
+        address = None
+    stage = fields.get("stage")
+    if stage is None and "ptw" in fields.get("probe", "").lower():
+        stage = "ptw"
+    return stage, fields.get("level"), address
 
 
 def _xiangshan_trap_pc(text: str, kind: str) -> str | None:

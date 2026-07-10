@@ -10,6 +10,8 @@ from pmpfuzz.diagnostics import (
     encode_failure_payload,
     encode_observation_payload,
     encode_tohost_failure,
+    mepc_tag,
+    mtval_fingerprint,
 )
 from pmpfuzz.dut import parse_chipyard_log
 
@@ -26,11 +28,12 @@ class DiagnosticsTest(unittest.TestCase):
 
         event = decode_observation_payload(payload)
 
+        self.assertLessEqual(payload, 0x3FFFFFFF)
         self.assertIsNotNone(event)
         self.assertEqual(event.kind, ObservationKind.TRAP)
         self.assertEqual(event.mcause, 5)
-        self.assertEqual(event.mtval, 0x80013000)
-        self.assertEqual(event.mepc_low, 0x4024)
+        self.assertEqual(event.mtval_fingerprint, mtval_fingerprint(0x80013000))
+        self.assertEqual(event.mepc_tag, mepc_tag(0x80004024))
         self.assertEqual(event.phase, ObservationPhase.PROBE)
 
     def test_tohost_failure_payload_round_trips_class_mcause_and_mtval(self):

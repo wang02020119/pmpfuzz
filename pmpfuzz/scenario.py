@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from random import Random
 
-from .mmu import PageTableEntry, Sv39Mapping, TranslationMode
+from .mmu import AdUpdateMode, PageTableEntry, Sv39Mapping, TranslationMode
 from .pmp import Access, AddressMode, Mseccfg, PmpEntry, Privilege
 
 
@@ -59,6 +59,7 @@ class PmpScenario:
     security_focus: str | None = None
     smepmp_rule: str | None = None
     stateful_sequence: dict[str, object] | None = None
+    ad_update_mode: AdUpdateMode = AdUpdateMode.SVADE
 
 
 class ScenarioGenerator:
@@ -1061,10 +1062,17 @@ class ScenarioGenerator:
                 sum_enabled=privilege == Privilege.S,
                 security_focus=self.profile,
             )
+            ad_update_mode = AdUpdateMode.HARDWARE if (index // 16) % 2 else AdUpdateMode.SVADE
             return replace(
                 scenario,
                 name=f"scenario_{index:04d}",
-                coverage_tags=(*scenario.coverage_tags, "ooo-target", "ad-bit-side-effect"),
+                ad_update_mode=ad_update_mode,
+                coverage_tags=(
+                    *scenario.coverage_tags,
+                    "ooo-target",
+                    "ad-bit-side-effect",
+                    f"ad-update-{ad_update_mode.value}",
+                ),
             )
 
         if self.profile == "ooo-fence-race-matrix":

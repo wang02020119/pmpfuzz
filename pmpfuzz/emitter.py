@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .diagnostics import PASS_TOHOST, emit_failure_tohost_lines, emit_static_failure_tohost_lines
+from .diagnostics import ObservationPhase, PASS_TOHOST, emit_observation_tohost_lines
 from .mmu import (
     PageTableEntry,
     TranslationMode,
@@ -8,8 +8,7 @@ from .mmu import (
     pte_value,
     sv39_indices,
 )
-from .oracle import TrapCause, evaluate_scenario
-from .pmp import Access, PmpModel, Privilege
+from .pmp import Access, Privilege
 from .scenario import (
     M_DATA_BASE,
     M_TEXT_BASE,
@@ -63,6 +62,7 @@ class AssemblyEmitter:
                 "enter_stateful_probe:",
             ]
         )
+        lines.extend(self._emit_stateful_observation_phase())
         lines.extend(self._emit_privilege_setup(scenario))
         if probe_address is None:
             lines.append("    la t0, stateful_probe")
@@ -83,16 +83,6 @@ class AssemblyEmitter:
         return "\n".join(lines) + "\n"
 
     def _emit_legacy(self, scenario: PmpScenario, backend: str) -> str:
-        decision = PmpModel(scenario.entries, scenario.mseccfg).check(
-            privilege=scenario.privilege,
-            access=scenario.probe.access,
-            physical_address=scenario.probe.physical_address,
-            size=scenario.probe.size,
-            mprv=scenario.mprv,
-            mpp=scenario.mpp,
-        )
-        expected_cause = int(evaluate_scenario(scenario).trap_cause or 0)
-
         lines = [
             "    .option norvc",
             "    .option norelax",
@@ -106,6 +96,7 @@ class AssemblyEmitter:
         ]
         lines.extend(self._emit_pmp_setup(scenario))
         lines.extend(self._emit_privilege_setup(scenario))
+        lines.extend(self._emit_mark_phase(ObservationPhase.PROBE))
         lines.extend(
             [
                 "    la t0, probe",
@@ -117,53 +108,13 @@ class AssemblyEmitter:
         lines.extend(self._emit_probe(scenario))
         if scenario.probe.access == Access.FETCH:
             lines.append("fetch_success:")
-        if decision.allowed:
-            lines.extend([f"    li a0, {PASS_TOHOST}", "    j finish"])
-        else:
-            lines.extend(
-                emit_static_failure_tohost_lines(
-                    "UNEXPECTED_NO_TRAP",
-                    mcause=0,
-                    mtval=scenario.probe.effective_address(),
-                )
-            )
-            lines.append("    j finish")
-        lines.extend(
-            [
-                "trap_handler:",
-                "    csrr t2, mcause",
-                "    csrr t3, mtval",
-                "    la t0, result",
-                "    sd t2, 0(t0)",
-                "    sd t3, 8(t0)",
-            ]
-        )
-        if decision.allowed:
-            lines.extend(emit_failure_tohost_lines("UNEXPECTED_TRAP"))
-            lines.append("    j finish")
-        else:
-            lines.extend(
-                [
-                    f"    li t1, {expected_cause}",
-                    "    beq t2, t1, pass",
-                ]
-            )
-            lines.extend(emit_failure_tohost_lines("WRONG_MCAUSE"))
-            lines.extend(
-                [
-                    "    j finish",
-                    "pass:",
-                    f"    li a0, {PASS_TOHOST}",
-                    "    j finish",
-                ]
-            )
-        lines.extend(self._emit_finish_block(backend, include_tohost_data=True))
+        lines.extend(self._emit_success_ecall())
+        lines.extend(self._emit_trap_handler(scenario, backend))
         if scenario.probe.access == Access.FETCH:
             lines.extend(self._emit_fetch_target(scenario))
         return "\n".join(lines) + "\n"
 
     def _emit_structured(self, scenario: PmpScenario, backend: str) -> str:
-        outcome = evaluate_scenario(scenario)
         probe_label = "probe_m" if scenario.privilege == Privilege.M else "probe_su"
         probe_address = None
         if scenario.translation == TranslationMode.SV39 and scenario.privilege != Privilege.M:
@@ -187,6 +138,7 @@ class AssemblyEmitter:
         lines.extend(self._emit_pmp_setup(scenario))
         lines.extend(self._emit_satp_setup(scenario))
         lines.extend(self._emit_privilege_setup(scenario))
+        lines.extend(self._emit_mark_phase(ObservationPhase.PROBE))
         if probe_address is None:
             lines.append(f"    la t0, {probe_label}")
         else:
@@ -202,9 +154,10 @@ class AssemblyEmitter:
             lines.extend(self._emit_probe(scenario))
             lines.extend(self._emit_success_ecall())
         else:
-            lines.append("    j fail_wrong_path")
+            lines.extend(self._emit_mark_phase(ObservationPhase.SETUP))
+            lines.append("    ecall")
 
-        lines.extend(self._emit_trap_handler(scenario, outcome, backend))
+        lines.extend(self._emit_trap_handler(scenario, backend))
         lines.extend(self._emit_m_data())
         lines.extend(self._emit_su_probe(scenario))
         lines.extend(self._emit_target_region(scenario))
@@ -344,29 +297,38 @@ class AssemblyEmitter:
 
     def _emit_success_ecall(self) -> list[str]:
         return [
+            *self._emit_mark_phase(ObservationPhase.COMPLETED),
             "    li a0, 0x51",
             "    ecall",
+        ]
+
+    def _emit_mark_phase(self, phase: ObservationPhase) -> list[str]:
+        return [
+            "    la t0, observation_phase",
+            f"    li t1, {int(phase)}",
+            "    sw t1, 0(t0)",
         ]
 
     def _emit_stateful_trap_handler(self, scenario: PmpScenario, backend: str) -> list[str]:
         if scenario.stateful_sequence is None:
             raise ValueError("stateful trap handler requires sequence metadata")
-        expected_cause = scenario.stateful_sequence.get("expected_cause")
-        expected_final = scenario.stateful_sequence.get("expected_final")
-        stale_failure_class = scenario.stateful_sequence.get("stale_failure_class")
         ecall_cause = {
-            Privilege.U: int(TrapCause.ECALL_FROM_U),
-            Privilege.S: int(TrapCause.ECALL_FROM_S),
-            Privilege.M: int(TrapCause.ECALL_FROM_M),
+            Privilege.U: 8,
+            Privilege.S: 9,
+            Privilege.M: 11,
         }[scenario.privilege]
 
         lines = [
             "stateful_trap_handler:",
             "    csrr t2, mcause",
             "    csrr t3, mtval",
+            "    csrr t4, mepc",
+            "    csrr t5, mstatus",
             "    la t0, result",
             "    sd t2, 0(t0)",
             "    sd t3, 8(t0)",
+            "    sd t4, 16(t0)",
+            "    sd t5, 24(t0)",
             "    la t0, stateful_phase",
             "    lw t5, 0(t0)",
             "    beqz t5, stateful_handle_warmup",
@@ -375,7 +337,13 @@ class AssemblyEmitter:
             f"    li t1, {ecall_cause}",
             "    beq t2, t1, apply_stateful_mutation",
         ]
-        lines.extend(emit_failure_tohost_lines("UNEXPECTED_TRAP"))
+        lines.extend(
+            [
+                "    la t0, observation_phase",
+                "    lw t6, 0(t0)",
+            ]
+        )
+        lines.extend(emit_observation_tohost_lines("TRAP", phase_reg="t6"))
         lines.extend(
             [
                 "    j finish",
@@ -407,63 +375,56 @@ class AssemblyEmitter:
                 "stateful_handle_final:",
             ]
         )
-
-        if expected_final == "store_side_effect":
-            lines.extend(
-                [
-                    f"    li t1, {ecall_cause}",
-                    "    beq t2, t1, check_expected_side_effect",
-                ]
-            )
-            lines.extend(emit_failure_tohost_lines("UNEXPECTED_TRAP"))
-            lines.extend(["    j finish", "check_expected_side_effect:"])
-            lines.extend(self._emit_check_sentinel_store())
-        else:
-            if expected_cause is None:
-                raise ValueError("stateful expected trap requires expected_cause")
-            lines.extend(
-                [
-                    f"    li t1, {int(expected_cause)}",
-                    "    beq t2, t1, stateful_expected_trap",
-                    f"    li t1, {ecall_cause}",
-                    "    beq t2, t1, stateful_unexpected_no_trap",
-                ]
-            )
-            lines.extend(emit_failure_tohost_lines("WRONG_MCAUSE"))
-            lines.extend(["    j finish", "stateful_expected_trap:"])
-            if expected_final == "trap_no_side_effect":
-                lines.extend(self._emit_check_sentinel_initial())
-            else:
-                lines.extend([f"    li a0, {PASS_TOHOST}", "    j finish"])
-            lines.append("stateful_unexpected_no_trap:")
-            if expected_final == "trap_no_side_effect":
-                lines.extend(
-                    [
-                        "    la t0, sentinel_word",
-                        "    lw t1, 0(t0)",
-                        "    li t4, 0x11223344",
-                        "    bne t1, t4, fail_forbidden_side_effect",
-                    ]
-                )
-                lines.extend(emit_failure_tohost_lines("UNEXPECTED_NO_TRAP"))
-                lines.append("    j finish")
-            else:
-                lines.extend(emit_failure_tohost_lines(str(stale_failure_class)))
-                lines.append("    j finish")
-
+        lines.extend(self._emit_stateful_sentinel_phase())
         lines.extend(
             [
-                "pass_stateful:",
-                f"    li a0, {PASS_TOHOST}",
-                "    j finish",
-                "fail_forbidden_side_effect:",
+                "    la t0, observation_phase",
+                "    lw t6, 0(t0)",
+                f"    li t1, {ecall_cause}",
+                "    beq t2, t1, stateful_report_completion",
+                "stateful_report_trap:",
             ]
         )
-        lines.extend(emit_failure_tohost_lines("FORBIDDEN_SIDE_EFFECT"))
-        lines.extend(["    j finish", "fail_missing_expected_side_effect:"])
-        lines.extend(emit_failure_tohost_lines("MISSING_EXPECTED_SIDE_EFFECT"))
+        lines.extend(emit_observation_tohost_lines("TRAP", phase_reg="t6"))
+        lines.extend(["    j finish", "stateful_report_completion:"])
+        lines.extend(emit_observation_tohost_lines("COMPLETION", phase_reg="t6"))
+        lines.append("    j finish")
         lines.extend(self._emit_finish_block(backend, include_tohost_data=False))
         return lines
+
+    def _emit_stateful_observation_phase(self) -> list[str]:
+        return [
+            "    la t0, stateful_phase",
+            "    lw t1, 0(t0)",
+            "    beqz t1, mark_stateful_warmup",
+            f"    li t1, {int(ObservationPhase.FINAL)}",
+            "    j store_stateful_observation_phase",
+            "mark_stateful_warmup:",
+            f"    li t1, {int(ObservationPhase.WARMUP)}",
+            "store_stateful_observation_phase:",
+            "    la t0, observation_phase",
+            "    sw t1, 0(t0)",
+        ]
+
+    def _emit_stateful_sentinel_phase(self) -> list[str]:
+        return [
+            "    la t0, sentinel_word",
+            "    lw t1, 0(t0)",
+            "    li t5, 0x11223344",
+            "    beq t1, t5, stateful_sentinel_initial",
+            "    li t5, 0x5a5a5a5a",
+            "    beq t1, t5, stateful_sentinel_modified",
+            f"    li t6, {int(ObservationPhase.FINAL_SENTINEL_OTHER)}",
+            "    j store_stateful_sentinel_phase",
+            "stateful_sentinel_initial:",
+            f"    li t6, {int(ObservationPhase.FINAL_SENTINEL_INITIAL)}",
+            "    j store_stateful_sentinel_phase",
+            "stateful_sentinel_modified:",
+            f"    li t6, {int(ObservationPhase.FINAL_SENTINEL_MODIFIED)}",
+            "store_stateful_sentinel_phase:",
+            "    la t0, observation_phase",
+            "    sw t6, 0(t0)",
+        ]
 
     def _emit_stateful_mutation(self, scenario: PmpScenario) -> list[str]:
         sequence = scenario.stateful_sequence or {}
@@ -496,73 +457,39 @@ class AssemblyEmitter:
             lines.append("    nop")
         return lines
 
-    def _emit_check_sentinel_initial(self) -> list[str]:
-        return [
-            "    la t0, sentinel_word",
-            "    lw t1, 0(t0)",
-            "    li t4, 0x11223344",
-            "    bne t1, t4, fail_forbidden_side_effect",
-            f"    li a0, {PASS_TOHOST}",
-            "    j finish",
-        ]
-
-    def _emit_check_sentinel_store(self) -> list[str]:
-        return [
-            "    la t0, sentinel_word",
-            "    lw t1, 0(t0)",
-            "    li t4, 0x5a5a5a5a",
-            "    bne t1, t4, fail_missing_expected_side_effect",
-            f"    li a0, {PASS_TOHOST}",
-            "    j finish",
-        ]
-
-    def _emit_trap_handler(self, scenario: PmpScenario, outcome, backend: str) -> list[str]:
-        expected_cause = int(outcome.trap_cause) if outcome.trap_cause is not None else None
+    def _emit_trap_handler(self, scenario: PmpScenario, backend: str) -> list[str]:
         ecall_cause = {
-            Privilege.U: int(TrapCause.ECALL_FROM_U),
-            Privilege.S: int(TrapCause.ECALL_FROM_S),
-            Privilege.M: int(TrapCause.ECALL_FROM_M),
+            Privilege.U: 8,
+            Privilege.S: 9,
+            Privilege.M: 11,
         }[scenario.privilege]
         lines = [
             "trap_handler:",
             "    csrr t2, mcause",
             "    csrr t3, mtval",
+            "    csrr t4, mepc",
+            "    csrr t5, mstatus",
             "    la t0, result",
             "    sd t2, 0(t0)",
             "    sd t3, 8(t0)",
+            "    sd t4, 16(t0)",
+            "    sd t5, 24(t0)",
+            "    la t0, observation_phase",
+            "    lw t6, 0(t0)",
+            f"    li t1, {ecall_cause}",
+            "    beq t2, t1, report_completion",
+            "report_trap:",
         ]
-        if outcome.allowed:
-            lines.extend(
-                [
-                    f"    li t1, {ecall_cause}",
-                    "    beq t2, t1, pass",
-                ]
-            )
-            lines.extend(emit_failure_tohost_lines("UNEXPECTED_TRAP"))
-            lines.append("    j finish")
-        else:
-            lines.extend(
-                [
-                    f"    li t1, {expected_cause}",
-                    "    beq t2, t1, pass",
-                    f"    li t1, {ecall_cause}",
-                    "    beq t2, t1, fail_unexpected_no_trap",
-                ]
-            )
-            lines.extend(emit_failure_tohost_lines("WRONG_MCAUSE"))
-            lines.extend(["    j finish", "fail_unexpected_no_trap:"])
-            lines.extend(emit_failure_tohost_lines("UNEXPECTED_NO_TRAP"))
-            lines.append("    j finish")
+        lines.extend(emit_observation_tohost_lines("TRAP", phase_reg="t6"))
         lines.extend(
             [
-                "pass:",
-                f"    li a0, {PASS_TOHOST}",
                 "    j finish",
-                "fail_wrong_path:",
+                "report_completion:",
             ]
         )
-        lines.extend(emit_static_failure_tohost_lines("WRONG_PATH"))
-        lines.extend(self._emit_finish_block(backend, include_tohost_data=False))
+        lines.extend(emit_observation_tohost_lines("COMPLETION", phase_reg="t6"))
+        lines.append("    j finish")
+        lines.extend(self._emit_finish_block(backend, include_tohost_data=scenario.profile.startswith("legacy")))
         return lines
 
     def _emit_finish_block(self, backend: str, include_tohost_data: bool) -> list[str]:
@@ -570,7 +497,7 @@ class AssemblyEmitter:
             lines = [
                 "finish:",
                 "    la t0, result",
-                "    sd a0, 0(t0)" if include_tohost_data else "    sd a0, 16(t0)",
+                "    sd a0, 32(t0)",
                 "    la t0, tohost",
                 "    sd a0, 0(t0)",
                 "1:  j 1b",
@@ -582,7 +509,7 @@ class AssemblyEmitter:
             lines = [
                 "finish:",
                 "    la t0, result",
-                "    sd a0, 0(t0)" if include_tohost_data else "    sd a0, 16(t0)",
+                "    sd a0, 32(t0)",
                 "    li t0, 0x60000010",
                 "    sd a0, 0(t0)",
                 "    li t0, 0x60000000",
@@ -597,7 +524,7 @@ class AssemblyEmitter:
             lines = [
                 "finish:",
                 "    la t0, result",
-                "    sd a0, 0(t0)" if include_tohost_data else "    sd a0, 16(t0)",
+                "    sd a0, 32(t0)",
                 "    la t0, tohost",
                 "    sd a0, 0(t0)",
                 f"    li t1, {PASS_TOHOST}",
@@ -635,6 +562,12 @@ class AssemblyEmitter:
             "    .globl result",
             "result:",
             "    .dword 0",
+            "    .dword 0",
+            "    .dword 0",
+            "    .dword 0",
+            "    .dword 0",
+            "observation_phase:",
+            "    .word 0",
         ]
 
     def _emit_m_data(self) -> list[str]:
@@ -648,6 +581,10 @@ class AssemblyEmitter:
             "    .dword 0",
             "    .dword 0",
             "    .dword 0",
+            "    .dword 0",
+            "    .dword 0",
+            "observation_phase:",
+            "    .word 0",
             "    .align 6",
             "    .globl tohost",
             "tohost:",
@@ -671,6 +608,10 @@ class AssemblyEmitter:
             "    .dword 0",
             "    .dword 0",
             "    .dword 0",
+            "    .dword 0",
+            "    .dword 0",
+            "observation_phase:",
+            "    .word 0",
             "stateful_phase:",
             "    .word 0",
             "    .word 0",
@@ -694,7 +635,7 @@ class AssemblyEmitter:
         ]
         lines.extend(self._emit_probe(scenario))
         if scenario.probe.access != Access.FETCH:
-            lines.extend(self._emit_success_ecall())
+            lines.extend(["    li a0, 0x51", "    ecall"])
         return lines
 
     def _emit_stateful_target_region(self, scenario: PmpScenario) -> list[str]:
@@ -738,7 +679,7 @@ class AssemblyEmitter:
             return [
                 f"    .org 0x{offset:x}",
                 "target_region:",
-                "    ecall",
+                *self._emit_success_ecall(),
             ]
         lines = [
             f"    .org 0x{TARGET_BASE - MEM_BASE:x}",

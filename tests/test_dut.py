@@ -78,6 +78,27 @@ class DutAdapterTest(unittest.TestCase):
         self.assertEqual(result.observation.kind, ObservationKind.TRAP)
         self.assertEqual(result.observation.mcause, 5)
 
+    def test_observation_parser_attaches_ptw_stage_evidence_to_its_result(self):
+        payload = encode_observation_payload(
+            ObservationKind.TRAP,
+            mcause=5,
+            mtval=0x80000000,
+            mepc=0x40000020,
+            phase=ObservationPhase.PROBE,
+        )
+        text = (
+            "PMFUZZ_PROBE dut=cva6-clean probe=cva6_ptw_exception chain=sv39-ptw-pmp "
+            "level=L1 paddr=0x80013000 exception=1\n"
+            f"*** FAILED *** (tohost = {payload})\n"
+        )
+
+        result = parse_chipyard_log(text, returncode=0)
+
+        self.assertEqual(result.status, "observed")
+        self.assertEqual(result.observed_stage, "ptw")
+        self.assertEqual(result.observed_ptw_level, "L1")
+        self.assertEqual(result.observed_fault_address, 0x80013000)
+
     def test_spike_log_parser_treats_failed_marker_as_fail_even_with_zero_returncode(self):
         result = parse_spike_log("*** FAILED *** (tohost = 16384)\n", returncode=0)
 

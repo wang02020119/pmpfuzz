@@ -85,7 +85,9 @@ class XiangShanTargetedProfileTest(unittest.TestCase):
         self.assertEqual(case["access"], "store")
         self.assertIn(case["privilege"], {"S", "U"})
         self.assertIn("sentinel_word:", asm)
-        self.assertIn("fail_forbidden_side_effect:", asm)
+        self.assertIn("stateful_sentinel_initial:", asm)
+        self.assertIn("stateful_sentinel_modified:", asm)
+        self.assertIn("stateful_report_trap:", asm)
 
     def test_xiangshan_targeted_script_runs_only_targeted_duts_by_default(self):
         script = Path("scripts/run_xiangshan_targeted_campaign.sh")

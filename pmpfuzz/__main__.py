@@ -15,6 +15,8 @@ from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_XIANG
 from .dut_coverage import write_dut_coverage, write_dut_coverage_matrix
 from .emitter import AssemblyEmitter
 from .feedback import write_feedback
+from .judgment import judge_observation
+from .mmu import AdUpdateMode
 from .runner import DEFAULT_SPIKE, RunnerConfig, parse_time_budget, run_campaign
 from .scenario import ScenarioGenerator
 from .schema import read_json, result_to_dict, scenario_to_case_dict, write_aggregate, write_json
@@ -509,6 +511,24 @@ def _cmd_repro(args: argparse.Namespace) -> int:
         )
         start = time.monotonic()
         dut_result = dut.run(elf, timeout_seconds=args.per_case_timeout, log_path=log)
+        status = dut_result.status
+        failure_class = dut_result.failure_class
+        reason = dut_result.reason
+        observation_valid = False
+        stage_verified = False
+        if status == "observed" and dut_result.observation is not None:
+            judgment = judge_observation(
+                case,
+                dut_result.observation,
+                observed_stage=dut_result.observed_stage,
+                observed_ptw_level=dut_result.observed_ptw_level,
+                observed_fault_address=dut_result.observed_fault_address,
+            )
+            status = judgment.status
+            failure_class = judgment.failure_class
+            reason = judgment.reason
+            observation_valid = judgment.observation_valid
+            stage_verified = judgment.stage_verified
         capability = (
             capability_for_dut(dut_name, path=args.dut_bin)
             if args.dut_bin and dut_name == "xiangshan-clean"
@@ -517,26 +537,41 @@ def _cmd_repro(args: argparse.Namespace) -> int:
         applicability = oracle_applicability_for_result(
             case,
             capability,
-            status=dut_result.status,
-            failure_class=dut_result.failure_class,
+            status=status,
+            failure_class=failure_class,
         )
+        if applicability == "capability_dependent" and status in {"pass", "fail"}:
+            status = "inconclusive"
+            failure_class = "capability_dependent"
+            reason = "DUT A/D update mode is unknown; observation cannot select one architectural oracle"
         result = result_to_dict(
             case=case,
             dut=dut_name,
-            status=dut_result.status,
+            status=status,
             elapsed_seconds=time.monotonic() - start,
             returncode=dut_result.returncode,
             log=log,
-            reason=dut_result.reason,
+            reason=reason,
             observed_tohost=dut_result.observed_tohost,
             observed_mcause=dut_result.observed_mcause,
             observed_mtval=dut_result.observed_mtval,
-            failure_class=dut_result.failure_class,
+            observed_mepc_tag=(dut_result.observation.mepc_tag if dut_result.observation else None),
+            observed_mtval_fingerprint=(
+                dut_result.observation.mtval_fingerprint if dut_result.observation else None
+            ),
+            observed_event=(dut_result.observation.kind.name.lower() if dut_result.observation else None),
+            observed_phase=(dut_result.observation.phase.name.lower() if dut_result.observation else None),
+            observed_stage=dut_result.observed_stage,
+            observed_ptw_level=dut_result.observed_ptw_level,
+            observed_fault_address=dut_result.observed_fault_address,
+            observation_valid=observation_valid,
+            stage_verified=stage_verified,
+            failure_class=failure_class,
             oracle_applicability=applicability,
         )
         write_json(result_dir / "result.json", result)
-        any_failed = any_failed or dut_result.status != "pass"
-        print(f"{dut_name}: {dut_result.status} failure_class={dut_result.failure_class}")
+        any_failed = any_failed or status != "pass"
+        print(f"{dut_name}: {status} failure_class={failure_class}")
 
     write_aggregate(out)
     if args.whitebox_artifacts:
@@ -560,7 +595,11 @@ def _scenario_from_case(case: dict):
     profile = str(case["profile"])
     generator = ScenarioGenerator(seed=seed, include_smepmp=_case_uses_smepmp(case), profile=profile)
     scenario = generator.generate_batch(index + 1)[index]
-    return replace(scenario, name=str(case["name"]))
+    return replace(
+        scenario,
+        name=str(case["name"]),
+        ad_update_mode=AdUpdateMode(str(case.get("ad_update_mode") or scenario.ad_update_mode.value)),
+    )
 
 
 def _case_uses_smepmp(case: dict) -> bool:

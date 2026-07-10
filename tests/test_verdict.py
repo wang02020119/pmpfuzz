@@ -238,6 +238,51 @@ class VerdictTest(unittest.TestCase):
         self.assertFalse(verdict["has_vulnerability"])
         self.assertEqual(verdict["verdict"], "no_confirmed_vulnerability")
 
+    def test_structured_smepmp_failure_can_be_confirmed_after_clean_replays(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(
+                seed=13,
+                include_smepmp=True,
+                profile="smepmp-mmwp-mmode-default-deny",
+            ).generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=13, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+
+            spike = result_to_dict(
+                case=case,
+                dut="spike",
+                status="pass",
+                elapsed_seconds=0.1,
+                returncode=0,
+                log=run_dir / "results" / f"{case['name']}_spike" / "case.log",
+                reason=None,
+            )
+            rocket = result_to_dict(
+                case=case,
+                dut="rocket-clean",
+                status="fail",
+                elapsed_seconds=0.1,
+                returncode=0,
+                log=run_dir / "results" / f"{case['name']}_rocket-clean" / "case.log",
+                reason="host oracle rejected completion",
+                failure_class="unexpected_no_trap",
+                observation_valid=True,
+                stage_verified=True,
+            )
+            rocket["confirmation"] = {
+                "clean_replays": 3,
+                "independent_reproducer": True,
+                "instrumented_ab_equivalent": True,
+            }
+            write_json(run_dir / "results" / f"{case['name']}_spike" / "result.json", spike)
+            write_json(run_dir / "results" / f"{case['name']}_rocket-clean" / "result.json", rocket)
+
+            verdict = verdict_for_run(run_dir)
+
+        self.assertTrue(verdict["has_vulnerability"])
+        self.assertEqual(verdict["verdict"], "confirmed_smepmp_permission_failure")
+
     def test_no_fence_stale_permission_is_experimental_not_confirmed(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)

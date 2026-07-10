@@ -19,7 +19,7 @@ from .capabilities import (
 )
 from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, make_dut
 from .emitter import AssemblyEmitter
-from .oracle import evaluate_scenario
+from .judgment import judge_observation
 from .scenario import ScenarioGenerator
 from .schema import scenario_to_case_dict, result_to_dict, write_aggregate, write_json
 from .semantic_coverage import scenarios_from_schedule
@@ -63,6 +63,15 @@ class CampaignResult:
     observed_tohost: int | None = None
     observed_mcause: int | None = None
     observed_mtval: int | None = None
+    observed_mepc_tag: int | None = None
+    observed_mtval_fingerprint: int | None = None
+    observed_event: str | None = None
+    observed_phase: str | None = None
+    observed_stage: str | None = None
+    observed_ptw_level: str | None = None
+    observed_fault_address: int | None = None
+    observation_valid: bool = False
+    stage_verified: bool = False
     log: str | None = None
     reason: str | None = None
 
@@ -87,6 +96,7 @@ def write_summary(*, config: RunnerConfig, results: list[CampaignResult]) -> Non
     compile_failed = sum(1 for result in results if result.status == "compile_fail")
     infra_failed = sum(1 for result in results if result.status == "infra_failure")
     setup_unsupported = sum(1 for result in results if result.status == "setup_unsupported")
+    inconclusive = sum(1 for result in results if result.status == "inconclusive")
     nonpass = sum(1 for result in results if result.status not in {"pass", "setup_unsupported"})
     summary = {
         "profile": config.profile,
@@ -102,6 +112,7 @@ def write_summary(*, config: RunnerConfig, results: list[CampaignResult]) -> Non
         "infra_failed": infra_failed,
         "nonpass": nonpass,
         "setup_unsupported": setup_unsupported,
+        "inconclusive": inconclusive,
         "time_budget_seconds": config.time_budget_seconds,
         "spike": config.spike,
         "isa": config.isa,
@@ -217,9 +228,9 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
 
     def run_one(index: int, scenario) -> CampaignResult:
         case_start = time.monotonic()
-        outcome = evaluate_scenario(scenario)
-        expected_cause = int(outcome.trap_cause) if outcome.trap_cause is not None else None
         case = scenario_to_case_dict(scenario, seed=config.seed, index=index)
+        expected_allowed = bool(case["expected"]["allowed"])
+        expected_cause = case["expected"]["trap_cause"]
         case_applicability = oracle_applicability_for_case(case, dut_capability)
         case_dir = cases_dir / scenario.name
         result_dir = results_dir / scenario.name
@@ -236,7 +247,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                 name=scenario.name,
                 profile=scenario.profile,
                 status="setup_unsupported",
-                expected_allowed=outcome.allowed,
+                expected_allowed=expected_allowed,
                 expected_cause=expected_cause,
                 elapsed_seconds=time.monotonic() - case_start,
                 failure_class="setup_unsupported",
@@ -262,7 +273,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                 name=scenario.name,
                 profile=scenario.profile,
                 status="setup_unsupported",
-                expected_allowed=outcome.allowed,
+                expected_allowed=expected_allowed,
                 expected_cause=expected_cause,
                 elapsed_seconds=time.monotonic() - case_start,
                 failure_class="setup_unsupported",
@@ -299,7 +310,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                 name=scenario.name,
                 profile=scenario.profile,
                 status="compile_fail",
-                expected_allowed=outcome.allowed,
+                expected_allowed=expected_allowed,
                 expected_cause=expected_cause,
                 elapsed_seconds=time.monotonic() - case_start,
                 returncode=compile_run.returncode,
@@ -325,11 +336,32 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
 
         dut_result = dut_runner.run(elf, timeout_seconds=config.per_case_timeout_seconds, log_path=log)
         status = dut_result.status
+        failure_class = dut_result.failure_class
+        reason = dut_result.reason
+        observation_valid = False
+        stage_verified = False
+        if status == "observed" and dut_result.observation is not None:
+            judgment = judge_observation(
+                case,
+                dut_result.observation,
+                observed_stage=dut_result.observed_stage,
+                observed_ptw_level=dut_result.observed_ptw_level,
+                observed_fault_address=dut_result.observed_fault_address,
+            )
+            status = judgment.status
+            failure_class = judgment.failure_class
+            reason = judgment.reason
+            observation_valid = judgment.observation_valid
+            stage_verified = judgment.stage_verified
+        if case_applicability == "capability_dependent" and status in {"pass", "fail"}:
+            status = "inconclusive"
+            failure_class = "capability_dependent"
+            reason = "DUT A/D update mode is unknown; observation cannot select one architectural oracle"
         result_applicability = oracle_applicability_for_result(
             case,
             dut_capability,
             status=status,
-            failure_class=dut_result.failure_class,
+            failure_class=failure_class,
         )
         if status != "pass":
             _copy_failure_artifacts(failures, case_dir, result_dir)
@@ -337,16 +369,27 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
             name=scenario.name,
             profile=scenario.profile,
             status=status,
-            expected_allowed=outcome.allowed,
+            expected_allowed=expected_allowed,
             expected_cause=expected_cause,
             elapsed_seconds=time.monotonic() - case_start,
             returncode=dut_result.returncode,
-            failure_class=dut_result.failure_class,
+            failure_class=failure_class,
             observed_tohost=dut_result.observed_tohost,
             observed_mcause=dut_result.observed_mcause,
             observed_mtval=dut_result.observed_mtval,
+            observed_mepc_tag=(dut_result.observation.mepc_tag if dut_result.observation else None),
+            observed_mtval_fingerprint=(
+                dut_result.observation.mtval_fingerprint if dut_result.observation else None
+            ),
+            observed_event=(dut_result.observation.kind.name.lower() if dut_result.observation else None),
+            observed_phase=(dut_result.observation.phase.name.lower() if dut_result.observation else None),
+            observed_stage=dut_result.observed_stage,
+            observed_ptw_level=dut_result.observed_ptw_level,
+            observed_fault_address=dut_result.observed_fault_address,
+            observation_valid=observation_valid,
+            stage_verified=stage_verified,
             log=str(log),
-            reason=dut_result.reason,
+            reason=reason,
         )
         write_json(
             result_dir / "result.json",
@@ -361,6 +404,15 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                 observed_tohost=result.observed_tohost,
                 observed_mcause=result.observed_mcause,
                 observed_mtval=result.observed_mtval,
+                observed_mepc_tag=result.observed_mepc_tag,
+                observed_mtval_fingerprint=result.observed_mtval_fingerprint,
+                observed_event=result.observed_event,
+                observed_phase=result.observed_phase,
+                observed_stage=result.observed_stage,
+                observed_ptw_level=result.observed_ptw_level,
+                observed_fault_address=result.observed_fault_address,
+                observation_valid=result.observation_valid,
+                stage_verified=result.stage_verified,
                 failure_class=result.failure_class,
                 oracle_applicability=result_applicability,
             ),

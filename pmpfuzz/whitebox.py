@@ -39,11 +39,17 @@ def extract_security_whitebox_signals(run_dir: Path, *, artifact_dir: Path | Non
 
     for case_name, case in sorted(cases.items()):
         case_results = results.get(case_name) or [{"dut": "unknown", "name": case_name}]
-        artifact_paths = _artifact_paths(run_dir, case_name, artifact_dir=artifact_dir)
-        for artifact_path in artifact_paths:
-            scanned.append(str(artifact_path))
-            text = artifact_path.read_text(encoding="utf-8", errors="replace")
-            for result in case_results:
+        for result in case_results:
+            artifact_paths = _artifact_paths(
+                run_dir,
+                case_name,
+                result=result,
+                result_count=len(case_results),
+                artifact_dir=artifact_dir,
+            )
+            for artifact_path in artifact_paths:
+                scanned.append(str(artifact_path))
+                text = artifact_path.read_text(encoding="utf-8", errors="replace")
                 signals.extend(_signals_from_artifact(case, result, artifact_path, text))
 
     return {
@@ -196,6 +202,8 @@ def _coverage_point_signals(case: dict[str, Any], result: dict[str, Any], path: 
         total = int(match.group(2))
         covered = int(match.group(3))
         accumulated = int(match.group(4))
+        if covered <= 0:
+            continue
         signals.append(
             _signal(
                 case=case,
@@ -480,21 +488,40 @@ def _results_by_case(run_dir: Path) -> dict[str, list[dict[str, Any]]]:
     results: dict[str, list[dict[str, Any]]] = {}
     for result_path in sorted((run_dir / "results").glob("*/result.json")):
         result = read_json(result_path)
-        results.setdefault(str(result.get("name")), []).append(result)
+        owned_result = dict(result)
+        owned_result["_artifact_root"] = str(result_path.parent)
+        results.setdefault(str(result.get("name")), []).append(owned_result)
     return results
 
 
-def _artifact_paths(run_dir: Path, case_name: str, *, artifact_dir: Path | None) -> list[Path]:
-    roots = [run_dir / "results" / case_name, run_dir / "cases" / case_name]
-    for result_path in sorted((run_dir / "results").glob("*/result.json")):
-        try:
-            result = read_json(result_path)
-        except ValueError:
-            continue
-        if str(result.get("name")) == case_name:
-            roots.append(result_path.parent)
+def _artifact_paths(
+    run_dir: Path,
+    case_name: str,
+    *,
+    result: dict[str, Any],
+    result_count: int,
+    artifact_dir: Path | None,
+) -> list[Path]:
+    roots: list[Path] = []
+    owned_root = result.get("_artifact_root")
+    if owned_root:
+        roots.append(Path(str(owned_root)))
+    log_path = result.get("log")
+    if log_path and not owned_root:
+        roots.append(Path(str(log_path)).parent)
+    if not roots:
+        roots.append(run_dir / "results" / case_name)
     if artifact_dir is not None:
-        roots.extend([Path(artifact_dir), Path(artifact_dir) / case_name])
+        dut = str(result.get("dut") or "unknown")
+        artifact_root = Path(artifact_dir)
+        roots.extend(
+            [
+                artifact_root / case_name / dut,
+                artifact_root / dut / case_name,
+            ]
+        )
+        if result_count == 1:
+            roots.append(artifact_root / case_name)
     seen: set[Path] = set()
     artifacts: list[Path] = []
     for root in roots:

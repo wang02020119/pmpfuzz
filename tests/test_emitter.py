@@ -197,8 +197,8 @@ class AssemblyEmitterTest(unittest.TestCase):
         asm = AssemblyEmitter().emit(scenario)
         target_offset = scenario.probe.physical_address - MEM_BASE
 
-        self.assertIn(f"    .org 0x{target_offset:x}\ntarget_region:\n    ecall", asm)
-        self.assertNotIn("target_region:\n    li a0, 0x51\n    ecall", asm)
+        self.assertIn(f"    .org 0x{target_offset:x}\ntarget_region:\n    la t0, observation_phase", asm)
+        self.assertIn("    li t1, 2\n    sw t1, 0(t0)\n    li a0, 0x51\n    ecall", asm)
 
     def test_xiangshan_goodtrap_backend_uses_xstrap_words_not_ebreak(self):
         scenario = ScenarioGenerator(seed=20260628, include_smepmp=False, profile="legacy-data").generate_batch(3)[2]
@@ -218,7 +218,11 @@ class AssemblyEmitterTest(unittest.TestCase):
         self.assertIn("sentinel_word:", asm)
         self.assertIn("apply_stateful_mutation:", asm)
         self.assertIn("stateful_final_probe:", asm)
-        self.assertIn("fail_forbidden_side_effect:", asm)
+        self.assertIn("stateful_sentinel_initial:", asm)
+        self.assertIn("stateful_sentinel_modified:", asm)
+        self.assertIn("stateful_report_trap:", asm)
+        self.assertIn("stateful_report_completion:", asm)
+        self.assertNotIn("fail_forbidden_side_effect:", asm)
 
     def test_stateful_stale_harness_emits_mutation_and_optional_sfence(self):
         with_fence = ScenarioGenerator(seed=73, include_smepmp=False, profile="tlb-stale-pte").generate_batch(count=1)[0]

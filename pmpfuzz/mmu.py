@@ -15,6 +15,11 @@ class TranslationMode(Enum):
     SV39 = "sv39"
 
 
+class AdUpdateMode(Enum):
+    SVADE = "svade"
+    HARDWARE = "hardware"
+
+
 class PageFaultKind(Enum):
     NONE = "none"
     PAGE_FAULT = "page_fault"
@@ -78,12 +83,20 @@ class TranslationResult:
     physical_address: int | None = None
     fault_address: int | None = None
     pmp_match_index: int | None = None
+    ad_updated: bool = False
 
 
 class Sv39Model:
-    def __init__(self, *, mappings: list[Sv39Mapping], pmp_model: PmpModel) -> None:
+    def __init__(
+        self,
+        *,
+        mappings: list[Sv39Mapping],
+        pmp_model: PmpModel,
+        ad_update_mode: AdUpdateMode = AdUpdateMode.SVADE,
+    ) -> None:
         self.mappings = mappings
         self.pmp_model = pmp_model
+        self.ad_update_mode = ad_update_mode
 
     def check(
         self,
@@ -131,6 +144,33 @@ class Sv39Model:
                 fault_address=virtual_address,
             )
 
+        ad_update_required = self._ad_update_required(mapping.pte, access)
+        if ad_update_required and self.ad_update_mode == AdUpdateMode.SVADE:
+            return TranslationResult(
+                allowed=False,
+                kind=PageFaultKind.PAGE_FAULT,
+                stage=TranslationStage.PTE_PERMISSION,
+                reason="Svade requires a page fault when A/D bits need updating",
+                fault_address=virtual_address,
+            )
+        if ad_update_required:
+            leaf_pte_address = mapping.walk_addresses[-1]
+            update = self.pmp_model.check(
+                privilege=Privilege.S,
+                access=Access.STORE,
+                physical_address=leaf_pte_address,
+                size=8,
+            )
+            if not update.allowed:
+                return TranslationResult(
+                    allowed=False,
+                    kind=PageFaultKind.ACCESS_FAULT,
+                    stage=TranslationStage.PAGE_TABLE_WALK,
+                    reason=f"hardware A/D update blocked by PMP: {update.reason}",
+                    fault_address=leaf_pte_address,
+                    pmp_match_index=update.match_index,
+                )
+
         physical_address = mapping.physical_address_for(virtual_address)
         pmp = self.pmp_model.check(
             privilege=privilege,
@@ -156,6 +196,7 @@ class Sv39Model:
             reason="Sv39 translation and PMP checks permit access",
             physical_address=physical_address,
             pmp_match_index=pmp.match_index,
+            ad_updated=ad_update_required,
         )
 
     def _mapping_for(self, virtual_address: int, size: int) -> Sv39Mapping | None:
@@ -172,9 +213,9 @@ class Sv39Model:
         sum_enabled: bool,
         mxr: bool,
     ) -> bool:
-        if not pte.valid or (pte.write and not pte.read) or not pte.accessed:
+        if not pte.valid or (pte.write and not pte.read):
             return False
-        if access == Access.STORE and (not pte.write or not pte.dirty):
+        if access == Access.STORE and not pte.write:
             return False
 
         if privilege == Privilege.U and not pte.user:
@@ -192,6 +233,9 @@ class Sv39Model:
         if access == Access.FETCH:
             return pte.execute
         raise ValueError(f"unsupported access type: {access}")
+
+    def _ad_update_required(self, pte: PageTableEntry, access: Access) -> bool:
+        return not pte.accessed or (access == Access.STORE and not pte.dirty)
 
 
 def sv39_indices(virtual_address: int) -> tuple[int, int, int]:

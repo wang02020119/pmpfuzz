@@ -66,6 +66,7 @@ def capability_for_dut(
         "supported_capabilities": supported_capabilities,
         "finish_protocol": spec["finish_protocol"],
         "diagnostic_depth": spec["diagnostic_depth"],
+        "ad_update_mode": str(spec.get("ad_update_mode") or "unknown"),
         "oracle_applicability": oracle_applicability,
         "smepmp": smepmp_probe,
         "notes": notes,
@@ -109,6 +110,13 @@ def oracle_applicability_for_case(case: dict[str, Any], capability: dict[str, An
     missing = [item for item in required_capabilities_for_case(case) if not supported.get(item, False)]
     if missing:
         return "unsupported"
+    if _requires_ad_update(case):
+        expected_mode = str(case.get("ad_update_mode") or "svade")
+        observed_mode = str(capability.get("ad_update_mode") or "unknown")
+        if observed_mode == "unknown":
+            return "capability_dependent"
+        if observed_mode != expected_mode:
+            return "unsupported"
     return str(capability.get("oracle_applicability") or "valid")
 
 
@@ -132,6 +140,16 @@ def _is_experimental_case(case: dict[str, Any]) -> bool:
         return True
     sequence = case.get("stateful_sequence") or {}
     return sequence.get("fence") == "no-fence-experimental"
+
+
+def _requires_ad_update(case: dict[str, Any]) -> bool:
+    sv39 = case.get("sv39") or {}
+    pte = sv39.get("pte") or {}
+    if not pte:
+        return False
+    if not bool(pte.get("accessed", True)):
+        return True
+    return case.get("access") == "store" and not bool(pte.get("dirty", True))
 
 
 def _default_available(dut: str, path: str) -> bool:

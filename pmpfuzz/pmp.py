@@ -93,6 +93,14 @@ class PmpModel:
         if match is None:
             return self._unmatched_decision(effective)
 
+        if not self._entry_contains(match, physical_address, size):
+            return PmpDecision(
+                False,
+                "lowest-numbered matching entry only partially covers access",
+                effective,
+                match.index,
+            )
+
         allowed = self._entry_allows(match, effective, access)
         if allowed:
             return PmpDecision(True, "matching entry permits access", effective, match.index)
@@ -125,7 +133,14 @@ class PmpModel:
 
         lower, upper = bounds
         access_upper = physical_address + size
-        return lower <= physical_address and access_upper <= upper
+        return lower < access_upper and physical_address < upper
+
+    def _entry_contains(self, entry: PmpEntry, physical_address: int, size: int) -> bool:
+        bounds = self._entry_bounds(entry)
+        if bounds is None:
+            return False
+        lower, upper = bounds
+        return lower <= physical_address and physical_address + size <= upper
 
     def _entry_bounds(self, entry: PmpEntry) -> tuple[int, int] | None:
         if entry.address_mode == AddressMode.TOR:

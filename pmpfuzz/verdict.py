@@ -30,6 +30,8 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
         if _is_confirmed_boom_ptw_hang(case, spike, rocket, boom):
             evidence.append(
                 {
+                    "kind": "boom_ptw_hang",
+                    "confirmation_ready": False,
                     "case": name,
                     "profile": case.get("profile"),
                     "boom_failure_class": boom.get("failure_class"),
@@ -41,6 +43,7 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
             evidence.append(
                 {
                     "kind": "confirmed_pmp_fetch_boundary_failure",
+                    "confirmation_ready": False,
                     "case": name,
                     "profile": case.get("profile"),
                     "boom_failure_class": boom.get("failure_class"),
@@ -53,6 +56,7 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
             evidence.append(
                 {
                     "kind": "confirmed_ooo_fetch_replay_failure",
+                    "confirmation_ready": False,
                     "case": name,
                     "profile": case.get("profile"),
                     "boom_failure_class": boom.get("failure_class"),
@@ -65,6 +69,7 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
             evidence.append(
                 {
                     "kind": "confirmed_ooo_ptw_replay_hang",
+                    "confirmation_ready": False,
                     "case": name,
                     "profile": case.get("profile"),
                     "access": case.get("access"),
@@ -84,6 +89,8 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
                 }
             )
 
+    candidate_evidence = [item for item in evidence if not bool(item.get("confirmation_ready"))]
+    evidence = [item for item in evidence if bool(item.get("confirmation_ready"))]
     side_effect = [item for item in evidence if item.get("kind") == "confirmed_side_effect_failure"]
     stale = [item for item in evidence if item.get("kind") == "confirmed_stale_permission_failure"]
     smepmp = [item for item in evidence if item.get("kind") == "confirmed_smepmp_permission_failure"]
@@ -154,6 +161,15 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
             "evidence": evidence,
             "related_evidence": related,
         }
+    if candidate_evidence:
+        return {
+            "verdict": "anomaly_candidate",
+            "has_vulnerability": False,
+            "impact": None,
+            "expected": "independent clean replay and structured observation are required before confirmation",
+            "evidence": [],
+            "related_evidence": related + candidate_evidence,
+        }
     if experimental:
         return {
             "verdict": "experimental_no_fence_observation",
@@ -166,7 +182,7 @@ def verdict_for_run(run_dir: Path) -> dict[str, Any]:
     if related:
         return {
             "verdict": "related_wrong_exception_evidence",
-            "has_vulnerability": True,
+            "has_vulnerability": False,
             "impact": "wrong_exception_cause",
             "expected": "load access fault",
             "evidence": [],
@@ -220,6 +236,7 @@ def _stateful_verdict_evidence(
     if any(result.get("failure_class") in side_effect_classes for result in non_spike_failures):
         return {
             "kind": "confirmed_side_effect_failure",
+            "confirmation_ready": all(_result_confirmation_ready(result) for result in non_spike_failures),
             "case": name,
             "profile": case.get("profile"),
             "failure_classes": sorted({result.get("failure_class") for result in non_spike_failures}),
@@ -227,6 +244,7 @@ def _stateful_verdict_evidence(
         }
     return {
         "kind": "confirmed_stale_permission_failure",
+        "confirmation_ready": all(_result_confirmation_ready(result) for result in non_spike_failures),
         "case": name,
         "profile": case.get("profile"),
         "failure_classes": sorted({result.get("failure_class") for result in non_spike_failures}),
@@ -261,13 +279,14 @@ def _smepmp_verdict_evidence(
         for result in results
         if result.get("dut") != "spike"
         and _is_valid_oracle_result(result)
-        and result.get("status") not in {"pass", "setup_unsupported"}
-        and result.get("failure_class") not in {"setup_unsupported", "unsupported", "infra_unadapted"}
+        and result.get("status") == "fail"
+        and result.get("failure_class") not in _INFRA_FAILURE_CLASSES
     ]
     if not failures:
         return None
     return {
         "kind": "confirmed_smepmp_permission_failure",
+        "confirmation_ready": all(_result_confirmation_ready(result) for result in failures),
         "case": name,
         "profile": case.get("profile"),
         "smepmp_rule": case.get("smepmp_rule"),
@@ -411,6 +430,34 @@ def _is_related_wrong_mcause(case: dict[str, Any], boom: dict[str, Any] | None) 
 
 def _is_valid_oracle_result(result: dict[str, Any]) -> bool:
     return (result.get("oracle_applicability") or "valid") == "valid"
+
+
+_INFRA_FAILURE_CLASSES = {
+    None,
+    "compile_fail",
+    "infra_failure",
+    "infra_unadapted",
+    "missing_completion_marker",
+    "pipeline_hung",
+    "setup_unsupported",
+    "sim_assert",
+    "timeout",
+    "unknown_failure",
+    "unsupported",
+}
+
+
+def _result_confirmation_ready(result: dict[str, Any]) -> bool:
+    confirmation = result.get("confirmation") or {}
+    return (
+        result.get("status") == "fail"
+        and result.get("failure_class") not in _INFRA_FAILURE_CLASSES
+        and bool(result.get("observation_valid"))
+        and bool(result.get("stage_verified"))
+        and int(confirmation.get("clean_replays") or 0) >= 3
+        and bool(confirmation.get("independent_reproducer"))
+        and bool(confirmation.get("instrumented_ab_equivalent"))
+    )
 
 
 def _expected_trap_label(case: dict[str, Any]) -> str:

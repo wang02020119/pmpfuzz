@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import IntEnum
 
-from .mmu import PageFaultKind, Sv39Model, TranslationMode, TranslationStage
+from .mmu import AdUpdateMode, PageFaultKind, Sv39Model, TranslationMode, TranslationStage
 from .pmp import Access, PmpDecision, PmpEntry, PmpModel, Privilege
 from .scenario import PmpScenario
 
@@ -50,7 +50,11 @@ def evaluate_scenario(scenario: PmpScenario) -> ExpectedOutcome:
         address = scenario.probe.virtual_address
         if address is None:
             raise ValueError("Sv39 scenario requires a virtual probe address")
-        result = Sv39Model(mappings=[scenario.sv39], pmp_model=pmp_model).check(
+        result = Sv39Model(
+            mappings=[scenario.sv39],
+            pmp_model=pmp_model,
+            ad_update_mode=scenario.ad_update_mode,
+        ).check(
             privilege=scenario.privilege,
             access=scenario.probe.access,
             virtual_address=address,
@@ -182,10 +186,34 @@ def contract_trace_for_scenario(scenario: PmpScenario) -> dict[str, object]:
 
     pte_decision = _pte_decision_trace(scenario)
     trace["pte_decision"] = pte_decision
-    if pte_decision["decision"] != "ok":
+    if pte_decision["decision"] not in {"ok", "ad_update"}:
         trace["effective_privilege"] = scenario.privilege.value
         trace["pmp_checks"] = pmp_checks
         return trace
+
+    if pte_decision["decision"] == "ad_update":
+        leaf_address = scenario.sv39.walk_addresses[-1]
+        update_decision = pmp_model.check(
+            privilege=Privilege.S,
+            access=Access.STORE,
+            physical_address=leaf_address,
+            size=8,
+        )
+        pmp_checks.append(
+            _pmp_check_trace(
+                stage="pte_ad_update",
+                decision=update_decision,
+                entries=scenario.entries,
+                access=Access.STORE,
+                physical_address=leaf_address,
+                size=8,
+                ptw_level="L0",
+            )
+        )
+        if not update_decision.allowed:
+            trace["effective_privilege"] = update_decision.effective_privilege.value
+            trace["pmp_checks"] = pmp_checks
+            return trace
 
     physical_address = scenario.sv39.physical_address_for(scenario.probe.virtual_address)
     final_decision = pmp_model.check(
@@ -311,16 +339,17 @@ def _pte_decision_trace(scenario: PmpScenario) -> dict[str, object]:
         "valid": pte.valid,
         "sum": scenario.sum_enabled,
         "mxr": scenario.mxr,
+        "ad_update_mode": scenario.ad_update_mode.value,
     }
     if not pte.valid:
         return {"decision": "invalid", **base}
     if pte.write and not pte.read:
         return {"decision": "reserved_write_without_read", **base}
-    if not pte.accessed:
+    if not pte.accessed and scenario.ad_update_mode == AdUpdateMode.SVADE:
         return {"decision": "accessed", **base}
     if scenario.probe.access == Access.STORE and not pte.write:
         return {"decision": "permission", **base}
-    if scenario.probe.access == Access.STORE and not pte.dirty:
+    if scenario.probe.access == Access.STORE and not pte.dirty and scenario.ad_update_mode == AdUpdateMode.SVADE:
         return {"decision": "dirty", **base}
     if scenario.privilege == Privilege.U and not pte.user:
         return {"decision": "user", **base}
@@ -332,6 +361,8 @@ def _pte_decision_trace(scenario: PmpScenario) -> dict[str, object]:
         return {"decision": "permission", **base}
     if scenario.probe.access == Access.FETCH and not pte.execute:
         return {"decision": "permission", **base}
+    if not pte.accessed or (scenario.probe.access == Access.STORE and not pte.dirty):
+        return {"decision": "ad_update", **base}
     return {"decision": "ok", **base}
 
 

@@ -17,6 +17,17 @@ from pmpfuzz.triage import write_report
 
 
 class CapabilityModelTest(unittest.TestCase):
+    def test_unknown_ad_update_mode_makes_clear_ad_case_capability_dependent(self):
+        scenario = ScenarioGenerator(
+            seed=20260710,
+            include_smepmp=False,
+            profile="ooo-ad-bit-side-effect",
+        ).generate_batch(1)[0]
+        case = scenario_to_case_dict(scenario, seed=20260710, index=0)
+        capability = capability_for_dut("spike", available=True)
+
+        self.assertEqual(oracle_applicability_for_case(case, capability), "capability_dependent")
+
     def test_parser_accepts_probe_dut_command(self):
         parser = build_parser()
 

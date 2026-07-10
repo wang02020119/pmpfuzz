@@ -1,6 +1,12 @@
 import unittest
 
-from pmpfuzz.diagnostics import ObservedEvent, ObservationKind, ObservationPhase
+from pmpfuzz.diagnostics import (
+    ObservedEvent,
+    ObservationKind,
+    ObservationPhase,
+    mepc_tag,
+    mtval_fingerprint,
+)
 from pmpfuzz.judgment import judge_observation
 
 
@@ -25,8 +31,8 @@ class HostJudgmentTest(unittest.TestCase):
         event = ObservedEvent(
             kind=ObservationKind.TRAP,
             mcause=5,
-            mtval=0x80000000,
-            mepc_low=0x4000,
+            mtval_fingerprint=mtval_fingerprint(0x80000000),
+            mepc_tag=mepc_tag(0x40000000),
             phase=ObservationPhase.PROBE,
         )
 
@@ -46,8 +52,8 @@ class HostJudgmentTest(unittest.TestCase):
         event = ObservedEvent(
             kind=ObservationKind.TRAP,
             mcause=5,
-            mtval=0x80000000,
-            mepc_low=0x4000,
+            mtval_fingerprint=mtval_fingerprint(0x80000000),
+            mepc_tag=mepc_tag(0x40000000),
             phase=ObservationPhase.PROBE,
         )
 
@@ -66,8 +72,8 @@ class HostJudgmentTest(unittest.TestCase):
         event = ObservedEvent(
             kind=ObservationKind.COMPLETION,
             mcause=8,
-            mtval=0,
-            mepc_low=0x4010,
+            mtval_fingerprint=mtval_fingerprint(0),
+            mepc_tag=mepc_tag(0x80004010),
             phase=ObservationPhase.COMPLETED,
         )
 
@@ -75,6 +81,55 @@ class HostJudgmentTest(unittest.TestCase):
 
         self.assertEqual(result.status, "fail")
         self.assertEqual(result.failure_class, "unexpected_no_trap")
+
+    def test_wrong_mepc_is_rejected_even_when_mcause_matches(self):
+        case = {
+            **self.case,
+            "access": "load",
+            "privilege": "U",
+            "translation": "sv39",
+            "address": "0x80000000",
+        }
+        event = ObservedEvent(
+            kind=ObservationKind.TRAP,
+            mcause=5,
+            mtval_fingerprint=mtval_fingerprint(0x80000000),
+            mepc_tag=mepc_tag(0x80004000),
+            phase=ObservationPhase.PROBE,
+        )
+
+        result = judge_observation(
+            case,
+            event,
+            observed_stage="ptw",
+            observed_ptw_level="L1",
+            observed_fault_address=0x80013000,
+        )
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(result.failure_class, "wrong_mepc")
+
+    def test_legacy_su_probe_uses_machine_text_mepc_window(self):
+        case = {
+            "name": "legacy_deny",
+            "profile": "legacy-data",
+            "access": "load",
+            "privilege": "U",
+            "translation": "bare",
+            "address": "0x80008000",
+            "expected": {"allowed": False, "trap_cause": 5, "stage": "pmp"},
+        }
+        event = ObservedEvent(
+            kind=ObservationKind.TRAP,
+            mcause=5,
+            mtval_fingerprint=mtval_fingerprint(0x80008000),
+            mepc_tag=mepc_tag(0x80000020),
+            phase=ObservationPhase.PROBE,
+        )
+
+        result = judge_observation(case, event)
+
+        self.assertEqual(result.status, "pass")
 
 
 if __name__ == "__main__":

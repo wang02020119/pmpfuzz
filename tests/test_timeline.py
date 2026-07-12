@@ -24,6 +24,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from pmpfuzz.coverage_qualification import CoverageQualification
 from pmpfuzz.runner import CampaignResult
@@ -522,13 +523,15 @@ class TestTimelineCallbackFactory(unittest.TestCase):
             elapsed_seconds=3.5,
         )
 
-        callback(0, {}, result, 1, 42.5)
+        with patch("pmpfuzz.timeline.time.monotonic", return_value=1234.5):
+            callback(0, {}, result, 1, 42.5)
 
         # Timeline should have been written
         tl_path = run_dir / "metrics" / "coverage_timeline.jsonl"
         self.assertTrue(tl_path.exists())
         lines = [json.loads(line) for line in tl_path.read_text(encoding="ascii").strip().split("\n") if line.strip()]
         self.assertGreaterEqual(len(lines), 2)  # baseline + at least one record
+        self.assertEqual(lines[-1]["completion_monotonic_seconds"], 1234.5)
 
 
 if __name__ == "__main__":

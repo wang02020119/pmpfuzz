@@ -757,6 +757,7 @@ def _run_round(
     schedule_path: Path | None = None,
     expected_candidates: list[dict] | None = None,
     enable_whitebox: bool = False,
+    env: dict | None = None,
 ) -> bool:
     """Execute one round via subprocess, then ingest results.
 

@@ -407,7 +407,12 @@ def select_next_candidates(
         return []
 
     if state.variant == "random":
-        return _select_random(unexec, round_size, state.seed + state.round_idx * 1000)
+        return [
+            _selection_record(candidate, "random", 0)
+            for candidate in _select_random(
+                unexec, round_size, state.seed + state.round_idx * 1000
+            )
+        ]
     elif state.variant == "guided":
         return _select_guided(state, unexec, round_size, run_dirs, seed)
     elif state.variant == "bb":
@@ -425,6 +430,42 @@ def _select_random(
     rng = rng_mod.Random(shuffle_seed)
     rng.shuffle(shuffled)
     return shuffled[:count]
+
+
+def _selection_record(
+    candidate: dict[str, Any], source: str, estimated_new_bins: int
+) -> dict[str, Any]:
+    """Return a schedule-local copy with an auditable selection reason."""
+    return {
+        **candidate,
+        "selection_source": source,
+        "estimated_new_bins": int(estimated_new_bins),
+    }
+
+
+def _schedule_entry(candidate: dict[str, Any], seed: int) -> dict[str, Any]:
+    """Serialize a candidate without losing its selection provenance."""
+    return {
+        "candidate_id": candidate["candidate_id"],
+        "profile": candidate["profile"],
+        "index": candidate["scenario_index"],
+        "name": candidate.get(
+            "name", f"{candidate['profile']}__case_{candidate['scenario_index']}"
+        ),
+        "seed": seed,
+        "include_smepmp": candidate["profile"].startswith("smepmp"),
+        "selection_source": candidate.get("selection_source", "bootstrap"),
+        "estimated_new_bins": int(candidate.get("estimated_new_bins", 0)),
+    }
+
+
+def _selection_summary(candidates: list[dict[str, Any]]) -> dict[str, int]:
+    summary: dict[str, int] = {}
+    for candidate in candidates:
+        source = str(candidate.get("selection_source") or "bootstrap")
+        summary[source] = summary.get(source, 0) + 1
+    summary["final_selected_count"] = len(candidates)
+    return summary
 
 
 def _select_guided(
@@ -471,14 +512,14 @@ def _select_guided(
             break
         missing -= best_gain
         available.remove(best)
-        selected.append(best)
+        selected.append(_selection_record(best, "blackbox", len(best_gain)))
 
     # P0-1 FIX: Fill remaining slots with seeded fallback
     if len(selected) < count:
         fallback_ids = {c["candidate_id"] for c in selected}
         fallback_pool = [c for c in unexec if c["candidate_id"] not in fallback_ids]
         remainder = _select_random(fallback_pool, count - len(selected), seed)
-        selected.extend(remainder)
+        selected.extend(_selection_record(c, "fallback", 0) for c in remainder)
 
     return selected[:count]
 
@@ -495,7 +536,13 @@ def _select_bb_wb(
     Tracks per-round metadata: whitebox_count, blackbox_count, fallback_count,
     deduplicated_count, already_executed_excluded_count, final_selected_count.
     """
-    whitebox_selected, wb_profile_counts, wb_warnings = _whitebox_schedule(unexec, run_dirs, max_wb=16)
+    whitebox_selected, wb_profile_counts, wb_warnings = _whitebox_schedule(
+        unexec, run_dirs, max_wb=16
+    )
+    whitebox_selected = [
+        _selection_record(candidate, "whitebox", 1)
+        for candidate in whitebox_selected
+    ]
     wb_ids = {c["candidate_id"] for c in whitebox_selected}
 
     remaining = [c for c in unexec if c["candidate_id"] not in wb_ids]
@@ -517,11 +564,14 @@ def _select_bb_wb(
             [c for c in unexec if c["candidate_id"] not in deduped_ids],
             round_size - len(deduped), seed)
         fallback_count = len(extra)
-        deduped.extend(extra)
+        deduped.extend(_selection_record(c, "fallback", 0) for c in extra)
 
     # P0-4: Log round metadata
     print(f"  [bb-wb] wb={len(whitebox_selected)} bb={len(blackbox_selected)} "
           f"fallback={fallback_count} final={len(deduped)}")
+
+    if wb_warnings:
+        print(f"  [bb-wb] whitebox_warnings={len(wb_warnings)}")
 
     return deduped[:round_size]
 
@@ -715,11 +765,9 @@ def run_closed_loop(args: argparse.Namespace) -> int:
                          env=base_env,
                          round_start_offset=round_start_offset)
     if not success:
-        state.record_round_result(False, {"error": "bootstrap failed"})
         print("ERROR: bootstrap failed — terminating campaign")
         _finalize(state, campaign_dir, metrics_dir, meta, start_wall)
         return 1
-    state.advance_round()
     state.advance_round()
 
     completed_round_dirs = [bootstrap_dir]
@@ -759,12 +807,8 @@ def run_closed_loop(args: argparse.Namespace) -> int:
         schedule_data = {
             "schema_version": 1,
             "seed": args.seed,  # Fix 4: consistent with candidate pool
-            "entries": [
-                {"profile": c["profile"], "index": c["scenario_index"],
-                 "name": c.get("name", f"{c['profile']}__case_{c['scenario_index']}"),
-                 "seed": args.seed, "include_smepmp": c["profile"].startswith("smepmp")}
-                for c in candidates
-            ],
+            "selection_summary": _selection_summary(candidates),
+            "entries": [_schedule_entry(c, args.seed) for c in candidates],
         }
         schedule_path.write_text(json.dumps(schedule_data, indent=2, ensure_ascii=True), encoding="ascii")
 
@@ -775,7 +819,6 @@ def run_closed_loop(args: argparse.Namespace) -> int:
                              enable_whitebox=getattr(args, "whitebox", False),
                              env=base_env,
                              round_start_offset=round_start_offset)
-        state.record_round_result(success, {"candidates": len(candidates)})
         if not success:
             print(f"WARNING: round {state.round_idx} had failures")
 
@@ -804,7 +847,7 @@ def _run_round(
     expected_candidates: list[dict] | None = None,
     enable_whitebox: bool = False,
     env: dict | None = None,
-    **kwargs,
+    round_start_offset: float = 0.0,
 ) -> bool:
     """Execute one round via subprocess, then ingest results.
 
@@ -820,12 +863,8 @@ def _run_round(
         schedule_data = {
             "schema_version": 1,
             "seed": args.seed,
-            "entries": [
-                {"profile": c["profile"], "index": c["scenario_index"],
-                 "name": c.get("name", f"{c['profile']}__case_{c['scenario_index']}"),
-                 "seed": args.seed, "include_smepmp": c["profile"].startswith("smepmp")}
-                for c in candidates
-            ],
+            "selection_summary": _selection_summary(candidates),
+            "entries": [_schedule_entry(c, args.seed) for c in candidates],
         }
         schedule_path.write_text(json.dumps(schedule_data, indent=2, ensure_ascii=True), encoding="ascii")
 
@@ -836,11 +875,11 @@ def _run_round(
     round_cmd += ["--schedule", str(schedule_path), "--seed", str(args.seed)]
 
     # P0-3: Separate process_success from ingest_success
-    rso = kwargs.get("round_start_offset", 0.0) if "round_start_offset" in kwargs else 0.0
+    proc = subprocess.run(round_cmd, check=False, env=env)
     process_success = proc.returncode == 0
     ingest_success = _ingest_round_results(state, round_dir, candidates,
                                             enable_whitebox=enable_whitebox,
-                                            round_start_offset=rso)
+                                            round_start_offset=round_start_offset)
     round_success = process_success and ingest_success
 
     if not process_success:
@@ -877,27 +916,54 @@ def _ingest_round_results(
     results_by_case = load_results(round_dir)
     cand_by_name: dict[str, str] = {c.get("name", ""): c["candidate_id"] for c in expected_candidates}
 
-    # P0-2: Read round timeline to get real completion order and wall times
+    # The child timeline is the only authoritative source for completion order.
     round_tl_path = round_dir / "metrics" / "coverage_timeline.jsonl"
     tl_order: list[dict] = []
-    if round_tl_path.exists():
-        try:
-            for line in round_tl_path.read_text(encoding="ascii").strip().split("\n"):
-                if not line.strip():
-                    continue
-                obj = json.loads(line)
-                if obj.get("completion_seq", 0) > 0:
-                    tl_order.append(obj)
-        except Exception:
-            pass
+    if not round_tl_path.exists():
+        print(f"  WARNING: missing authoritative round timeline: {round_tl_path}")
+        return False
+    try:
+        for line in round_tl_path.read_text(encoding="ascii").splitlines():
+            if not line.strip():
+                continue
+            obj = json.loads(line)
+            if obj.get("completion_seq", 0) > 0:
+                tl_order.append(obj)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        print(f"  WARNING: invalid authoritative round timeline: {exc}")
+        return False
 
-    # If no timeline available, fall back to alphabetical iteration
     if not tl_order:
-        for case_name in sorted(results_by_case.keys()):
-            tl_order.append({"case_id": case_name, "elapsed_wall_seconds": time.monotonic() - state.start_time})
+        print("  WARNING: round timeline has no completed cases")
+        return False
+
+    round_sequences = [entry.get("completion_seq") for entry in tl_order]
+    if round_sequences != list(range(1, len(round_sequences) + 1)):
+        print("  WARNING: round completion_seq is not continuous")
+        return False
 
     executed_names: set[str] = set()
     missing: list[str] = []
+    integrity_errors: list[str] = []
+    expected_names = {c.get("name", "") for c in expected_candidates if c.get("name")}
+    timeline_names = [str(entry.get("case_id") or "") for entry in tl_order]
+    timeline_name_set = {name for name in timeline_names if name}
+    missing_from_timeline = sorted(expected_names - timeline_name_set)
+    unexpected_in_timeline = sorted(timeline_name_set - expected_names)
+    if missing_from_timeline:
+        integrity_errors.append(
+            f"{len(missing_from_timeline)} expected candidates missing from timeline"
+        )
+    if unexpected_in_timeline:
+        integrity_errors.append(
+            f"{len(unexpected_in_timeline)} unexpected candidates in timeline"
+        )
+    if len(timeline_names) != len(timeline_name_set):
+        integrity_errors.append("duplicate case_id in round timeline")
+
+    orphan_results = sorted(set(results_by_case) - expected_names)
+    if orphan_results:
+        integrity_errors.append(f"{len(orphan_results)} orphan result groups")
 
     # P0-2: Process in timeline order (real completion order)
     for tl_entry in tl_order:
@@ -912,15 +978,24 @@ def _ingest_round_results(
             continue
         executed_names.add(case_name)
 
-        # Take the first result for this case
+        if len(result_list) != 1:
+            integrity_errors.append(
+                f"case {case_name} has {len(result_list)} results; expected exactly one"
+            )
+            continue
+
         result = result_list[0]
         qual = qualify_result_for_coverage(case, result)
         status = result.get("status", "unknown")
 
         # P0-2: Global wall time = round offset + round-relative completion time
         case_elapsed = result.get("elapsed_seconds", 0)
-        round_wall = tl_entry.get("elapsed_wall_seconds", 0) or 0
-        elapsed_wall = round_start_offset + round_wall
+        completion_monotonic = tl_entry.get("completion_monotonic_seconds")
+        if completion_monotonic is not None:
+            elapsed_wall = float(completion_monotonic) - state.start_time
+        else:
+            round_wall = tl_entry.get("elapsed_wall_seconds", 0) or 0
+            elapsed_wall = round_start_offset + float(round_wall)
 
         # Compute coverage contribution
         case_sem = set(semantic_bins_for_case(case))
@@ -933,7 +1008,7 @@ def _ingest_round_results(
 
         # Extract whitebox events
         new_wb = 0
-        if enable_whitebox:
+        if enable_whitebox and qual.eligible and str(result.get("dut") or "") == state.dut:
             try:
                 from pmpfuzz.whitebox import whitebox_event_ids_for_result
                 wb_ids = whitebox_event_ids_for_result(case, result, round_dir)
@@ -941,7 +1016,10 @@ def _ingest_round_results(
             except Exception as e:
                 print(f"  WARNING: whitebox extraction failed for {case_name}: {e}")
 
-        candidate_id = cand_by_name.get(case_name, case_name)
+        candidate_id = cand_by_name.get(case_name)
+        if candidate_id is None:
+            integrity_errors.append(f"timeline case {case_name} has no scheduled candidate_id")
+            continue
         state.record_case(
             candidate_id=candidate_id, case_id=case_name,
             profile=case.get("profile", ""), status=status,
@@ -957,7 +1035,10 @@ def _ingest_round_results(
     if missing:
         print(f"  WARNING: {len(missing)} expected cases missing results")
 
-    return len(missing) == 0
+    for error in integrity_errors:
+        print(f"  WARNING: {error}")
+
+    return len(missing) == 0 and not integrity_errors
 
 
 def _finalize(

@@ -458,8 +458,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     on_complete = None
     recorder = None
     if args.record_timeline:
-        # Initialize timeline recorder with target bins computed from
-        # the same capability that run_campaign probes.
+        # Initialize timeline recorder.
         campaign_id = args.campaign_id or f"{config.dut}__{config.profile}__seed-{config.seed}"
         variant = args.variant or "unknown"
         metrics_dir = config.out / "metrics"
@@ -472,14 +471,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             dut=config.dut,
             seed=config.seed,
         )
-        # The target bin sets will be populated after capability is known.
-        # We defer this to after run_campaign's capability probing.
-        on_complete = timeline_on_complete_factory(recorder)
-
-    results = run_campaign(config, on_complete=on_complete)
-
-    # Populate timeline target bins if recording (capability is now available)
-    if recorder is not None and args.record_timeline:
+        # Populate target bins BEFORE running any cases (probe capability now)
         _populate_timeline_targets(recorder, config)
         recorder.write_metadata(
             source_sha=_git_head_sha(),
@@ -488,6 +480,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
             per_case_timeout_seconds=config.per_case_timeout_seconds,
             hostname=os.uname().nodename if hasattr(os, "uname") else None,
         )
+        on_complete = timeline_on_complete_factory(recorder)
+
+    results = run_campaign(config, on_complete=on_complete)
 
     if args.whitebox_artifacts:
         signal_path, dut_coverage_path = _write_observed_whitebox_outputs(config.out)

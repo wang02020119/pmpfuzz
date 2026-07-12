@@ -3,7 +3,9 @@
 schema_version: "2.0"
 
 common:
-  duts: [rocket-clean, boom-clean]
+  duts: [rocket-clean, boom-clean, xiangshan-clean, cva6-clean]
+  mandatory_duts: [rocket-clean, boom-clean, xiangshan-clean]
+  conditionally_excludable_duts: [cva6-clean]
   pilot_seeds: [1, 2, 3]
   formal_seeds: [101, 202, 303, 404, 505, 606, 707, 808, 909, 1010]
   bootstrap_size: 32
@@ -22,7 +24,8 @@ experiments:
     description: "Coverage effectiveness and feedback ablation"
     methods: [pmpfuzz]
     variants: [random, bb, bb-wb]
-    duts: [rocket-clean, boom-clean]
+    duts: [rocket-clean, boom-clean, xiangshan-clean, cva6-clean]
+    mandatory_duts: [rocket-clean, boom-clean, xiangshan-clean]
     paired_bootstrap: true
     same_instrumented_binary: true
     outputs:
@@ -37,7 +40,8 @@ experiments:
     description: "Common DUT event coverage against external baseline"
     methods: [pmpfuzz-bb-wb, cascade]
     optional_methods: [riscv-dv]
-    duts: [rocket-clean, boom-clean]
+    duts: [rocket-clean, boom-clean, xiangshan-clean, cva6-clean]
+    mandatory_duts: [rocket-clean, boom-clean, xiangshan-clean]
     comparison_metric: normalized-common-dut-events
     pmpfuzz_specific_baseline_fields: null
     outputs:

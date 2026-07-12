@@ -39,12 +39,16 @@
 
 ### 2.3 DUT 与版本
 
-实验一和实验二集中在：
+实验一和实验二的 DUT 范围为：
 
 ```text
 rocket-clean
 boom-clean
+xiangshan-clean
+cva6-clean
 ```
+
+其中 Rocket、BOOM、XiangShan 是 mandatory DUT。CVA6 也按正式 DUT 准备；只有在可复现构建和 readiness 修复后仍有明确工程阻塞时才允许排除，并必须保留完整失败证据。不能因为 XiangShan 工作量较大而将其删除。
 
 名称中的 `clean` 是现有适配器标识。正式运行必须额外记录实际二进制是否插桩，不能仅根据名称推断。
 
@@ -133,7 +137,9 @@ eligible_cases
 ### 3.3 矩阵
 
 ```text
-DUTs: rocket-clean, boom-clean
+DUTs: rocket-clean, boom-clean, xiangshan-clean, cva6-clean
+Mandatory DUTs: rocket-clean, boom-clean, xiangshan-clean
+Conditionally excludable DUT: cva6-clean（仅工程 readiness 明确失败）
 Variants: random, bb, bb-wb
 Pilot seeds: 1, 2, 3
 Formal seeds: 101, 202, 303, 404, 505, 606, 707, 808, 909, 1010
@@ -149,7 +155,8 @@ Stop: candidate pool exhausted or fixed wall-clock cap
 正式规模为：
 
 ```text
-2 DUT × 3 variants × 10 seeds = 60 campaigns
+3 mandatory DUT × 3 variants × 10 seeds = 90 mandatory campaigns
+含 CVA6 时：4 DUT × 3 variants × 10 seeds = 120 campaigns
 ```
 
 ### 3.4 主要指标
@@ -186,7 +193,8 @@ Stop: candidate pool exhausted or fixed wall-clock cap
 
 **Figure E1-A：Time-to-coverage**
 
-- 两个面板：Rocket、BOOM；
+- 三个 mandatory 面板：Rocket、BOOM、XiangShan；
+- CVA6 readiness 通过时增加第四面板；
 - 横轴：wall-clock minutes；
 - 纵轴：execution-qualified semantic coverage rate；
 - 三条曲线：Random、BB、BB+WB；
@@ -223,7 +231,7 @@ Stop: candidate pool exhausted or fixed wall-clock cap
 
 ### 4.1 研究问题
 
-在相同 Rocket/BOOM DUT、相同插桩、相同资源和停止预算下，PMPFuzz 是否能比成熟通用 RISC-V 测试生成方法更快覆盖共同可观测的 DUT 行为事件？
+在相同 Rocket、BOOM、XiangShan（以及 readiness 通过时的 CVA6）DUT、相同插桩、相同资源和停止预算下，PMPFuzz 是否能比成熟通用 RISC-V 测试生成方法更快覆盖共同可观测的 DUT 行为事件？
 
 ### 4.2 方法
 
@@ -238,7 +246,7 @@ riscv-dv 仅在官方 generator 和可用模拟器环境能够稳定产生、执
 
 ### 4.3 公平比较规则
 
-- 使用相同 instrumented Rocket/BOOM binary；
+- 在每个 DUT 内使用相同 instrumented binary；
 - 相同 host CPU allocation 和并行度；
 - 相同 wall-clock cap；
 - 同时报告 fixed executed-test count 视图；
@@ -252,7 +260,9 @@ riscv-dv 仅在官方 generator 和可用模拟器环境能够稳定产生、执
 ### 4.4 矩阵
 
 ```text
-DUTs: rocket-clean, boom-clean
+DUTs: rocket-clean, boom-clean, xiangshan-clean, cva6-clean
+Mandatory DUTs: rocket-clean, boom-clean, xiangshan-clean
+Conditionally excludable DUT: cva6-clean（仅工程 readiness 明确失败）
 Methods: pmpfuzz-bb-wb, cascade
 Optional method: riscv-dv
 Pilot seeds: 1, 2, 3
@@ -264,7 +274,8 @@ Secondary view: first N completed tests, N frozen after Pilot
 不含 riscv-dv 时，正式规模为：
 
 ```text
-2 DUT × 2 methods × 10 seeds = 40 campaigns
+3 mandatory DUT × 2 methods × 10 seeds = 60 mandatory campaigns
+含 CVA6 时：4 DUT × 2 methods × 10 seeds = 80 campaigns
 ```
 
 ### 4.5 共同指标
@@ -302,7 +313,8 @@ case ID、方法名、随机 seed 和原始地址不得用于制造方法特有�
 
 **Figure E2：Common DUT events over time**
 
-- 两个面板：Rocket、BOOM；
+- 三个 mandatory 面板：Rocket、BOOM、XiangShan；
+- CVA6 readiness 通过时增加第四面板；
 - 横轴：wall-clock minutes；
 - 纵轴：distinct normalized DUT events；
 - 方法：PMPFuzz、Cascade，以及可用时的 riscv-dv；

@@ -80,6 +80,29 @@ artifact path
 5. 经用户明确批准后再运行 Pilot；
 6. Pilot 合格且再次获得用户授权后，才能运行正式长时间实验。
 
+### 4.1 DUT 范围是硬约束
+
+实验一和实验二必须覆盖：
+
+```text
+Rocket
+BOOM
+XiangShan
+```
+
+不得因为 XiangShan 的构建、适配、插桩或运行工作量较大而删除、替换或降级为非正式结果。
+
+CVA6 也应进入实验一和实验二。只有在完成可复现构建和 readiness 修复后仍存在明确、可记录的工程阻塞时，才允许把 CVA6 从正式矩阵中删除。删除时必须保留失败命令、日志、版本和 readiness 报告，并明确标记为工程环境排除；不得分析任何 `nonpass` 或安全原因。
+
+因此 DUT 优先级为：
+
+```text
+mandatory: rocket-clean, boom-clean, xiangshan-clean
+best-effort but expected: cva6-clean
+```
+
+任何实验矩阵、Pilot、聚合脚本和论文候选表格都必须遵守这一范围。
+
 主要参考任务书：
 
 ```text

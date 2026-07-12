@@ -84,14 +84,15 @@ class ContractPredicatesTest(unittest.TestCase):
             write_json(run_dir / "cases" / case["name"] / "case.json", case)
 
             coverage = coverage_from_run(run_dir)
-            gap = predicate_gap_from_runs([run_dir], target=CORE_STATEFUL_TARGET)
+            gap = predicate_gap_from_runs([run_dir], target=CORE_STATEFUL_TARGET,
+                                          coverage_basis="manifest")
             report_path = write_report(run_dir)
             report = report_path.read_text(encoding="ascii")
 
         self.assertIn("stateful.denied_store_no_side_effect", coverage["contract_predicates"])
         self.assertGreater(gap["total_target_predicates"], gap["covered_target_predicates"])
         self.assertTrue(gap["top_predicate_gaps"])
-        self.assertIn("Contract Predicate Coverage", report)
+        self.assertIn("Execution-Qualified Coverage", report)
 
     def test_predicate_scheduler_prioritizes_missing_contract_predicates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -106,6 +107,7 @@ class ContractPredicatesTest(unittest.TestCase):
                 coverage_mode="predicates",
                 max_cases=8,
                 seed=20260628,
+                coverage_basis="manifest",
             )
             second = build_schedule(
                 [run_dir],
@@ -113,6 +115,7 @@ class ContractPredicatesTest(unittest.TestCase):
                 coverage_mode="predicates",
                 max_cases=8,
                 seed=20260628,
+                coverage_basis="manifest",
             )
 
         self.assertEqual(first, second)

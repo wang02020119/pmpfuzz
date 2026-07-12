@@ -3,6 +3,8 @@
 Research-grade RISC-V PMP fuzzing tool for PMP, privilege switching, Sv39
 translation, and page-table-walk PMP checks.
 
+Detailed architecture and security design: [`docs/PMPFUZZ_DESIGN.md`](docs/PMPFUZZ_DESIGN.md).
+
 Current scope:
 
 - PMP/Smepmp-aware scenario model.

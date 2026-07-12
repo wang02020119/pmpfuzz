@@ -119,6 +119,9 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.add_argument("--out", type=Path, required=True)
     schedule.add_argument("--include-experimental", action="store_true")
     schedule.add_argument("--coverage-mode", choices=["semantic", "pairwise", "security-triples", "predicates"], default="semantic")
+    schedule.add_argument("--coverage-basis", choices=["execution", "manifest"], default="execution",
+                          help="execution: use execution-qualified coverage (default); manifest: use generated case.json only")
+    schedule.add_argument("--dut", default=None, help="DUT name for execution coverage (required if the run contains multiple DUTs)")
 
     feedback = subparsers.add_parser("feedback", help="build the next behavior feedback-guided campaign")
     feedback.add_argument("--from-runs", required=True, help="comma-separated run or repro directories")
@@ -198,6 +201,8 @@ def main(argv: list[str] | None = None) -> int:
             out_dir=args.out,
             include_experimental=args.include_experimental,
             coverage_mode=args.coverage_mode,
+            coverage_basis=args.coverage_basis,
+            dut=args.dut,
         )
         print(f"schedule={schedule_path}")
         return 0
@@ -460,11 +465,53 @@ def _cmd_repro(args: argparse.Namespace) -> int:
     out_results.mkdir(parents=True, exist_ok=True)
     write_json(out_cases / "case.json", case)
 
+    # Resolve dut list and ISA before the DUT loop
+    dut_names = [item.strip() for item in args.dut.split(",") if item.strip()]
+    isa = args.isa or ("rv64gc" if args.no_smepmp else "rv64gc_smepmp")
+
+    # Write run.json for repro
+    write_json(
+        out / "run.json",
+        {
+            "mode": "repro",
+            "source_case": str(case_dir),
+            "duts": dut_names,
+            "isa": isa,
+            "no_smepmp": args.no_smepmp,
+        },
+    )
+
+    # Write dut_capabilities.json for all DUTs
+    repro_capabilities = {}
+    for dut_name in dut_names:
+        chipyard_dir = args.chipyard_dir or (
+            DEFAULT_CLEAN_CHIPYARD_DIR if dut_name in CLEAN_CHIPYARD_DUTS else DEFAULT_CHIPYARD_DIR
+        )
+        if dut_name == "spike":
+            repro_capabilities[dut_name] = capability_for_dut(
+                dut_name, path=args.spike, isa=isa,
+            )
+        elif args.dut_bin:
+            repro_capabilities[dut_name] = capability_for_dut(
+                dut_name, path=args.dut_bin, isa=isa,
+            )
+        else:
+            repro_capabilities[dut_name] = capability_for_dut(
+                dut_name, isa=isa,
+            )
+    write_json(
+        out / "dut_capabilities.json",
+        {
+            "schema_version": 3,
+            "duts": repro_capabilities,
+        },
+    )
+
     root = Path(__file__).resolve().parents[1]
     compile_script = root / "scripts" / "compile_one.sh"
 
     any_failed = False
-    for dut_name in [item.strip() for item in args.dut.split(",") if item.strip()]:
+    for dut_name in dut_names:
         result_dir = out_results / f"{case['name']}_{dut_name}"
         result_dir.mkdir(parents=True, exist_ok=True)
         asm = out_cases / f"{case['name']}.{dut_name}.S"
@@ -503,7 +550,7 @@ def _cmd_repro(args: argparse.Namespace) -> int:
         dut = make_dut(
             dut=dut_name,
             spike=args.spike,
-            isa=args.isa or ("rv64gc" if args.no_smepmp else "rv64gc_smepmp"),
+            isa=isa,
             chipyard_dir=chipyard_dir,
             dut_bin=args.dut_bin,
             simlen=args.simlen,
@@ -529,11 +576,7 @@ def _cmd_repro(args: argparse.Namespace) -> int:
             reason = judgment.reason
             observation_valid = judgment.observation_valid
             stage_verified = judgment.stage_verified
-        capability = (
-            capability_for_dut(dut_name, path=args.dut_bin)
-            if args.dut_bin and dut_name == "xiangshan-clean"
-            else capability_for_dut(dut_name)
-        )
+        capability = repro_capabilities[dut_name]
         applicability = oracle_applicability_for_result(
             case,
             capability,

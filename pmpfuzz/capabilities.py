@@ -13,7 +13,7 @@ from .dut import (
 )
 
 
-DEFAULT_CAPABILITY_SCHEMA_VERSION = 2
+DEFAULT_CAPABILITY_SCHEMA_VERSION = 3
 DEFAULT_CAPABILITY_SPIKE = "/home/dubhe/wjs/boom_host_deploy/opt-riscv/bin/spike"
 
 
@@ -23,6 +23,7 @@ def capability_for_dut(
     available: bool | None = None,
     path: Path | str | None = None,
     probe_smepmp: bool = False,
+    isa: str | None = None,
 ) -> dict[str, Any]:
     spec = _DUT_SPECS.get(dut)
     if spec is None:
@@ -48,6 +49,18 @@ def capability_for_dut(
         elif build_config is not None:
             notes.append(f"build metadata: {build_config}")
     supported_capabilities = dict(spec["supported_capabilities"])
+
+    # -- ISA-driven Smepmp override for Spike ---------------------------------
+    if dut == "spike" and isa is not None:
+        effective_smepmp = "smepmp" in isa.lower()
+        supported_capabilities["smepmp"] = effective_smepmp
+        # rlb is hardwired to zero on Spike regardless of ISA
+        supported_capabilities["smepmp_rlb"] = False
+        if not effective_smepmp:
+            notes.append(f"Spike ISA={isa} does not include Smepmp; Smepmp marked unsupported")
+        else:
+            notes.append(f"Spike ISA={isa} includes Smepmp")
+
     smepmp_static = spec.get("smepmp_features") or {}
     smepmp_probe = _smepmp_probe_result(
         dut,
@@ -70,6 +83,7 @@ def capability_for_dut(
         "oracle_applicability": oracle_applicability,
         "smepmp": smepmp_probe,
         "notes": notes,
+        "isa": isa or "",
     }
     return capability
 
@@ -132,6 +146,25 @@ def oracle_applicability_for_result(
     if failure_class == "infra_unadapted":
         return "infra_unadapted"
     return oracle_applicability_for_case(case, capability)
+
+
+def capability_coverage_projection(capability: dict[str, Any]) -> dict[str, Any]:
+    """Return the subset of capability fields that affect C_T (coverage target).
+
+    Only fields that change the oracle-applicability decision or target-space
+    enumeration are included.  Paths, timestamps, notes, and smepmp diagnostic
+    descriptions (warl_behavior, probe_status, etc.) are deliberately excluded.
+    Whether Smepmp is supported is already reflected by supported_capabilities.
+    """
+    return {
+        "schema_version": capability.get("schema_version"),
+        "dut": capability.get("dut"),
+        "available": capability.get("available"),
+        "isa": capability.get("isa"),
+        "supported_capabilities": capability.get("supported_capabilities") or {},
+        "ad_update_mode": capability.get("ad_update_mode"),
+        "oracle_applicability": capability.get("oracle_applicability"),
+    }
 
 
 def _is_experimental_case(case: dict[str, Any]) -> bool:

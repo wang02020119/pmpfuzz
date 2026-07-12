@@ -202,7 +202,24 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
             "whitebox_artifacts": config.whitebox_artifacts,
         },
     )
-    dut_capability = capability_for_dut(config.dut, path=config.dut_bin) if config.dut_bin else capability_for_dut(config.dut)
+    # Create capability with actual binary path and ISA
+    if config.dut == "spike":
+        dut_capability = capability_for_dut(
+            config.dut,
+            path=config.spike,
+            isa=config.isa,
+        )
+    elif config.dut_bin:
+        dut_capability = capability_for_dut(
+            config.dut,
+            path=config.dut_bin,
+            isa=config.isa,
+        )
+    else:
+        dut_capability = capability_for_dut(
+            config.dut,
+            isa=config.isa,
+        )
     write_json(
         out_dir / "dut_capabilities.json",
         {

@@ -2,7 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pmpfuzz.schema import scenario_to_case_dict, write_json
+from pmpfuzz.capabilities import capability_for_dut
+from pmpfuzz.schema import result_to_dict, scenario_to_case_dict, write_json
 from pmpfuzz.scenario import ScenarioGenerator
 from pmpfuzz.semantic_coverage import (
     CORE_STATEFUL_TARGET,
@@ -110,14 +111,17 @@ class SemanticCoverageTest(unittest.TestCase):
             case = scenario_to_case_dict(scenario, seed=11, index=0)
             write_json(run_dir / "cases" / case["name"] / "case.json", case)
 
-            first = build_schedule([run_dir], target=CORE_STATEFUL_TARGET, max_cases=8, seed=20260628)
-            second = build_schedule([run_dir], target=CORE_STATEFUL_TARGET, max_cases=8, seed=20260628)
+            first = build_schedule([run_dir], target=CORE_STATEFUL_TARGET, max_cases=8, seed=20260628,
+                                   coverage_basis="manifest")
+            second = build_schedule([run_dir], target=CORE_STATEFUL_TARGET, max_cases=8, seed=20260628,
+                                    coverage_basis="manifest")
             schedule_path = write_schedule(
                 [run_dir],
                 target=CORE_STATEFUL_TARGET,
                 max_cases=8,
                 seed=20260628,
                 out_dir=out_dir,
+                coverage_basis="manifest",
             )
 
             written = schedule_path.read_text(encoding="ascii")
@@ -144,6 +148,7 @@ class SemanticCoverageTest(unittest.TestCase):
                 coverage_mode="pairwise",
                 max_cases=8,
                 seed=20260628,
+                coverage_basis="manifest",
             )
             second = build_schedule(
                 [run_dir],
@@ -151,6 +156,7 @@ class SemanticCoverageTest(unittest.TestCase):
                 coverage_mode="pairwise",
                 max_cases=8,
                 seed=20260628,
+                coverage_basis="manifest",
             )
             schedule_path = write_schedule(
                 [run_dir],
@@ -159,6 +165,7 @@ class SemanticCoverageTest(unittest.TestCase):
                 max_cases=8,
                 seed=20260628,
                 out_dir=out_dir,
+                coverage_basis="manifest",
             )
             written = schedule_path.read_text(encoding="ascii")
 
@@ -177,6 +184,7 @@ class SemanticCoverageTest(unittest.TestCase):
                 coverage_mode="security-triples",
                 max_cases=4,
                 seed=20260628,
+                coverage_basis="manifest",
             )
 
         self.assertEqual(schedule["coverage_mode"], "security-triples")
@@ -188,6 +196,124 @@ class SemanticCoverageTest(unittest.TestCase):
                 for bin_name in entry["covers_missing_combo_bins"]
             )
         )
+
+    # ---- New tests for execution-qualified coverage (RED phase additions) ----
+
+    def test_schedule_with_coverage_basis_execution_records_dut_and_basis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "seed"
+            scenario = ScenarioGenerator(seed=7, include_smepmp=False, profile="pmp-boundary").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=7, index=0)
+            result = result_to_dict(
+                case=case,
+                dut="spike",
+                status="pass",
+                elapsed_seconds=0.1,
+                returncode=0,
+                log=run_dir / "results" / case["name"] / "case.log",
+                reason=None,
+                observed_phase="probe",
+                observation_valid=True,
+                stage_verified=True,
+                oracle_applicability="valid",
+            )
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+            write_json(run_dir / "results" / case["name"] / "result.json", result)
+            write_json(run_dir / "dut_capabilities.json",
+                       {"schema_version": 3, "duts": {"spike": capability_for_dut("spike", available=True)}})
+            write_json(run_dir / "run.json", {"mode": "test", "dut": "spike", "isa": "rv64gc"})
+
+            schedule = build_schedule(
+                [run_dir],
+                target=CORE_STATEFUL_TARGET,
+                coverage_basis="execution",
+                max_cases=4,
+                seed=20260628,
+            )
+
+        self.assertEqual(schedule["coverage_basis"], "execution")
+        self.assertIn("dut", schedule)
+        self.assertIn("qualification", schedule)
+
+    def test_manifest_basis_reads_only_case_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "seed"
+            scenario = ScenarioGenerator(seed=7, include_smepmp=False, profile="pmp-boundary").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=7, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+
+            gap = coverage_gap_from_runs([run_dir], target=CORE_STATEFUL_TARGET,
+                                         coverage_basis="manifest")
+
+        self.assertGreater(gap["covered_target_bins"], 0)
+
+    def test_execution_gap_requires_capability_and_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "seed"
+            scenario = ScenarioGenerator(seed=7, include_smepmp=False, profile="pmp-boundary").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=7, index=0)
+            result = result_to_dict(
+                case=case,
+                dut="spike",
+                status="pass",
+                elapsed_seconds=0.1,
+                returncode=0,
+                log=run_dir / "results" / case["name"] / "case.log",
+                reason=None,
+                observed_phase="probe",
+                observation_valid=True,
+                stage_verified=True,
+                oracle_applicability="valid",
+            )
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+            write_json(run_dir / "results" / case["name"] / "result.json", result)
+            write_json(run_dir / "dut_capabilities.json",
+                       {"schema_version": 3, "duts": {"spike": capability_for_dut("spike", available=True)}})
+            write_json(run_dir / "run.json", {"mode": "test", "dut": "spike", "isa": "rv64gc"})
+
+            gap = coverage_gap_from_runs([run_dir], target=CORE_STATEFUL_TARGET,
+                                         coverage_basis="execution")
+
+        self.assertGreater(gap["total_target_bins"], 0)
+
+    def test_schedule_with_dut_explicit_includes_capability_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "seed"
+            scenario = ScenarioGenerator(seed=7, include_smepmp=False, profile="pmp-boundary").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=7, index=0)
+            result = result_to_dict(
+                case=case,
+                dut="spike",
+                status="pass",
+                elapsed_seconds=0.1,
+                returncode=0,
+                log=run_dir / "results" / case["name"] / "case.log",
+                reason=None,
+                observed_phase="probe",
+                observation_valid=True,
+                stage_verified=True,
+                oracle_applicability="valid",
+            )
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+            write_json(run_dir / "results" / case["name"] / "result.json", result)
+            cap = capability_for_dut("spike", available=True)
+            write_json(run_dir / "dut_capabilities.json",
+                       {"schema_version": 3, "duts": {"spike": cap}})
+            write_json(run_dir / "run.json", {"mode": "test", "dut": "spike", "isa": "rv64gc"})
+
+            schedule = build_schedule(
+                [run_dir],
+                target=CORE_STATEFUL_TARGET,
+                coverage_basis="execution",
+                dut="spike",
+                max_cases=4,
+                seed=20260628,
+            )
+
+        self.assertEqual(schedule["dut"], "spike")
+        self.assertIn("capability_fingerprint", schedule)
+        self.assertIn("qualification", schedule)
+        self.assertIn("eligible_results", schedule["qualification"])
 
 
 if __name__ == "__main__":

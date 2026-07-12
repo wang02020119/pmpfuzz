@@ -41,7 +41,7 @@ class CapabilityModelTest(unittest.TestCase):
     def test_capability_schema_v2_records_smepmp_probe_details(self):
         matrix = capability_matrix(["spike", "rocket-clean"], probe_smepmp=True)
 
-        self.assertEqual(matrix["schema_version"], 2)
+        self.assertEqual(matrix["schema_version"], 3)
         spike = matrix["duts"]["spike"]
         rocket = matrix["duts"]["rocket-clean"]
         self.assertIn("smepmp", spike)
@@ -61,7 +61,7 @@ class CapabilityModelTest(unittest.TestCase):
             (Path(tmp) / "VSimTop.mk").write_text("CXXFLAGS += -DDIFFTEST\n", encoding="ascii")
             xiangshan = capability_for_dut("xiangshan-clean", path=emu, available=True)
 
-        self.assertEqual(spike["schema_version"], DEFAULT_CAPABILITY_SCHEMA_VERSION)
+        self.assertEqual(spike["schema_version"], 3)
         self.assertEqual(spike["finish_protocol"], "tohost")
         self.assertEqual(spike["diagnostic_depth"], "structured_tohost")
         self.assertEqual(spike["oracle_applicability"], "valid")
@@ -151,7 +151,7 @@ class CapabilityModelTest(unittest.TestCase):
             write_json(
                 run_dir / "dut_capabilities.json",
                 {
-                    "schema_version": DEFAULT_CAPABILITY_SCHEMA_VERSION,
+                    "schema_version": 3,
                     "duts": {"xiangshan-clean": capability_for_dut("xiangshan-clean", available=True)},
                 },
             )
@@ -207,6 +207,106 @@ class CapabilityModelTest(unittest.TestCase):
         self.assertIn("smepmp_rlb", required_capabilities_for_case(case))
         self.assertFalse(spike["supported_capabilities"]["smepmp_rlb"])
         self.assertEqual(oracle_applicability_for_case(case, spike), "unsupported")
+
+    # ---- New tests for execution-qualified coverage (RED phase additions) ----
+
+    def test_capability_schema_v3_includes_isa(self):
+        cap = capability_for_dut("spike", isa="rv64gc", available=True)
+        self.assertEqual(cap["schema_version"], 3)
+        self.assertIn("isa", cap)
+        self.assertEqual(cap["isa"], "rv64gc")
+
+    def test_spike_rv64gc_smepmp_is_unsupported(self):
+        cap = capability_for_dut("spike", isa="rv64gc", available=True)
+        self.assertFalse(cap["supported_capabilities"]["smepmp"],
+                         "rv64gc Spike must report Smepmp as unsupported")
+
+    def test_spike_rv64gc_smepmp_isa_reports_smepmp_supported(self):
+        cap = capability_for_dut("spike", isa="rv64gc_smepmp", available=True)
+        self.assertTrue(cap["supported_capabilities"]["smepmp"],
+                        "rv64gc_smepmp Spike must report Smepmp as supported")
+
+    def test_capability_matrix_schema_v3(self):
+        matrix = capability_matrix(["spike", "rocket-clean"])
+        self.assertEqual(matrix["schema_version"], 3)
+
+    def test_missing_dut_capabilities_does_not_silently_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(seed=1, include_smepmp=False, profile="pmp-boundary").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=1, index=0)
+            result = result_to_dict(
+                case=case,
+                dut="spike",
+                status="pass",
+                elapsed_seconds=0.1,
+                returncode=0,
+                log=run_dir / "results" / case["name"] / "case.log",
+                reason=None,
+                observed_phase="completed",
+                observed_event="completion",
+                observation_valid=True,
+                stage_verified=True,
+                oracle_applicability="valid",
+            )
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+            write_json(run_dir / "results" / case["name"] / "result.json", result)
+            # No dut_capabilities.json written
+
+            from pmpfuzz.coverage import coverage_from_run
+            cov = coverage_from_run(run_dir)
+
+        exec_cov = cov["execution_coverage"]
+        # Without capability file, all entries should be unavailable
+        self.assertIn("by_dut", exec_cov)
+        for dut_name, entry in exec_cov["by_dut"].items():
+            self.assertFalse(entry.get("available", True),
+                             f"missing capabilities → {dut_name} unavailable")
+            self.assertIn("unavailable_reason", entry)
+
+
+class CapabilityFingerprintTest(unittest.TestCase):
+    """Fix 7: fingerprint is stable for coverage-relevant fields only."""
+
+    def test_fingerprint_ignores_path_and_notes(self):
+        from pmpfuzz.semantic_coverage import _capability_fingerprint
+
+        cap1 = capability_for_dut("spike", path="/foo/spike", isa="rv64gc")
+        cap1["notes"] = ["build v1"]
+        cap2 = capability_for_dut("spike", path="/bar/spike", isa="rv64gc")
+        cap2["notes"] = ["completely different notes"]
+
+        fp1 = _capability_fingerprint(cap1)
+        fp2 = _capability_fingerprint(cap2)
+
+        self.assertEqual(fp1, fp2,
+                         "fingerprint must ignore path and notes differences")
+
+    def test_fingerprint_differs_for_isa_change(self):
+        from pmpfuzz.semantic_coverage import _capability_fingerprint
+
+        cap1 = capability_for_dut("spike", path="/tmp/spike", isa="rv64gc")
+        cap2 = capability_for_dut("spike", path="/tmp/spike", isa="rv64gc_smepmp")
+
+        fp1 = _capability_fingerprint(cap1)
+        fp2 = _capability_fingerprint(cap2)
+
+        self.assertNotEqual(fp1, fp2,
+                            "fingerprint must differ for different ISA")
+
+    def test_fingerprint_differs_for_capability_change(self):
+        from pmpfuzz.semantic_coverage import _capability_fingerprint
+
+        cap1 = capability_for_dut("spike", path="/tmp/spike", isa="rv64gc")
+        cap1["supported_capabilities"]["smepmp"] = False
+        cap2 = capability_for_dut("spike", path="/tmp/spike", isa="rv64gc")
+        cap2["supported_capabilities"]["smepmp"] = True
+
+        fp1 = _capability_fingerprint(cap1)
+        fp2 = _capability_fingerprint(cap2)
+
+        self.assertNotEqual(fp1, fp2,
+                            "fingerprint must differ for different supported_capabilities")
 
 
 if __name__ == "__main__":

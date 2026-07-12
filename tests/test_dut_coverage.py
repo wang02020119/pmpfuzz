@@ -56,7 +56,7 @@ class DutWhiteboxCoverageTest(unittest.TestCase):
             out_exists = out.exists()
 
         self.assertTrue(out_exists)
-        self.assertEqual(campaign_coverage["schema_version"], 4)
+        self.assertEqual(campaign_coverage["schema_version"], 5)
         self.assertGreater(campaign_coverage["dut_whitebox"]["covered_bins"], 0)
         self.assertIn("security_coverage_point", campaign_coverage["dut_whitebox"]["by_kind"])
 

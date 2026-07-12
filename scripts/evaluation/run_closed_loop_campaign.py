@@ -688,10 +688,12 @@ def run_closed_loop(args: argparse.Namespace) -> int:
     print(f"[{datetime.now(timezone.utc).isoformat()}] Bootstrap (size={args.bootstrap_size})")
     bootstrap_dir = rounds_dir / "round_0000"
     bootstrap_candidates = _select_bootstrap_candidates(state, args)
+    round_start_offset = time.monotonic() - start_wall
     success = _run_round(base_cmd, bootstrap_dir, args, state,
                          bootstrap_candidates=bootstrap_candidates,
                          enable_whitebox=getattr(args, "whitebox", False),
-                         env=base_env)
+                         env=base_env,
+                         round_start_offset=round_start_offset)
     if not success:
         state.record_round_result(False, {"error": "bootstrap failed"})
         _finalize(state, campaign_dir, metrics_dir, meta, start_wall)
@@ -701,10 +703,14 @@ def run_closed_loop(args: argparse.Namespace) -> int:
     completed_round_dirs = [bootstrap_dir]
 
     # --- Main loop ---
+    max_rounds = getattr(args, "max_rounds", None)
     while True:
         elapsed = time.monotonic() - start_wall
         if elapsed >= args.time_budget:
             print(f"Time budget exhausted after {state.round_idx} rounds")
+            break
+        if max_rounds is not None and state.round_idx >= max_rounds:
+            print(f"Max rounds reached: {max_rounds}")
             break
 
         unexec = state.unexecuted_candidates()
@@ -741,10 +747,12 @@ def run_closed_loop(args: argparse.Namespace) -> int:
         schedule_path.write_text(json.dumps(schedule_data, indent=2, ensure_ascii=True), encoding="ascii")
 
         # Execute round with whitebox enabled
+        round_start_offset = time.monotonic() - start_wall
         success = _run_round(base_cmd, round_dir, args, state,
                              schedule_path=schedule_path, expected_candidates=candidates,
                              enable_whitebox=getattr(args, "whitebox", False),
-                             env=base_env)
+                             env=base_env,
+                             round_start_offset=round_start_offset)
         state.record_round_result(success, {"candidates": len(candidates)})
         if not success:
             print(f"WARNING: round {state.round_idx} had failures")
@@ -774,6 +782,7 @@ def _run_round(
     expected_candidates: list[dict] | None = None,
     enable_whitebox: bool = False,
     env: dict | None = None,
+    **kwargs,
 ) -> bool:
     """Execute one round via subprocess, then ingest results.
 
@@ -805,12 +814,15 @@ def _run_round(
     round_cmd += ["--schedule", str(schedule_path), "--seed", str(args.seed)]
 
     proc = subprocess.run(round_cmd, check=False, env=env)
-    # Fix 9: Check return code
     if proc.returncode != 0:
         print(f"  WARNING: round subprocess exited with {proc.returncode}")
         state.record_round_result(False, {"returncode": proc.returncode})
 
-    return _ingest_round_results(state, round_dir, candidates, enable_whitebox=enable_whitebox)
+    # P0-2: Pass round_start_offset so ingestion can compute global wall time
+    rso = kwargs.get("round_start_offset", 0.0) if "round_start_offset" in kwargs else 0.0
+    return _ingest_round_results(state, round_dir, candidates,
+                                  enable_whitebox=enable_whitebox,
+                                  round_start_offset=rso)
 
 
 def _ingest_round_results(
@@ -818,13 +830,12 @@ def _ingest_round_results(
     round_dir: Path,
     expected_candidates: list[dict[str, Any]],
     enable_whitebox: bool = False,
+    round_start_offset: float = 0.0,
 ) -> bool:
-    """Read round results, update CampaignState, returns True on success.
+    """P0-2 FIX: Read round timeline for real completion order and wall time.
 
-    Fix 2: Only eligible cases update coverage.
-    Fix 6: Extract real whitebox events.
-    Fix 7: Use per-case completion times from result files.
-    Fix 9: Check for missing results and infra failures.
+    Each case's global wall time = round_start_offset + round_timeline_wall.
+    This preserves real completion order and avoids batch-jump artifacts.
     """
     from pmpfuzz.coverage_qualification import load_case_map, load_results, qualify_result_for_coverage
     from pmpfuzz.semantic_coverage import (
@@ -835,71 +846,87 @@ def _ingest_round_results(
     results_by_case = load_results(round_dir)
     cand_by_name: dict[str, str] = {c.get("name", ""): c["candidate_id"] for c in expected_candidates}
 
-    # Fix 3: Track which expected candidates got results
-    executed_names: set[str] = set()
-    missing_candidates: list[str] = []
+    # P0-2: Read round timeline to get real completion order and wall times
+    round_tl_path = round_dir / "metrics" / "coverage_timeline.jsonl"
+    tl_order: list[dict] = []
+    if round_tl_path.exists():
+        try:
+            for line in round_tl_path.read_text(encoding="ascii").strip().split("\n"):
+                if not line.strip():
+                    continue
+                obj = json.loads(line)
+                if obj.get("completion_seq", 0) > 0:
+                    tl_order.append(obj)
+        except Exception:
+            pass
 
-    for case_name, result_list in results_by_case.items():
+    # If no timeline available, fall back to alphabetical iteration
+    if not tl_order:
+        for case_name in sorted(results_by_case.keys()):
+            tl_order.append({"case_id": case_name, "elapsed_wall_seconds": time.monotonic() - state.start_time})
+
+    executed_names: set[str] = set()
+    missing: list[str] = []
+
+    # P0-2: Process in timeline order (real completion order)
+    for tl_entry in tl_order:
+        case_name = tl_entry.get("case_id", "")
+        if not case_name:
+            continue
+
         case = case_map.get(case_name)
-        if case is None:
+        result_list = results_by_case.get(case_name, [])
+        if case is None or not result_list:
+            missing.append(case_name)
             continue
         executed_names.add(case_name)
 
-        for result in result_list:
-            # Fix 7: Use actual case completion wall time from the result
-            case_elapsed = result.get("elapsed_seconds", 0)
-            elapsed_wall = time.monotonic() - state.start_time
+        # Take the first result for this case
+        result = result_list[0]
+        qual = qualify_result_for_coverage(case, result)
+        status = result.get("status", "unknown")
 
-            qual = qualify_result_for_coverage(case, result)
-            status = result.get("status", "unknown")
+        # P0-2: Global wall time = round offset + round-relative completion time
+        case_elapsed = result.get("elapsed_seconds", 0)
+        round_wall = tl_entry.get("elapsed_wall_seconds", 0) or 0
+        elapsed_wall = round_start_offset + round_wall
 
-            # Compute coverage — Fix 2: pass eligible flag
-            case_sem = set(semantic_bins_for_case(case))
-            case_pair = {b for b in combo_bins_for_case(case) if b.startswith("combo2:")}
-            case_trip = {b for b in combo_bins_for_case(case) if b.startswith("combo3:")}
-            case_pred = set(contract_predicates_for_case(case))
-            ns, np, nt, npr = state.update_coverage_sets(
-                case_sem, case_pair, case_trip, case_pred, eligible=qual.eligible,
-            )
+        # Compute coverage contribution
+        case_sem = set(semantic_bins_for_case(case))
+        case_pair = {b for b in combo_bins_for_case(case) if b.startswith("combo2:")}
+        case_trip = {b for b in combo_bins_for_case(case) if b.startswith("combo3:")}
+        case_pred = set(contract_predicates_for_case(case))
+        ns, np, nt, npr = state.update_coverage_sets(
+            case_sem, case_pair, case_trip, case_pred, eligible=qual.eligible,
+        )
 
-            # Fix 6: Extract real whitebox events
-            new_wb = 0
-            if enable_whitebox:
-                try:
-                    from pmpfuzz.whitebox import whitebox_event_ids_for_result
-                    wb_ids = whitebox_event_ids_for_result(case, result, round_dir)
-                    new_wb = state.record_whitebox_events(wb_ids)
-                except Exception:
-                    pass
+        # Extract whitebox events
+        new_wb = 0
+        if enable_whitebox:
+            try:
+                from pmpfuzz.whitebox import whitebox_event_ids_for_result
+                wb_ids = whitebox_event_ids_for_result(case, result, round_dir)
+                new_wb = state.record_whitebox_events(wb_ids)
+            except Exception as e:
+                print(f"  WARNING: whitebox extraction failed for {case_name}: {e}")
 
-            candidate_id = cand_by_name.get(case_name, case_name)
-            state.record_case(
-                candidate_id=candidate_id,
-                case_id=case_name,
-                profile=case.get("profile", ""),
-                status=status,
-                failure_class=result.get("failure_class"),
-                eligible=qual.eligible,
-                qualification_reason=qual.reason,
-                elapsed_wall=elapsed_wall,
-                case_elapsed=case_elapsed,
-                new_semantic=ns,
-                new_pairwise=np,
-                new_triples=nt,
-                new_predicates=npr,
-                new_whitebox=new_wb,
-            )
+        candidate_id = cand_by_name.get(case_name, case_name)
+        state.record_case(
+            candidate_id=candidate_id, case_id=case_name,
+            profile=case.get("profile", ""), status=status,
+            failure_class=result.get("failure_class"),
+            eligible=qual.eligible, qualification_reason=qual.reason,
+            elapsed_wall=elapsed_wall, case_elapsed=case_elapsed,
+            new_semantic=ns, new_pairwise=np, new_triples=nt, new_predicates=npr,
+            new_whitebox=new_wb,
+            case_semantic=case_sem, case_pairwise=case_pair,
+            case_triples=case_trip, case_predicates=case_pred,
+        )
 
-    # Fix 9: Check for missing expected candidates
-    for c in expected_candidates:
-        name = c.get("name", "")
-        if name and name not in executed_names:
-            missing_candidates.append(name)
+    if missing:
+        print(f"  WARNING: {len(missing)} expected cases missing results")
 
-    if missing_candidates:
-        print(f"  WARNING: {len(missing_candidates)} expected candidates missing results")
-
-    return len(missing_candidates) == 0
+    return len(missing) == 0
 
 
 def _finalize(
@@ -1029,6 +1056,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dut-bin", default=None)
     parser.add_argument("--no-smepmp", action="store_true")
     parser.add_argument("--whitebox", action="store_true", dest="whitebox")
+    parser.add_argument("--max-rounds", type=int, default=None,
+                        help="Maximum number of rounds (for testing/smoke only)")
 
     return run_closed_loop(parser.parse_args(argv))
 

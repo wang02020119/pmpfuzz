@@ -585,3 +585,63 @@ def _dedupe_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
             str(item.get("dut")),
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase C1: Per-result extraction (single case, incremental)
+# ---------------------------------------------------------------------------
+
+
+def extract_whitebox_signals_for_result(
+    case: dict[str, Any],
+    result: dict[str, Any],
+    artifact_root: Path,
+) -> list[dict[str, Any]]:
+    """Extract whitebox signals for a SINGLE completed result.
+
+    Unlike extract_security_whitebox_signals which scans the entire
+    run directory, this function only processes artifacts belonging to the
+    given case and result.
+    """
+    import hashlib
+
+    case_name = case.get("name") or result.get("name", "unknown")
+    signals: list[dict[str, Any]] = []
+
+    artifact_paths = _artifact_paths(
+        artifact_root, case_name,
+        result=result, result_count=1, artifact_dir=None,
+    )
+    for artifact_path in artifact_paths:
+        if not artifact_path.exists():
+            continue
+        text = artifact_path.read_text(encoding="utf-8", errors="replace")
+        signals.extend(_signals_from_artifact(case, result, artifact_path, text))
+
+    return _dedupe_signals(signals)
+
+
+def whitebox_event_ids_for_result(
+    case: dict[str, Any],
+    result: dict[str, Any],
+    artifact_root: Path,
+) -> set[str]:
+    """Return stable whitebox event IDs for a single result.
+
+    Each event ID is a sha256 hash of the signal's identifying fields.
+    Uses only the result's own artifacts, not the entire campaign.
+    """
+    import hashlib
+
+    signals = extract_whitebox_signals_for_result(case, result, artifact_root)
+    ids: set[str] = set()
+    for s in signals:
+        key = "|".join([
+            str(s.get("kind")),
+            str((s.get("features") or {}).get("security_chain")),
+            str((s.get("features") or {}).get("probe")),
+            str((s.get("features") or {}).get("coverage_point")),
+            str((s.get("features") or {}).get("perf_counter")),
+        ])
+        ids.add(hashlib.sha256(key.encode("ascii")).hexdigest()[:16])
+    return ids

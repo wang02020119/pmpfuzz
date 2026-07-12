@@ -52,6 +52,7 @@ class TimelineRecorder:
     _covered_security_triples: Set[str] = field(default_factory=set)
     _covered_predicates: Set[str] = field(default_factory=set)
     _whitebox_distinct_events: int = 0
+    _whitebox_event_ids: Set[str] = field(default_factory=set)
 
     # Path caching
     _output_path: Path | None = None
@@ -283,6 +284,13 @@ class TimelineRecorder:
             encoding="ascii",
         )
 
+    def record_whitebox_events(self, event_ids: set[str]) -> int:
+        """Record new whitebox event IDs. Returns count of newly observed events."""
+        new = event_ids - self._whitebox_event_ids
+        self._whitebox_event_ids.update(event_ids)
+        self._whitebox_distinct_events = len(self._whitebox_event_ids)
+        return len(new)
+
     def coverage_state(self) -> dict[str, Any]:
         """Return current cumulative coverage state (for final validation)."""
         sem_total = len(self.target_semantic)
@@ -316,16 +324,21 @@ class TimelineRecorder:
 
 def timeline_on_complete_factory(
     recorder: TimelineRecorder,
+    *,
+    enable_whitebox: bool = False,
 ) -> Any:
     """Return an ``on_complete`` callback suitable for :func:`runner.run_campaign`.
 
     The returned callback reads case.json and result.json from the standard
     directory layout and records a timeline event.
 
+    If *enable_whitebox* is True, per-result whitebox event IDs are extracted
+    and the ``new_whitebox_events`` count is populated (Phase C2).
+
     Usage::
 
         recorder = TimelineRecorder(...)
-        on_complete = timeline_on_complete_factory(recorder)
+        on_complete = timeline_on_complete_factory(recorder, enable_whitebox=True)
         run_campaign(config, on_complete=on_complete)
     """
     def _on_complete(index, scenario, result, completion_seq, campaign_elapsed):
@@ -356,11 +369,22 @@ def timeline_on_complete_factory(
                 "dut": recorder.dut,
             }
 
+        # Phase C2: Incremental whitebox extraction
+        new_whitebox = 0
+        if enable_whitebox:
+            try:
+                from .whitebox import whitebox_event_ids_for_result
+                event_ids = whitebox_event_ids_for_result(case, result_dict, out_dir)
+                new_whitebox = recorder.record_whitebox_events(event_ids)
+            except Exception:
+                pass  # whitebox extraction failure should not break timeline
+
         recorder.record(
             case=case,
             result=result_dict,
             elapsed_wall_seconds=campaign_elapsed,
             case_elapsed_seconds=result.elapsed_seconds,
+            whitebox_new_events=new_whitebox,
         )
 
     return _on_complete

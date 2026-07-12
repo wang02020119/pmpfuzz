@@ -480,7 +480,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
             per_case_timeout_seconds=config.per_case_timeout_seconds,
             hostname=os.uname().nodename if hasattr(os, "uname") else None,
         )
-        on_complete = timeline_on_complete_factory(recorder)
+        on_complete = timeline_on_complete_factory(
+            recorder, enable_whitebox=args.whitebox_artifacts,
+        )
 
     results = run_campaign(config, on_complete=on_complete)
 

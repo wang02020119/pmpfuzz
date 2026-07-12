@@ -876,7 +876,11 @@ def _run_round(
 
     # P0-3: Separate process_success from ingest_success
     proc = subprocess.run(round_cmd, check=False, env=env)
-    process_success = proc.returncode == 0
+    # The PMPFuzz CLI uses exit status 1 when one or more cases produce the
+    # opaque ``nonpass`` outcome.  That is a completed engineering run, not a
+    # launcher/infrastructure failure.  Artifact reconciliation below remains
+    # authoritative for deciding whether the round is usable.
+    process_success = proc.returncode in (0, 1)
     ingest_success = _ingest_round_results(state, round_dir, candidates,
                                             enable_whitebox=enable_whitebox,
                                             round_start_offset=round_start_offset)

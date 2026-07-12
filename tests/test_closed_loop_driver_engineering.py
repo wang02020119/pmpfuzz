@@ -124,6 +124,32 @@ class TestRoundExecution(unittest.TestCase):
         self.assertTrue(state._round_results[0]["process_success"])
         self.assertTrue(state._round_results[0]["ingest_success"])
 
+    def test_run_returncode_one_is_not_infrastructure_failure_when_ingest_is_complete(self):
+        """The run CLI uses rc=1 for opaque nonpass results; complete artifacts remain usable."""
+        pool = [_candidate(0)]
+        state = driver.CampaignState("campaign", "random", "spike", 1, "semantic", pool, 999.0)
+        args = Namespace(seed=1)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schedule_path = root / "schedule.json"
+            schedule_path.write_text('{"entries": []}', encoding="ascii")
+            with patch.object(
+                driver.subprocess, "run", return_value=SimpleNamespace(returncode=1)
+            ):
+                with patch.object(driver, "_ingest_round_results", return_value=True):
+                    success = driver._run_round(
+                        ["python", "-m", "pmpfuzz", "run"],
+                        root / "round_0000",
+                        args,
+                        state,
+                        schedule_path=schedule_path,
+                        expected_candidates=pool,
+                    )
+
+        self.assertTrue(success)
+        self.assertTrue(state._round_results[0]["process_success"])
+        self.assertEqual(state._round_results[0]["returncode"], 1)
+
 
 class TestRoundIngestionIntegrity(unittest.TestCase):
     def test_missing_round_timeline_is_an_ingest_failure(self):

@@ -186,11 +186,13 @@ class TestWhiteboxFeedback(unittest.TestCase):
         self.assertIsInstance(bw, list)
 
     def test_whitebox_schedule_produces_candidates(self):
-        """_whitebox_schedule should produce candidates (even if empty is valid)."""
+        """P0-4: _whitebox_schedule returns (list, dict, list)."""
         pool = _make_pool(32)
-        result = driver._whitebox_schedule(pool, [], max_wb=16)
-        self.assertIsInstance(result, list)
-        self.assertLessEqual(len(result), 16)
+        selected, counts, warnings = driver._whitebox_schedule(pool, [], max_wb=16)
+        self.assertIsInstance(selected, list)
+        self.assertLessEqual(len(selected), 16)
+        self.assertIsInstance(counts, dict)
+        self.assertIsInstance(warnings, list)
 
 
 class TestDataContract(unittest.TestCase):

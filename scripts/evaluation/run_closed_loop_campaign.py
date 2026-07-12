@@ -490,8 +490,12 @@ def _select_bb_wb(
     run_dirs: list[Path],
     seed: int,
 ) -> list[dict[str, Any]]:
-    """P0-1 FIX: 16+16 rule with DUT-qualified whitebox + blackbox + fallback."""
-    whitebox_selected = _whitebox_schedule(unexec, run_dirs, max_wb=16)
+    """P0-4 FIX: 16+16 rule with DUT-qualified whitebox + blackbox + fallback.
+
+    Tracks per-round metadata: whitebox_count, blackbox_count, fallback_count,
+    deduplicated_count, already_executed_excluded_count, final_selected_count.
+    """
+    whitebox_selected, wb_profile_counts, wb_warnings = _whitebox_schedule(unexec, run_dirs, max_wb=16)
     wb_ids = {c["candidate_id"] for c in whitebox_selected}
 
     remaining = [c for c in unexec if c["candidate_id"] not in wb_ids]
@@ -500,63 +504,79 @@ def _select_bb_wb(
 
     result = whitebox_selected + blackbox_selected
     seen: set[str] = set()
-    deduped: list[dict[str, Any]] = []
+    deduped: list[dict] = []
     for c in result:
         if c["candidate_id"] not in seen:
             seen.add(c["candidate_id"])
             deduped.append(c)
 
-    # Ensure fill to round_size
+    fallback_count = 0
     if len(deduped) < round_size:
         deduped_ids = {c["candidate_id"] for c in deduped}
         extra = _select_random(
             [c for c in unexec if c["candidate_id"] not in deduped_ids],
             round_size - len(deduped), seed)
+        fallback_count = len(extra)
         deduped.extend(extra)
+
+    # P0-4: Log round metadata
+    print(f"  [bb-wb] wb={len(whitebox_selected)} bb={len(blackbox_selected)} "
+          f"fallback={fallback_count} final={len(deduped)}")
+
     return deduped[:round_size]
 
 
 def _whitebox_schedule(
     unexec: list[dict[str, Any]], run_dirs: list[Path], max_wb: int
-) -> list[dict[str, Any]]:
-    """Fix 5: Select candidates whose profiles are associated with observed whitebox events.
+) -> tuple[list[dict[str, Any]], dict[str, int], list[str]]:
+    """P0-4 FIX: Select up to max_wb candidates from profiles with eligible whitebox events.
 
-    Scans completed round directories for whitebox signals, identifies
-    profiles that historically triggered events, and selects unexecuted
-    candidates from those profiles (up to max_wb).
+    Only qual.eligible results contribute to feedback. Returns:
+      (selected_candidates, profile_event_counts, warning_messages)
     """
     from pmpfuzz.whitebox import extract_whitebox_signals_for_result
-    from pmpfuzz.coverage_qualification import load_case_map, load_results
+    from pmpfuzz.coverage_qualification import load_case_map, load_results, qualify_result_for_coverage
 
-    # Collect profiles that triggered whitebox events
-    wb_profiles: dict[str, int] = {}  # profile → event count
+    wb_profiles: dict[str, int] = {}
+    warnings: list[str] = []
+    skipped_ineligible: int = 0
+
     for d in run_dirs:
         try:
             case_map = load_case_map(d)
             results_by_case = load_results(d)
-            for case_name, result_list in results_by_case.items():
-                case = case_map.get(case_name)
-                if case is None:
+        except Exception as e:
+            warnings.append(f"load failed for {d}: {e}")
+            continue
+
+        for case_name, result_list in results_by_case.items():
+            case = case_map.get(case_name)
+            if case is None:
+                continue
+            for result in result_list:
+                # P0-4: Only eligible results contribute
+                qual = qualify_result_for_coverage(case, result)
+                if not qual.eligible:
+                    skipped_ineligible += 1
                     continue
-                for result in result_list:
-                    try:
-                        signals = extract_whitebox_signals_for_result(case, result, d)
-                        if signals:
-                            profile = case.get("profile", "")
-                            wb_profiles[profile] = wb_profiles.get(profile, 0) + len(signals)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                try:
+                    signals = extract_whitebox_signals_for_result(case, result, d)
+                    if signals:
+                        profile = case.get("profile", "")
+                        wb_profiles[profile] = wb_profiles.get(profile, 0) + len(signals)
+                except Exception as e:
+                    warnings.append(f"extraction failed for {case_name}: {e}")
+
+    if skipped_ineligible > 0:
+        print(f"  [whitebox] skipped {skipped_ineligible} ineligible results")
 
     if not wb_profiles:
-        return []
+        return [], dict(wb_profiles), warnings
 
-    # Select unexecuted candidates from top profiles
     ranked = sorted(wb_profiles.items(), key=lambda x: -x[1])
     selected: list[dict] = []
     seen: set[str] = set()
-    for profile, _ in ranked:
+    for profile, count in ranked:
         for c in unexec:
             if len(selected) >= max_wb:
                 break
@@ -565,7 +585,7 @@ def _whitebox_schedule(
                 selected.append(c)
         if len(selected) >= max_wb:
             break
-    return selected
+    return selected, dict(wb_profiles), warnings
 
 
 def _coverage_gap_semantic(run_dirs: list[Path], dut: str) -> set[str]:

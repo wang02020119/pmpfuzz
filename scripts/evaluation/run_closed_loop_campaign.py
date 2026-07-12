@@ -434,24 +434,22 @@ def _select_guided(
     run_dirs: list[Path],
     seed: int,
 ) -> list[dict[str, Any]]:
-    """Coverage-gap greedy selection. Falls back to random if no coverage data."""
-    # Determine which bins are still missing
+    """P0-1 FIX: DUT-qualified coverage-gap greedy + seeded fallback."""
+    dut = state.dut
     missing: set[str] = set()
     bin_key = "semantic_bins"
     if run_dirs:
         if state.coverage_mode == "semantic":
-            missing = _coverage_gap_semantic(run_dirs)
+            missing = _coverage_gap_semantic(run_dirs, dut)
             bin_key = "semantic_bins"
         elif state.coverage_mode == "predicates":
-            missing = _coverage_gap_predicates(run_dirs)
+            missing = _coverage_gap_predicates(run_dirs, dut)
             bin_key = "predicate_bins"
         else:
-            missing = _coverage_gap_combo(run_dirs, state.coverage_mode)
+            missing = _coverage_gap_combo(run_dirs, state.coverage_mode, dut)
             bin_key = "pairwise_bins" if state.coverage_mode == "pairwise" else "security_triple_bins"
 
-    if not missing:
-        return _select_random(unexec, count, seed)
-
+    # Greedy phase
     selected: list[dict[str, Any]] = []
     available = list(unexec)
 
@@ -464,13 +462,25 @@ def _select_guided(
             if len(gain) > len(best_gain):
                 best = c
                 best_gain = gain
+            elif len(gain) == len(best_gain) and gain and best is not None:
+                # Stable tie-breaking: lower candidate_id wins
+                if c["candidate_id"] < best["candidate_id"]:
+                    best = c
+                    best_gain = gain
         if best is None or not best_gain:
             break
         missing -= best_gain
         available.remove(best)
         selected.append(best)
 
-    return selected
+    # P0-1 FIX: Fill remaining slots with seeded fallback
+    if len(selected) < count:
+        fallback_ids = {c["candidate_id"] for c in selected}
+        fallback_pool = [c for c in unexec if c["candidate_id"] not in fallback_ids]
+        remainder = _select_random(fallback_pool, count - len(selected), seed)
+        selected.extend(remainder)
+
+    return selected[:count]
 
 
 def _select_bb_wb(
@@ -480,25 +490,30 @@ def _select_bb_wb(
     run_dirs: list[Path],
     seed: int,
 ) -> list[dict[str, Any]]:
-    """16+16 rule: up to 16 whitebox, fill with blackbox to round_size (Phase B3 bb-wb)."""
-    # Whitebox schedule: select up to 16 candidates that trigger new events
+    """P0-1 FIX: 16+16 rule with DUT-qualified whitebox + blackbox + fallback."""
     whitebox_selected = _whitebox_schedule(unexec, run_dirs, max_wb=16)
     wb_ids = {c["candidate_id"] for c in whitebox_selected}
 
-    # Blackbox schedule: fill remaining slots
     remaining = [c for c in unexec if c["candidate_id"] not in wb_ids]
     bb_count = round_size - len(whitebox_selected)
     blackbox_selected = _select_guided(state, remaining, bb_count, run_dirs, seed)
 
     result = whitebox_selected + blackbox_selected
-    # Deduplicate
     seen: set[str] = set()
     deduped: list[dict[str, Any]] = []
     for c in result:
         if c["candidate_id"] not in seen:
             seen.add(c["candidate_id"])
             deduped.append(c)
-    return deduped
+
+    # Ensure fill to round_size
+    if len(deduped) < round_size:
+        deduped_ids = {c["candidate_id"] for c in deduped}
+        extra = _select_random(
+            [c for c in unexec if c["candidate_id"] not in deduped_ids],
+            round_size - len(deduped), seed)
+        deduped.extend(extra)
+    return deduped[:round_size]
 
 
 def _whitebox_schedule(
@@ -553,43 +568,43 @@ def _whitebox_schedule(
     return selected
 
 
-def _coverage_gap_semantic(run_dirs: list[Path]) -> set[str]:
-    """Compute missing semantic bins from run directories."""
+def _coverage_gap_semantic(run_dirs: list[Path], dut: str) -> set[str]:
+    """P0-1 FIX: Compute missing semantic bins using real DUT name."""
     from pmpfuzz.semantic_coverage import target_semantic_bins, semantic_bins_for_case
     from pmpfuzz.coverage_qualification import collect_execution_evidence
 
     target = set(target_semantic_bins(target="core-stateful"))
     observed: set[str] = set()
     for d in run_dirs:
-        evidence = collect_execution_evidence([d], dut="unknown")  # simplified
+        evidence = collect_execution_evidence([d], dut=dut)
         for case in evidence.eligible_cases:
             observed.update(semantic_bins_for_case(case))
     return target - observed
 
 
-def _coverage_gap_predicates(run_dirs: list[Path]) -> set[str]:
-    """Compute missing predicate bins from run directories."""
+def _coverage_gap_predicates(run_dirs: list[Path], dut: str) -> set[str]:
+    """P0-1 FIX: Compute missing predicate bins using real DUT name."""
     from pmpfuzz.semantic_coverage import target_contract_predicates, contract_predicates_for_case
     from pmpfuzz.coverage_qualification import collect_execution_evidence
 
     target = set(target_contract_predicates(target="core-stateful"))
     observed: set[str] = set()
     for d in run_dirs:
-        evidence = collect_execution_evidence([d], dut="unknown")
+        evidence = collect_execution_evidence([d], dut=dut)
         for case in evidence.eligible_cases:
             observed.update(contract_predicates_for_case(case))
     return target - observed
 
 
-def _coverage_gap_combo(run_dirs: list[Path], mode: str) -> set[str]:
-    """Compute missing combo bins from run directories."""
+def _coverage_gap_combo(run_dirs: list[Path], mode: str, dut: str) -> set[str]:
+    """P0-1 FIX: Compute missing combo bins using real DUT name."""
     from pmpfuzz.semantic_coverage import target_combo_bins, combo_bins_for_case
     from pmpfuzz.coverage_qualification import collect_execution_evidence
 
     target = set(target_combo_bins(target="core-stateful", coverage_mode=mode))
     observed: set[str] = set()
     for d in run_dirs:
-        evidence = collect_execution_evidence([d], dut="unknown")
+        evidence = collect_execution_evidence([d], dut=dut)
         for case in evidence.eligible_cases:
             observed.update(combo_bins_for_case(case, coverage_mode=mode))
     return target - observed

@@ -291,6 +291,7 @@ class CampaignState:
             fh.flush()
 
     def _make_baseline_line(self) -> dict:
+        """Baseline with real target counts (Fix: denominator constant)."""
         return {
             "schema_version": 1,
             "campaign_id": self.campaign_id,
@@ -309,17 +310,17 @@ class CampaignState:
             "coverage_eligible": False,
             "qualification_reason": None,
             "semantic_covered": 0,
-            "semantic_target": 0,
-            "semantic_rate": None,
+            "semantic_target": self._target_semantic,
+            "semantic_rate": 0.0,
             "pairwise_covered": 0,
-            "pairwise_target": 0,
-            "pairwise_rate": None,
+            "pairwise_target": self._target_pairwise,
+            "pairwise_rate": 0.0,
             "security_triples_covered": 0,
-            "security_triples_target": 0,
-            "security_triples_rate": None,
+            "security_triples_target": self._target_triples,
+            "security_triples_rate": 0.0,
             "predicates_covered": 0,
-            "predicates_target": 0,
-            "predicates_rate": None,
+            "predicates_target": self._target_predicates,
+            "predicates_rate": 0.0,
             "new_semantic_bins": 0,
             "new_pairwise_bins": 0,
             "new_security_triple_bins": 0,

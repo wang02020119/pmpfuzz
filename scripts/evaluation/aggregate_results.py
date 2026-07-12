@@ -44,8 +44,9 @@ def aggregate(artifact_root: Path, experiment_id: str) -> dict[str, Path]:
                 campaigns.append(campaign)
 
                 for line in lines:
-                    if line.get("completion_seq", 0) > 0:
-                        timeseries_rows.append(_build_timeseries_row(experiment_id, campaign, line))
+                    row = _build_timeseries_row(experiment_id, campaign, line)
+                    if row is not None:
+                        timeseries_rows.append(row)
             except Exception as exc:
                 print(f"WARNING: skipping {campaign_dir}: {exc}", file=sys.stderr)
 
@@ -62,8 +63,9 @@ def aggregate(artifact_root: Path, experiment_id: str) -> dict[str, Path]:
                 campaigns.append(campaign)
 
                 for line in lines:
-                    if line.get("completion_seq", 0) > 0:
-                        timeseries_rows.append(_build_timeseries_row(experiment_id, campaign, line))
+                    row = _build_timeseries_row(experiment_id, campaign, line)
+                    if row is not None:
+                        timeseries_rows.append(row)
             except Exception as exc:
                 print(f"WARNING: skipping {campaign_dir}: {exc}", file=sys.stderr)
 
@@ -165,6 +167,18 @@ def _build_timeseries_row(experiment_id: str, campaign: dict, line: dict) -> dic
         "security-triples": "security_triples_rate",
         "predicates": "predicates_rate",
     }
+    # D1: Skip synthetic baseline row (completion_seq=0)
+    if line.get("completion_seq", 0) == 0:
+        return None
+
+    # D2: Correct field name mapping for new_bins
+    new_bins_key = {
+        "semantic": "new_semantic_bins",
+        "pairwise": "new_pairwise_bins",
+        "security-triples": "new_security_triple_bins",
+        "predicates": "new_predicate_bins",
+    }
+
     return {
         "schema_version": "1.0",
         "experiment_id": experiment_id,
@@ -181,7 +195,7 @@ def _build_timeseries_row(experiment_id: str, campaign: dict, line: dict) -> dic
         "covered_bins": line.get(covered_key.get(coverage_mode, "semantic_covered"), 0),
         "target_bins": line.get(target_key.get(coverage_mode, "semantic_target"), 0),
         "coverage_rate": line.get(rate_key.get(coverage_mode, "semantic_rate")),
-        "new_bins": line.get(f"new_{coverage_mode}_bins" if coverage_mode != "security-triples" else "new_security_triple_bins", 0),
+        "new_bins": line.get(new_bins_key.get(coverage_mode, "new_semantic_bins"), 0),
         "status": line.get("status") or "",
         "failure_class": line.get("failure_class") or "",
         "case_id": line.get("case_id") or "",

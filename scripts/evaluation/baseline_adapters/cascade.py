@@ -168,8 +168,11 @@ def run_cascade_baseline(
         json.dumps(events, indent=2, ensure_ascii=True) + "\n", encoding="ascii",
     )
 
-    # 4. Write security event timeseries (PMPFuzz-probe events = common metric)
-    security_events = _build_security_event_timeseries(elfs_dir, timeline_rows)
+    # 4. Write security event timeseries
+    campaign_id = meta["campaign_id"]
+    security_events = _build_security_event_timeseries(
+        elfs_dir, timeline_rows, dut=dut, campaign_id=campaign_id, seed=seed,
+    )
     (metrics_dir / "security_event_timeseries.jsonl").write_text(
         "\n".join(json.dumps(e, ensure_ascii=True) for e in security_events) + "\n",
         encoding="ascii",
@@ -179,12 +182,20 @@ def run_cascade_baseline(
 
 
 def _generate_elfs(num_elfs: int, out_dir: Path) -> dict[str, Any]:
-    """Generate Cascade ELFs using the existing container."""
-    start = time.monotonic()
-    mount_dir = "/home/dubhe/wjs/cascade_cpu_fuzzing/mount"
-    container_out = "/cascade-mountdir/cascade-elfs"
+    """Fix 10: Generate Cascade ELFs, put directly in out_dir/elfs/.
 
-    os.makedirs(os.path.join(mount_dir, "cascade-elfs"), exist_ok=True)
+    The container writes to /cascade-mountdir via the existing mount.
+    We pre-create the host-side directory and symlink/move results.
+    """
+    start = time.monotonic()
+    mount_dir = Path("/home/dubhe/wjs/cascade_cpu_fuzzing/mount")
+    elfs_out = out_dir
+    elfs_out.mkdir(parents=True, exist_ok=True)
+
+    # Use the container's do_genmanyelfs with the mount dir
+    container_out = "/cascade-mountdir/cascade-elfs"
+    host_container_out = mount_dir / "cascade-elfs"
+    host_container_out.mkdir(parents=True, exist_ok=True)
 
     proc = subprocess.run([
         "docker", "exec", CASCADE_CONTAINER,
@@ -193,6 +204,13 @@ def _generate_elfs(num_elfs: int, out_dir: Path) -> dict[str, Any]:
         f"mkdir -p {container_out} && "
         f"python3 /cascade-meta/fuzzer/do_genmanyelfs.py {num_elfs} {container_out}",
     ], capture_output=True, text=True, timeout=600, check=False)
+
+    # Move ELFs from container mount to out_dir
+    if proc.returncode == 0 and host_container_out.exists():
+        for f in host_container_out.iterdir():
+            if f.is_file():
+                import shutil
+                shutil.move(str(f), str(elfs_out / f.name))
 
     elapsed = time.monotonic() - start
     return {
@@ -228,38 +246,72 @@ def _extract_probe_events(stdout: str) -> list[dict[str, Any]]:
 
 
 def _build_security_event_timeseries(
-    elfs_dir: Path, timeline_rows: list[dict]
+    elfs_dir: Path, timeline_rows: list[dict], dut: str, campaign_id: str, seed: int,
 ) -> list[dict[str, Any]]:
-    """Build normalized security event timeseries from ELFs and execution records."""
+    """Fix 11: Build normalized security event timeseries.
+
+    event_id is computed from stable probe fields (chain, stage, address),
+    not from case_id. No hardcoded dut/seed/campaign_id.
+    """
+    import hashlib
+
     rows = []
     event_set: set[str] = set()
-    total_events = 0
 
     for tr in timeline_rows:
         case_id = tr["case_id"]
-        elf_path = elfs_dir / f"{case_id.split('_')[-1]}.elf" if "_" in case_id else None
-        # Count probe events observed
-        new_events = tr.get("probe_events", 0)
-        total_events += new_events
-        event_set.add(case_id)
+        # Extract probe events from ELF execution output
+        elf_idx = None
+        parts = case_id.split("_")
+        for p in parts:
+            try:
+                elf_idx = int(p)
+                break
+            except ValueError:
+                pass
+        if elf_idx is None:
+            elf_idx = 0
 
-        rows.append({
-            "schema_version": "1.0",
-            "experiment_id": "cascade-baseline",
-            "campaign_id": "cascade",
-            "method": "cascade",
-            "variant": "baseline",
-            "dut": "unknown",
-            "seed": 1,
-            "completion_seq": len(rows) + 1,
-            "elapsed_wall_seconds": tr["elapsed_wall_seconds"],
-            "event_namespace": "source_probe",
-            "event_category": "pmp_check",
-            "event_id": case_id,
-            "is_new_event": new_events > 0,
-            "total_distinct_events": len(event_set),
-            "case_id": case_id,
-        })
+        elf_path = elfs_dir / f"rocket_{elf_idx}.elf"
+        # Re-extract events from the simulation log if available
+        log_path = elfs_dir.parent / "logs" / f"{case_id}.log"
+        probe_events = []
+        if log_path.exists():
+            stdout = log_path.read_text(encoding="utf-8", errors="replace")
+            probe_events = _extract_probe_events(stdout)
+
+        new_count = 0
+        for evt in probe_events:
+            # Fix 11: event_id from normalized probe fields
+            chain = evt.get("chain", "")
+            stage = evt.get("stage", "")
+            addr = evt.get("fields", {}).get("addr", "")
+            prv = evt.get("fields", {}).get("prv", "")
+            event_key = f"source_probe|{dut}|{chain}|{stage}|{addr}|{prv}"
+            event_id = hashlib.sha256(event_key.encode("ascii")).hexdigest()[:16]
+
+            is_new = event_id not in event_set
+            if is_new:
+                event_set.add(event_id)
+                new_count += 1
+
+            rows.append({
+                "schema_version": "1.0",
+                "experiment_id": "cascade-baseline",
+                "campaign_id": campaign_id,
+                "method": "cascade",
+                "variant": "baseline",
+                "dut": dut,
+                "seed": seed,
+                "completion_seq": len(rows) + 1,
+                "elapsed_wall_seconds": tr["elapsed_wall_seconds"],
+                "event_namespace": "source_probe",
+                "event_category": chain,
+                "event_id": event_id,
+                "is_new_event": is_new,
+                "total_distinct_events": len(event_set),
+                "case_id": case_id,
+            })
     return rows
 
 

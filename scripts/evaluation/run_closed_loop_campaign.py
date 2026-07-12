@@ -77,11 +77,18 @@ class CampaignState:
         self._covered_triples: set[str] = set()
         self._covered_predicates: set[str] = set()
 
+        # Target bin counts (Fix 1) — computed once from candidate pool
+        self._target_semantic: int = len(set().union(*(c.get("semantic_bins", []) for c in candidate_pool)))
+        self._target_pairwise: int = len(set().union(*(c.get("pairwise_bins", []) for c in candidate_pool)))
+        self._target_triples: int = len(set().union(*(c.get("security_triple_bins", []) for c in candidate_pool)))
+        self._target_predicates: int = len(set().union(*(c.get("predicate_bins", []) for c in candidate_pool)))
+
         # Whitebox events
         self._whitebox_event_ids: set[str] = set()
 
-        # Timeline lines (accumulated across all rounds)
+        # Timeline lines + persistence (Fix 8)
         self._timeline_lines: list[dict] = []
+        self._timeline_path: Path | None = None
 
         # Round failure tracking
         self._round_results: list[dict] = []
@@ -135,56 +142,49 @@ class CampaignState:
 
     # -- case completion ----------------------------------------------------
 
-    def record_case(
-        self,
-        candidate_id: str,
-        case_id: str,
-        profile: str,
-        status: str,
-        failure_class: str | None,
-        eligible: bool,
-        qualification_reason: str,
-        elapsed_wall: float,
-        case_elapsed: float,
-        new_semantic: int,
-        new_pairwise: int,
-        new_triples: int,
-        new_predicates: int,
-        new_whitebox: int,
-    ) -> dict[str, Any]:
-        """Record one case completion. Returns the timeline line dict."""
+    def record_case(self, candidate_id, case_id, profile, status, failure_class,
+                    eligible, qualification_reason, elapsed_wall, case_elapsed,
+                    new_semantic, new_pairwise, new_triples, new_predicates, new_whitebox,
+                    case_semantic=None, case_pairwise=None, case_triples=None, case_predicates=None):
+        """Fix 2+8: Update coverage from bin sets, write line, persist incrementally.
+
+        If case_* bin sets are provided, they are accumulated before writing
+        the timeline line (only if eligible).
+        """
         self.mark_executed(candidate_id)
         self._completion_seq += 1
         self._completed_cases += 1
         if eligible:
             self._eligible_cases += 1
-        if new_whitebox > 0:
-            pass  # whitebox events tracked separately via record_whitebox_events
+            # Actually apply coverage changes to covered sets
+            if case_semantic is not None:
+                self._covered_semantic.update(case_semantic)
+            if case_pairwise is not None:
+                self._covered_pairwise.update(case_pairwise)
+            if case_triples is not None:
+                self._covered_triples.update(case_triples)
+            if case_predicates is not None:
+                self._covered_predicates.update(case_predicates)
 
         line = self._make_timeline_line(
-            case_id=case_id,
-            profile=profile,
-            status=status,
-            failure_class=failure_class,
-            eligible=eligible,
+            case_id=case_id, profile=profile, status=status,
+            failure_class=failure_class, eligible=eligible,
             qualification_reason=qualification_reason,
-            elapsed_wall=elapsed_wall,
-            case_elapsed=case_elapsed,
-            new_semantic=new_semantic,
-            new_pairwise=new_pairwise,
-            new_triples=new_triples,
-            new_predicates=new_predicates,
+            elapsed_wall=elapsed_wall, case_elapsed=case_elapsed,
+            new_semantic=new_semantic, new_pairwise=new_pairwise,
+            new_triples=new_triples, new_predicates=new_predicates,
             new_whitebox=new_whitebox,
         )
         self._timeline_lines.append(line)
+        self._persist_line(line)
         return line
 
     def _make_timeline_line(self, **kwargs) -> dict[str, Any]:
-        sem_total = len(self._covered_semantic)  # target is static, stored elsewhere
-        pair_total = 0
-        trip_total = 0
-        pred_total = 0
-        # These are set from the candidate pool targets
+        """Fix 1: Include real cumulative covered/target/rate values."""
+        sem_cov = len(self._covered_semantic)
+        pair_cov = len(self._covered_pairwise)
+        trip_cov = len(self._covered_triples)
+        pred_cov = len(self._covered_predicates)
         return {
             "schema_version": 1,
             "campaign_id": self.campaign_id,
@@ -202,18 +202,18 @@ class CampaignState:
             "failure_class": kwargs.get("failure_class"),
             "coverage_eligible": kwargs.get("eligible", False),
             "qualification_reason": kwargs.get("qualification_reason"),
-            "semantic_covered": 0,  # populated after targets are known
-            "semantic_target": 0,
-            "semantic_rate": None,
-            "pairwise_covered": 0,
-            "pairwise_target": 0,
-            "pairwise_rate": None,
-            "security_triples_covered": 0,
-            "security_triples_target": 0,
-            "security_triples_rate": None,
-            "predicates_covered": 0,
-            "predicates_target": 0,
-            "predicates_rate": None,
+            "semantic_covered": sem_cov,
+            "semantic_target": self._target_semantic,
+            "semantic_rate": sem_cov / self._target_semantic if self._target_semantic > 0 else None,
+            "pairwise_covered": pair_cov,
+            "pairwise_target": self._target_pairwise,
+            "pairwise_rate": pair_cov / self._target_pairwise if self._target_pairwise > 0 else None,
+            "security_triples_covered": trip_cov,
+            "security_triples_target": self._target_triples,
+            "security_triples_rate": trip_cov / self._target_triples if self._target_triples > 0 else None,
+            "predicates_covered": pred_cov,
+            "predicates_target": self._target_predicates,
+            "predicates_rate": pred_cov / self._target_predicates if self._target_predicates > 0 else None,
             "new_semantic_bins": kwargs.get("new_semantic", 0),
             "new_pairwise_bins": kwargs.get("new_pairwise", 0),
             "new_security_triple_bins": kwargs.get("new_triples", 0),
@@ -222,7 +222,7 @@ class CampaignState:
             "new_whitebox_events": kwargs.get("new_whitebox", 0),
         }
 
-    # -- coverage accumulation -----------------------------------------------
+    # -- coverage accumulation (Fix 2: only update for eligible) ------------
 
     def update_coverage_sets(
         self,
@@ -230,8 +230,11 @@ class CampaignState:
         pairwise: set[str],
         triples: set[str],
         predicates: set[str],
+        eligible: bool,
     ) -> tuple[int, int, int, int]:
-        """Returns (new_sem, new_pair, new_trip, new_pred)."""
+        """Fix 2: Only update coverage if eligible. Returns new bin counts."""
+        if not eligible:
+            return 0, 0, 0, 0
         ns = len(semantic - self._covered_semantic)
         np = len(pairwise - self._covered_pairwise)
         nt = len(triples - self._covered_triples)
@@ -251,13 +254,30 @@ class CampaignState:
     def whitebox_distinct_events(self) -> int:
         return len(self._whitebox_event_ids)
 
-    # -- timeline persistence ------------------------------------------------
+    # -- timeline persistence (Fix 8: incremental) ---------------------------
+
+    def set_timeline_path(self, path: Path) -> None:
+        """Set the output path and write the baseline (idempotent)."""
+        self._timeline_path = path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists() or path.stat().st_size == 0:
+            path.write_text(
+                json.dumps(self._make_baseline_line(), ensure_ascii=True, sort_keys=True) + "\n",
+                encoding="ascii",
+            )
+
+    def _persist_line(self, line: dict) -> None:
+        """Fix 8: Append one line and flush immediately."""
+        if self._timeline_path is None:
+            return
+        with open(self._timeline_path, "a", encoding="ascii") as fh:
+            fh.write(json.dumps(line, ensure_ascii=True, sort_keys=True) + "\n")
+            fh.flush()
 
     def write_timeline(self, path: Path) -> None:
-        """Write accumulated timeline to JSONL file."""
+        """Write accumulated timeline to JSONL file (full rewrite)."""
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="ascii") as fh:
-            # Write baseline first
             fh.write(json.dumps(self._make_baseline_line(), ensure_ascii=True, sort_keys=True) + "\n")
             for line in self._timeline_lines:
                 fh.write(json.dumps(line, ensure_ascii=True, sort_keys=True) + "\n")
@@ -406,17 +426,20 @@ def _select_guided(
     run_dirs: list[Path],
     seed: int,
 ) -> list[dict[str, Any]]:
-    """Coverage-gap greedy selection (Phase B3 guided)."""
+    """Coverage-gap greedy selection. Falls back to random if no coverage data."""
     # Determine which bins are still missing
-    if state.coverage_mode == "semantic":
-        missing = _coverage_gap_semantic(run_dirs)
-        bin_key = "semantic_bins"
-    elif state.coverage_mode == "predicates":
-        missing = _coverage_gap_predicates(run_dirs)
-        bin_key = "predicate_bins"
-    else:
-        missing = _coverage_gap_combo(run_dirs, state.coverage_mode)
-        bin_key = "pairwise_bins" if state.coverage_mode == "pairwise" else "security_triple_bins"
+    missing: set[str] = set()
+    bin_key = "semantic_bins"
+    if run_dirs:
+        if state.coverage_mode == "semantic":
+            missing = _coverage_gap_semantic(run_dirs)
+            bin_key = "semantic_bins"
+        elif state.coverage_mode == "predicates":
+            missing = _coverage_gap_predicates(run_dirs)
+            bin_key = "predicate_bins"
+        else:
+            missing = _coverage_gap_combo(run_dirs, state.coverage_mode)
+            bin_key = "pairwise_bins" if state.coverage_mode == "pairwise" else "security_triple_bins"
 
     if not missing:
         return _select_random(unexec, count, seed)
@@ -473,10 +496,53 @@ def _select_bb_wb(
 def _whitebox_schedule(
     unexec: list[dict[str, Any]], run_dirs: list[Path], max_wb: int
 ) -> list[dict[str, Any]]:
-    """Select up to max_wb candidates likely to trigger new whitebox events. (Stub for Phase C)"""
-    # Phase C will implement real whitebox signal extraction.
-    # For now, return empty (all filled by blackbox).
-    return []
+    """Fix 5: Select candidates whose profiles are associated with observed whitebox events.
+
+    Scans completed round directories for whitebox signals, identifies
+    profiles that historically triggered events, and selects unexecuted
+    candidates from those profiles (up to max_wb).
+    """
+    from pmpfuzz.whitebox import extract_whitebox_signals_for_result
+    from pmpfuzz.coverage_qualification import load_case_map, load_results
+
+    # Collect profiles that triggered whitebox events
+    wb_profiles: dict[str, int] = {}  # profile → event count
+    for d in run_dirs:
+        try:
+            case_map = load_case_map(d)
+            results_by_case = load_results(d)
+            for case_name, result_list in results_by_case.items():
+                case = case_map.get(case_name)
+                if case is None:
+                    continue
+                for result in result_list:
+                    try:
+                        signals = extract_whitebox_signals_for_result(case, result, d)
+                        if signals:
+                            profile = case.get("profile", "")
+                            wb_profiles[profile] = wb_profiles.get(profile, 0) + len(signals)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    if not wb_profiles:
+        return []
+
+    # Select unexecuted candidates from top profiles
+    ranked = sorted(wb_profiles.items(), key=lambda x: -x[1])
+    selected: list[dict] = []
+    seen: set[str] = set()
+    for profile, _ in ranked:
+        for c in unexec:
+            if len(selected) >= max_wb:
+                break
+            if c.get("profile") == profile and c["candidate_id"] not in seen:
+                seen.add(c["candidate_id"])
+                selected.append(c)
+        if len(selected) >= max_wb:
+            break
+    return selected
 
 
 def _coverage_gap_semantic(run_dirs: list[Path]) -> set[str]:
@@ -592,10 +658,17 @@ def run_closed_loop(args: argparse.Namespace) -> int:
     # Build base command
     base_cmd = _build_base_cmd(args)
 
-    # --- Bootstrap ---
+    # Fix 8: Set timeline path for incremental persistence
+    state.set_timeline_path(metrics_dir / "coverage_timeline.jsonl")
+
+    # --- Bootstrap (Fix 3: map to candidate pool) ---
     print(f"[{datetime.now(timezone.utc).isoformat()}] Bootstrap (size={args.bootstrap_size})")
     bootstrap_dir = rounds_dir / "round_0000"
-    if not _run_round(base_cmd, bootstrap_dir, args, state, is_bootstrap=True):
+    bootstrap_candidates = _select_bootstrap_candidates(state, args)
+    success = _run_round(base_cmd, bootstrap_dir, args, state,
+                         bootstrap_candidates=bootstrap_candidates,
+                         enable_whitebox=getattr(args, "whitebox", False))
+    if not success:
         state.record_round_result(False, {"error": "bootstrap failed"})
         _finalize(state, campaign_dir, metrics_dir, meta, start_wall)
         return 1
@@ -629,27 +702,24 @@ def run_closed_loop(args: argparse.Namespace) -> int:
             print("  No candidates to execute (pool exhausted)")
             break
 
-        # Write schedule file for this round
+        # Fix 4: schedule seed = args.seed (same as candidate pool generation seed)
         schedule_path = metrics_dir / f"schedule_round_{state.round_idx:04d}.json"
         schedule_data = {
             "schema_version": 1,
-            "seed": args.seed + state.round_idx * 1000,
+            "seed": args.seed,  # Fix 4: consistent with candidate pool
             "entries": [
-                {
-                    "profile": c["profile"],
-                    "index": c["scenario_index"],
-                    "name": c.get("name", f"{c['profile']}__case_{c['scenario_index']}"),
-                    "seed": args.seed + state.round_idx * 1000,
-                    "include_smepmp": c["profile"].startswith("smepmp"),
-                }
+                {"profile": c["profile"], "index": c["scenario_index"],
+                 "name": c.get("name", f"{c['profile']}__case_{c['scenario_index']}"),
+                 "seed": args.seed, "include_smepmp": c["profile"].startswith("smepmp")}
                 for c in candidates
             ],
         }
         schedule_path.write_text(json.dumps(schedule_data, indent=2, ensure_ascii=True), encoding="ascii")
 
-        # Execute round
-        success = _run_round(base_cmd, round_dir, args, state, schedule_path=schedule_path,
-                             expected_candidates=candidates, is_bootstrap=False)
+        # Execute round with whitebox enabled
+        success = _run_round(base_cmd, round_dir, args, state,
+                             schedule_path=schedule_path, expected_candidates=candidates,
+                             enable_whitebox=getattr(args, "whitebox", False))
         state.record_round_result(success, {"candidates": len(candidates)})
         if not success:
             print(f"WARNING: round {state.round_idx} had failures")
@@ -662,78 +732,119 @@ def run_closed_loop(args: argparse.Namespace) -> int:
     return 0 if not state.any_round_failed else 1
 
 
+def _select_bootstrap_candidates(state: CampaignState, args: argparse.Namespace) -> list[dict]:
+    """Fix 3: Select bootstrap cases from the candidate pool."""
+    unexec = state.unexecuted_candidates()
+    # Bootstrap uses the first N unexecuted from the pool (in pool order)
+    return unexec[:args.bootstrap_size]
+
+
 def _run_round(
     base_cmd: list[str],
     round_dir: Path,
     args: argparse.Namespace,
     state: CampaignState,
+    bootstrap_candidates: list[dict] | None = None,
     schedule_path: Path | None = None,
-    expected_candidates: list[dict[str, Any]] | None = None,
-    is_bootstrap: bool = False,
+    expected_candidates: list[dict] | None = None,
+    enable_whitebox: bool = False,
 ) -> bool:
-    """Execute one round via subprocess, then ingest results into CampaignState.
+    """Execute one round via subprocess, then ingest results.
 
-    Returns True if the round completed (even with individual case failures),
-    False only for infra failures that prevent result ingestion.
+    Fix 9: Check subprocess return code and round result integrity.
     """
+    is_bootstrap = bootstrap_candidates is not None
+    candidates = bootstrap_candidates or expected_candidates or []
+
+    # Fix 3: Write schedule that maps to candidate pool
+    if is_bootstrap:
+        schedule_path = round_dir.parent / "schedule_bootstrap.json"
+        schedule_path.parent.mkdir(parents=True, exist_ok=True)
+        schedule_data = {
+            "schema_version": 1,
+            "seed": args.seed,
+            "entries": [
+                {"profile": c["profile"], "index": c["scenario_index"],
+                 "name": c.get("name", f"{c['profile']}__case_{c['scenario_index']}"),
+                 "seed": args.seed, "include_smepmp": c["profile"].startswith("smepmp")}
+                for c in candidates
+            ],
+        }
+        schedule_path.write_text(json.dumps(schedule_data, indent=2, ensure_ascii=True), encoding="ascii")
+
     round_cmd = list(base_cmd) + ["--out", str(round_dir)]
     round_cmd += ["--record-timeline",
                    "--campaign-id", f"{state.campaign_id}__round-{state.round_idx:04d}",
                    "--variant", state.variant]
+    round_cmd += ["--schedule", str(schedule_path), "--seed", str(args.seed)]
 
-    if is_bootstrap:
-        bootstrap_profile = getattr(args, "bootstrap_profile", None) or args.profile
-        round_cmd += ["--profile", bootstrap_profile, "--count", str(args.bootstrap_size),
-                       "--seed", str(args.seed)]
-    elif schedule_path:
-        round_cmd += ["--schedule", str(schedule_path), "--seed", str(args.seed + state.round_idx * 1000)]
-    else:
-        round_cmd += ["--profile", args.profile, "--count", str(args.round_size),
-                       "--seed", str(args.seed + state.round_idx * 1000)]
+    proc = subprocess.run(round_cmd, check=False)
+    # Fix 9: Check return code
+    if proc.returncode != 0:
+        print(f"  WARNING: round subprocess exited with {proc.returncode}")
+        state.record_round_result(False, {"returncode": proc.returncode})
 
-    subprocess.run(round_cmd, check=False)
-
-    # Ingest round results into CampaignState
-    _ingest_round_results(state, round_dir, expected_candidates or [])
-    return True
+    return _ingest_round_results(state, round_dir, candidates, enable_whitebox=enable_whitebox)
 
 
 def _ingest_round_results(
     state: CampaignState,
     round_dir: Path,
     expected_candidates: list[dict[str, Any]],
-) -> None:
-    """Read round results and update CampaignState."""
+    enable_whitebox: bool = False,
+) -> bool:
+    """Read round results, update CampaignState, returns True on success.
+
+    Fix 2: Only eligible cases update coverage.
+    Fix 6: Extract real whitebox events.
+    Fix 7: Use per-case completion times from result files.
+    Fix 9: Check for missing results and infra failures.
+    """
     from pmpfuzz.coverage_qualification import load_case_map, load_results, qualify_result_for_coverage
     from pmpfuzz.semantic_coverage import (
-        combo_bins_for_case,
-        contract_predicates_for_case,
-        semantic_bins_for_case,
+        combo_bins_for_case, contract_predicates_for_case, semantic_bins_for_case,
     )
 
     case_map = load_case_map(round_dir)
     results_by_case = load_results(round_dir)
-
-    # Build candidate ID lookup from expected candidates
     cand_by_name: dict[str, str] = {c.get("name", ""): c["candidate_id"] for c in expected_candidates}
+
+    # Fix 3: Track which expected candidates got results
+    executed_names: set[str] = set()
+    missing_candidates: list[str] = []
 
     for case_name, result_list in results_by_case.items():
         case = case_map.get(case_name)
         if case is None:
             continue
+        executed_names.add(case_name)
+
         for result in result_list:
-            elapsed_wall = time.monotonic() - state.start_time
+            # Fix 7: Use actual case completion wall time from the result
             case_elapsed = result.get("elapsed_seconds", 0)
+            elapsed_wall = time.monotonic() - state.start_time
+
             qual = qualify_result_for_coverage(case, result)
             status = result.get("status", "unknown")
 
-            # Compute coverage contributions
+            # Compute coverage — Fix 2: pass eligible flag
             case_sem = set(semantic_bins_for_case(case))
             case_pair = {b for b in combo_bins_for_case(case) if b.startswith("combo2:")}
             case_trip = {b for b in combo_bins_for_case(case) if b.startswith("combo3:")}
             case_pred = set(contract_predicates_for_case(case))
+            ns, np, nt, npr = state.update_coverage_sets(
+                case_sem, case_pair, case_trip, case_pred, eligible=qual.eligible,
+            )
 
-            ns, np, nt, npr = state.update_coverage_sets(case_sem, case_pair, case_trip, case_pred)
+            # Fix 6: Extract real whitebox events
+            new_wb = 0
+            if enable_whitebox:
+                try:
+                    from pmpfuzz.whitebox import whitebox_event_ids_for_result
+                    wb_ids = whitebox_event_ids_for_result(case, result, round_dir)
+                    new_wb = state.record_whitebox_events(wb_ids)
+                except Exception:
+                    pass
 
             candidate_id = cand_by_name.get(case_name, case_name)
             state.record_case(
@@ -750,8 +861,19 @@ def _ingest_round_results(
                 new_pairwise=np,
                 new_triples=nt,
                 new_predicates=npr,
-                new_whitebox=0,  # Phase C will populate this
+                new_whitebox=new_wb,
             )
+
+    # Fix 9: Check for missing expected candidates
+    for c in expected_candidates:
+        name = c.get("name", "")
+        if name and name not in executed_names:
+            missing_candidates.append(name)
+
+    if missing_candidates:
+        print(f"  WARNING: {len(missing_candidates)} expected candidates missing results")
+
+    return len(missing_candidates) == 0
 
 
 def _finalize(

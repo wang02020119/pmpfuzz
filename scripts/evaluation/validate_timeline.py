@@ -247,6 +247,33 @@ def validate_timeline(campaign_dir: Path) -> dict[str, Any]:
     elif wb_events:
         add_check("whitebox_events_monotonic", True)
 
+    # --- 14. Fix 12: Recursively check rounds subdirectories ---
+    rounds_dir = campaign_dir / "rounds"
+    if rounds_dir.is_dir():
+        round_dirs = sorted(rounds_dir.glob("round_*"))
+        for rd in round_dirs:
+            rd_tl = rd / "metrics" / "coverage_timeline.jsonl"
+            if rd_tl.exists():
+                add_check(f"round_timeline_{rd.name}", True, "exists")
+            else:
+                add_check(f"round_timeline_{rd.name}", False, "missing", severity="warning")
+        if round_dirs:
+            add_check("rounds_detected", True, f"{len(round_dirs)} rounds")
+        else:
+            add_check("rounds_detected", True, "single-round campaign")
+
+    # --- 15. Fix 12: Check manifest completeness ---
+    manifest_dir = campaign_dir.parent.parent.parent.parent / "manifests"  # up to artifact-root
+    # Check local manifests/
+    local_manifests = campaign_dir.parent.parent.parent / "manifests"
+    if not local_manifests.is_dir():
+        local_manifests = Path("/home/dubhe/wjs/pmpfuzz-eval-artifacts/manifests")
+    for manifest_file in ["environment.json", "git-shas.txt"]:
+        if (local_manifests / manifest_file).exists():
+            add_check(f"manifest_{manifest_file}", True)
+        else:
+            add_check(f"manifest_{manifest_file}", False, "not found", severity="warning")
+
     # --- Final validity ---
     report["valid"] = report["error_count"] == 0
     return report

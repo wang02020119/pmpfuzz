@@ -253,15 +253,15 @@ def _build_execution_coverage(run_dir: Path, cases: list[dict[str, Any]]) -> dic
             by_dut[dut_name] = _unavailable_entry("dut_unavailable")
             continue
 
-        # Enumerate capability-scoped target candidates once
-        candidates = _target_candidates(
-            target=target, include_experimental=False, seed=20260628,
-            capability=capability,
+        # Enumerate capability-scoped target candidates once (shared logic)
+        targets = compute_coverage_targets(
+            target=target, capability=capability,
+            include_experimental=False, seed=20260628,
         )
-        target_sem = {b for c in candidates for b in c["semantic_bins"]}
-        target_pair = {b for c in candidates for b in c["combo_bins"] if b.startswith("combo2:")}
-        target_trip = {b for c in candidates for b in c["combo_bins"] if b.startswith("combo3:")}
-        target_pred = {b for c in candidates for b in c["contract_predicates"]}
+        target_sem = targets["semantic"]["target_bins"]
+        target_pair = targets["pairwise"]["target_bins"]
+        target_trip = targets["security_triples"]["target_bins"]
+        target_pred = targets["predicates"]["target_bins"]
 
         # Use unified evidence collector (single source of truth)
         evidence = collect_execution_evidence([run_dir], dut=dut_name)
@@ -358,3 +358,52 @@ def write_coverage(run_dir: Path) -> Path:
     out = run_dir / "coverage" / "coverage.json"
     write_json(out, coverage_from_run(run_dir))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Shared coverage target construction — single source of truth for
+# denominator logic used by both execution-coverage and timeline.
+# ---------------------------------------------------------------------------
+
+
+def _capability_fingerprint_from_map(capability: dict[str, Any]) -> str:
+    """Return a stable fingerprint string for a capability dict."""
+    from .semantic_coverage import _capability_fingerprint
+    return _capability_fingerprint(capability)
+
+
+def compute_coverage_targets(
+    *,
+    target: str = CORE_STATEFUL_TARGET,
+    capability: dict[str, Any],
+    include_experimental: bool = False,
+    seed: int = 20260628,
+) -> dict[str, Any]:
+    """Compute the four coverage target bin sets for a given DUT capability.
+
+    Returns a dict with keys ``semantic``, ``pairwise``, ``security_triples``,
+    ``predicates``, each containing the bin-set metadata as returned by
+    :func:`_make_coverage_section`.
+    """
+    candidates = _target_candidates(
+        target=target,
+        include_experimental=include_experimental,
+        seed=seed,
+        capability=capability,
+    )
+    target_sem = {b for c in candidates for b in c["semantic_bins"]}
+    target_pair = {b for c in candidates for b in c["combo_bins"] if b.startswith("combo2:")}
+    target_trip = {b for c in candidates for b in c["combo_bins"] if b.startswith("combo3:")}
+    target_pred = {b for c in candidates for b in c["contract_predicates"]}
+
+    return {
+        "capability_fingerprint": _capability_fingerprint_from_map(capability),
+        "target": target,
+        "include_experimental": include_experimental,
+        "seed": seed,
+        "total_candidates": len(candidates),
+        "semantic": {"target_bins": target_sem, "total": len(target_sem)},
+        "pairwise": {"target_bins": target_pair, "total": len(target_pair)},
+        "security_triples": {"target_bins": target_trip, "total": len(target_trip)},
+        "predicates": {"target_bins": target_pred, "total": len(target_pred)},
+    }

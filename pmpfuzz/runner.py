@@ -48,6 +48,9 @@ class RunnerConfig:
     indices: tuple[int, ...] | None = None
     schedule: Path | None = None
     whitebox_artifacts: bool = False
+    record_timeline: bool = False
+    campaign_id: str | None = None
+    variant: str | None = None
 
 
 @dataclass(frozen=True)
@@ -141,10 +144,20 @@ def _run_indexed_work_with_budget(
     start_time: float,
     time_budget_seconds: int,
     time_fn=time.monotonic,
+    on_complete=None,
 ):
+    """Execute *indexed_work* with a thread pool until the time budget is exhausted.
+
+    *on_complete*, if provided, is called in the main thread immediately after a
+    future resolves and result is appended.  Signature::
+
+        on_complete(index, scenario, CampaignResult, completion_seq,
+                    campaign_elapsed_seconds)
+    """
     results = []
     work_iter = iter(indexed_work)
     pending = {}
+    completion_seq = 0
 
     def submit_next(executor: ThreadPoolExecutor) -> bool:
         if time_fn() - start_time >= time_budget_seconds:
@@ -163,8 +176,13 @@ def _run_indexed_work_with_budget(
         while pending:
             done, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in done:
-                pending.pop(future)
-                results.append(future.result())
+                index, scenario = pending.pop(future)
+                result = future.result()
+                results.append(result)
+                completion_seq += 1
+                if on_complete is not None:
+                    campaign_elapsed = time_fn() - start_time
+                    on_complete(index, scenario, result, completion_seq, campaign_elapsed)
             if time_fn() - start_time >= time_budget_seconds:
                 for future in pending:
                     future.cancel()
@@ -175,7 +193,7 @@ def _run_indexed_work_with_budget(
     return results
 
 
-def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
+def run_campaign(config: RunnerConfig, *, on_complete=None) -> list[CampaignResult]:
     out_dir = config.out.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     cases_dir = out_dir / "cases"
@@ -444,6 +462,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
         max_workers=effective_jobs,
         start_time=start,
         time_budget_seconds=config.time_budget_seconds,
+        on_complete=on_complete,
     )
 
     results.sort(key=lambda result: result.name)

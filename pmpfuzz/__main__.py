@@ -22,6 +22,7 @@ from .scenario import ScenarioGenerator
 from .schema import read_json, result_to_dict, scenario_to_case_dict, write_aggregate, write_json
 from .semantic_coverage import CORE_STATEFUL_TARGET, scenarios_from_schedule, write_schedule
 from .source_probe import write_source_probe_instrumentation, write_source_probe_manifest
+from .timeline import TimelineRecorder, timeline_on_complete_factory
 from .triage import triage_run, write_report
 from .whitebox import write_whitebox_signals
 
@@ -81,6 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dut-bin", type=Path, default=None)
     run.add_argument("--simlen", type=int, default=100000)
     run.add_argument("--whitebox-artifacts", action="store_true")
+    run.add_argument("--record-timeline", action="store_true",
+                     help="Record execution-qualified coverage timeline as JSONL")
+    run.add_argument("--campaign-id", default=None,
+                     help="Campaign identifier for timeline recording")
+    run.add_argument("--variant", default=None,
+                     help="Experiment variant label (e.g. random, guided, bb, bb-wb)")
 
     repro = subparsers.add_parser("repro", help="reproduce one generated case on one or more DUTs")
     repro.add_argument("--case", type=Path, required=True)
@@ -443,8 +450,45 @@ def _cmd_run(args: argparse.Namespace) -> int:
         indices=_parse_indices(args.indices),
         schedule=args.schedule,
         whitebox_artifacts=args.whitebox_artifacts,
+        record_timeline=args.record_timeline,
+        campaign_id=args.campaign_id,
+        variant=args.variant,
     )
-    results = run_campaign(config)
+
+    on_complete = None
+    recorder = None
+    if args.record_timeline:
+        # Initialize timeline recorder with target bins computed from
+        # the same capability that run_campaign probes.
+        campaign_id = args.campaign_id or f"{config.dut}__{config.profile}__seed-{config.seed}"
+        variant = args.variant or "unknown"
+        metrics_dir = config.out / "metrics"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+
+        recorder = TimelineRecorder(
+            run_dir=config.out,
+            campaign_id=campaign_id,
+            variant=variant,
+            dut=config.dut,
+            seed=config.seed,
+        )
+        # The target bin sets will be populated after capability is known.
+        # We defer this to after run_campaign's capability probing.
+        on_complete = timeline_on_complete_factory(recorder)
+
+    results = run_campaign(config, on_complete=on_complete)
+
+    # Populate timeline target bins if recording (capability is now available)
+    if recorder is not None and args.record_timeline:
+        _populate_timeline_targets(recorder, config)
+        recorder.write_metadata(
+            source_sha=_git_head_sha(),
+            time_budget_seconds=config.time_budget_seconds,
+            jobs=config.jobs,
+            per_case_timeout_seconds=config.per_case_timeout_seconds,
+            hostname=os.uname().nodename if hasattr(os, "uname") else None,
+        )
+
     if args.whitebox_artifacts:
         signal_path, dut_coverage_path = _write_observed_whitebox_outputs(config.out)
         print(f"whitebox-signals={signal_path} dut-coverage={dut_coverage_path}")
@@ -722,6 +766,58 @@ def _load_case(case_path: Path) -> tuple[Path, dict]:
     if case_path.name == "case.json":
         return case_path.parent, read_json(case_path)
     raise ValueError("--case must point to a generated case directory or case.json")
+
+
+def _populate_timeline_targets(recorder, config: RunnerConfig) -> None:
+    """Populate target bin sets from DUT capability after campaign setup."""
+    from .capabilities import capability_for_dut
+    from .coverage import compute_coverage_targets
+    from .semantic_coverage import CORE_STATEFUL_TARGET
+
+    if config.dut == "spike":
+        capability = capability_for_dut(
+            config.dut,
+            path=config.spike,
+            isa=config.isa,
+        )
+    elif config.dut_bin:
+        capability = capability_for_dut(
+            config.dut,
+            path=config.dut_bin,
+            isa=config.isa,
+        )
+    else:
+        capability = capability_for_dut(
+            config.dut,
+            isa=config.isa,
+        )
+
+    targets = compute_coverage_targets(
+        target=CORE_STATEFUL_TARGET,
+        capability=capability,
+        include_experimental=False,
+        seed=config.seed,
+    )
+    recorder.target_semantic = targets["semantic"]["target_bins"]
+    recorder.target_pairwise = targets["pairwise"]["target_bins"]
+    recorder.target_security_triples = targets["security_triples"]["target_bins"]
+    recorder.target_predicates = targets["predicates"]["target_bins"]
+
+
+def _git_head_sha() -> str | None:
+    """Return the current git HEAD commit SHA or None."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=False,
+            cwd=Path(__file__).resolve().parents[1],
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
 
 
 if __name__ == "__main__":

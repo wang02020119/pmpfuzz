@@ -655,8 +655,8 @@ def run_closed_loop(args: argparse.Namespace) -> int:
         encoding="ascii",
     )
 
-    # Build base command
-    base_cmd = _build_base_cmd(args)
+    # Build base command and environment
+    base_cmd, base_env = _build_base_cmd(args)
 
     # Fix 8: Set timeline path for incremental persistence
     state.set_timeline_path(metrics_dir / "coverage_timeline.jsonl")
@@ -667,7 +667,8 @@ def run_closed_loop(args: argparse.Namespace) -> int:
     bootstrap_candidates = _select_bootstrap_candidates(state, args)
     success = _run_round(base_cmd, bootstrap_dir, args, state,
                          bootstrap_candidates=bootstrap_candidates,
-                         enable_whitebox=getattr(args, "whitebox", False))
+                         enable_whitebox=getattr(args, "whitebox", False),
+                         env=base_env)
     if not success:
         state.record_round_result(False, {"error": "bootstrap failed"})
         _finalize(state, campaign_dir, metrics_dir, meta, start_wall)
@@ -719,7 +720,8 @@ def run_closed_loop(args: argparse.Namespace) -> int:
         # Execute round with whitebox enabled
         success = _run_round(base_cmd, round_dir, args, state,
                              schedule_path=schedule_path, expected_candidates=candidates,
-                             enable_whitebox=getattr(args, "whitebox", False))
+                             enable_whitebox=getattr(args, "whitebox", False),
+                             env=base_env)
         state.record_round_result(success, {"candidates": len(candidates)})
         if not success:
             print(f"WARNING: round {state.round_idx} had failures")
@@ -778,7 +780,7 @@ def _run_round(
                    "--variant", state.variant]
     round_cmd += ["--schedule", str(schedule_path), "--seed", str(args.seed)]
 
-    proc = subprocess.run(round_cmd, check=False)
+    proc = subprocess.run(round_cmd, check=False, env=env)
     # Fix 9: Check return code
     if proc.returncode != 0:
         print(f"  WARNING: round subprocess exited with {proc.returncode}")
@@ -926,7 +928,13 @@ def _finalize(
 # ---------------------------------------------------------------------------
 
 
-def _build_base_cmd(args: argparse.Namespace) -> list[str]:
+def _build_base_cmd(args: argparse.Namespace) -> tuple[list[str], dict]:
+    """Return (command_list, env_dict) with PYTHONPATH set."""
+    env = os.environ.copy()
+    project_root = str(Path(__file__).resolve().parents[2])
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{project_root}:{existing}" if existing else project_root
+
     cmd = [
         sys.executable, "-m", "pmpfuzz", "run",
         "--dut", args.dut,
@@ -946,7 +954,7 @@ def _build_base_cmd(args: argparse.Namespace) -> list[str]:
         cmd.extend(["--dut-bin", args.dut_bin])
     if getattr(args, "no_smepmp", False):
         cmd.append("--no-smepmp")
-    return cmd
+    return cmd, env
 
 
 def _campaign_output_dir(args: argparse.Namespace, artifact_root: Path) -> Path:

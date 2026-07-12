@@ -11,6 +11,7 @@ Each time a test case completes the recorder:
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
@@ -81,6 +82,7 @@ class TimelineRecorder:
             case_id=None,
             profile=None,
             elapsed_wall_seconds=0.0,
+            completion_monotonic_seconds=None,
             case_elapsed_seconds=0.0,
             status=None,
             failure_class=None,
@@ -99,6 +101,7 @@ class TimelineRecorder:
         elapsed_wall_seconds: float,
         case_elapsed_seconds: float,
         whitebox_new_events: int = 0,
+        completion_monotonic_seconds: float | None = None,
     ) -> None:
         """Record the completion of one case to the timeline.
 
@@ -155,6 +158,7 @@ class TimelineRecorder:
             case_id=case.get("name") or result.get("name") or "",
             profile=case.get("profile") or result.get("profile") or "",
             elapsed_wall_seconds=elapsed_wall_seconds,
+            completion_monotonic_seconds=completion_monotonic_seconds,
             case_elapsed_seconds=case_elapsed_seconds,
             status=status,
             failure_class=failure_class,
@@ -173,6 +177,7 @@ class TimelineRecorder:
         case_id: str | None,
         profile: str | None,
         elapsed_wall_seconds: float,
+        completion_monotonic_seconds: float | None,
         case_elapsed_seconds: float,
         status: str | None,
         failure_class: str | None,
@@ -204,6 +209,7 @@ class TimelineRecorder:
             "case_id": case_id,
             "profile": profile,
             "elapsed_wall_seconds": elapsed_wall_seconds,
+            "completion_monotonic_seconds": completion_monotonic_seconds,
             "case_elapsed_seconds": case_elapsed_seconds,
             "completed_cases": self._completed_cases,
             "eligible_cases": self._eligible_cases,
@@ -385,6 +391,7 @@ def timeline_on_complete_factory(
             elapsed_wall_seconds=campaign_elapsed,
             case_elapsed_seconds=result.elapsed_seconds,
             whitebox_new_events=new_whitebox,
+            completion_monotonic_seconds=time.monotonic(),
         )
 
     return _on_complete

@@ -696,8 +696,10 @@ def run_closed_loop(args: argparse.Namespace) -> int:
                          round_start_offset=round_start_offset)
     if not success:
         state.record_round_result(False, {"error": "bootstrap failed"})
+        print("ERROR: bootstrap failed — terminating campaign")
         _finalize(state, campaign_dir, metrics_dir, meta, start_wall)
         return 1
+    state.advance_round()
     state.advance_round()
 
     completed_round_dirs = [bootstrap_dir]
@@ -813,16 +815,25 @@ def _run_round(
                    "--variant", state.variant]
     round_cmd += ["--schedule", str(schedule_path), "--seed", str(args.seed)]
 
-    proc = subprocess.run(round_cmd, check=False, env=env)
-    if proc.returncode != 0:
-        print(f"  WARNING: round subprocess exited with {proc.returncode}")
-        state.record_round_result(False, {"returncode": proc.returncode})
-
-    # P0-2: Pass round_start_offset so ingestion can compute global wall time
+    # P0-3: Separate process_success from ingest_success
     rso = kwargs.get("round_start_offset", 0.0) if "round_start_offset" in kwargs else 0.0
-    return _ingest_round_results(state, round_dir, candidates,
-                                  enable_whitebox=enable_whitebox,
-                                  round_start_offset=rso)
+    process_success = proc.returncode == 0
+    ingest_success = _ingest_round_results(state, round_dir, candidates,
+                                            enable_whitebox=enable_whitebox,
+                                            round_start_offset=rso)
+    round_success = process_success and ingest_success
+
+    if not process_success:
+        print(f"  WARNING: round subprocess exited with {proc.returncode}")
+    if not ingest_success:
+        print(f"  WARNING: round ingestion incomplete (missing results)")
+
+    state.record_round_result(round_success, {
+        "process_success": process_success,
+        "ingest_success": ingest_success,
+        "returncode": proc.returncode,
+    })
+    return round_success
 
 
 def _ingest_round_results(

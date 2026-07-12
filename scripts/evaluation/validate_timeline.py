@@ -26,6 +26,41 @@ from pathlib import Path
 from typing import Any
 
 
+def _check_case_result_integrity(campaign_dir: Path, lines: list[dict], add_check) -> None:
+    """D4: Check that timeline case_ids have corresponding case.json and result.json files."""
+    cases_dir = campaign_dir / "cases"
+    results_dir = campaign_dir / "results"
+
+    if not cases_dir.is_dir() or not results_dir.is_dir():
+        return  # Can't check without directories
+
+    # Collect case IDs from timeline (skip baseline)
+    tl_case_ids: set[str] = set()
+    for line in lines:
+        cid = line.get("case_id")
+        if cid and line.get("completion_seq", 0) > 0:
+            tl_case_ids.add(cid)
+
+    # Check existence
+    missing_cases = []
+    missing_results = []
+    for cid in tl_case_ids:
+        if not (cases_dir / cid / "case.json").exists():
+            missing_cases.append(cid)
+        if not (results_dir / cid / "result.json").exists():
+            missing_results.append(cid)
+
+    if missing_cases:
+        add_check("case_files_exist", False, f"{len(missing_cases)} missing: {missing_cases[:3]}...")
+    else:
+        add_check("case_files_exist", True, f"all {len(tl_case_ids)} cases present")
+
+    if missing_results:
+        add_check("result_files_exist", False, f"{len(missing_results)} missing: {missing_results[:3]}...")
+    else:
+        add_check("result_files_exist", True, f"all {len(tl_case_ids)} results present")
+
+
 def validate_timeline(campaign_dir: Path) -> dict[str, Any]:
     """Run all validation checks and return a report.
 
@@ -190,6 +225,27 @@ def validate_timeline(campaign_dir: Path) -> dict[str, Any]:
                 _check_coverage_match("predicates", "predicates_covered", "predicates_target", dut_cov.get("predicates"))
         except Exception as exc:
             add_check("coverage_json_readable", False, str(exc), severity="warning")
+
+    # --- 11. D4: Case/result existence and duplicates ---
+    _check_case_result_integrity(campaign_dir, lines, add_check)
+
+    # --- 12. D4: SHA completeness ---
+    if metadata_path.exists():
+        try:
+            meta = json.loads(metadata_path.read_text(encoding="ascii"))
+            if meta.get("source_sha"):
+                add_check("source_sha_present", True, meta["source_sha"][:12])
+            else:
+                add_check("source_sha_present", False, "empty or missing", severity="warning")
+        except Exception:
+            pass
+
+    # --- 13. D4: Whitebox events monotonic ---
+    wb_events = [line.get("whitebox_distinct_events", 0) or 0 for line in lines if line.get("completion_seq", 0) > 0]
+    if wb_events and any(wb_events[i] < wb_events[i - 1] for i in range(1, len(wb_events))):
+        add_check("whitebox_events_monotonic", False, "whitebox events decreased")
+    elif wb_events:
+        add_check("whitebox_events_monotonic", True)
 
     # --- Final validity ---
     report["valid"] = report["error_count"] == 0

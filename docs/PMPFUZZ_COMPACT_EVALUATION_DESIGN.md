@@ -84,7 +84,7 @@ start/end UTC
 正式实验一、二使用以下 10 个配对 seed：
 
 ```text
-101, 202, 303, 404, 505, 606, 707, 808, 909, 1010
+101, 102, 103, 104, 105, 106, 107, 108, 109, 110
 ```
 
 在正式运行前，先用 seeds `1, 2, 3` 做 Pilot。Pilot 只用于验证数据管线和冻结预算，不能与正式结果混合。
@@ -142,7 +142,7 @@ Mandatory DUTs: rocket-clean, boom-clean, xiangshan-clean
 Conditionally excludable DUT: cva6-clean（仅工程 readiness 明确失败）
 Variants: random, bb, bb-wb
 Pilot seeds: 1, 2, 3
-Formal seeds: 101, 202, 303, 404, 505, 606, 707, 808, 909, 1010
+Formal seeds: 101, 102, 103, 104, 105, 106, 107, 108, 109, 110
 Coverage basis: execution-qualified
 Primary feedback mode: semantic
 Bootstrap: 32
@@ -266,7 +266,7 @@ Conditionally excludable DUT: cva6-clean（仅工程 readiness 明确失败）
 Methods: pmpfuzz-bb-wb, cascade
 Optional method: riscv-dv
 Pilot seeds: 1, 2, 3
-Formal seeds: 101, 202, 303, 404, 505, 606, 707, 808, 909, 1010
+Formal seeds: 101, 102, 103, 104, 105, 106, 107, 108, 109, 110
 Primary budget: fixed wall-clock cap frozen after Pilot
 Secondary view: first N completed tests, N frozen after Pilot
 ```
@@ -457,9 +457,9 @@ formal exclusions
 ### 7.3 正式运行顺序
 
 1. 实验一 Pilot；
-2. 实验一正式 60 campaigns；
+2. 实验一正式 90 campaigns；
 3. 实验二 Cascade Pilot；
-4. 实验二正式 40 campaigns；
+4. 实验二正式 60 campaigns；
 5. 聚合、validator 和绘图；
 6. 实验三保持不运行。
 

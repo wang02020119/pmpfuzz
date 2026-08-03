@@ -340,6 +340,51 @@ class ChipyardDirectDut:
         )
 
 
+class VarianeDirectDut:
+    def __init__(self, *, dut_name: str, simulator_binary: Path) -> None:
+        self.name = dut_name
+        self.simulator_binary = simulator_binary
+
+    def command_for(self, elf: Path) -> list[str]:
+        return [_posix_arg(self.simulator_binary), _posix_arg(elf)]
+
+    def run(self, elf: Path, *, timeout_seconds: int, log_path: Path) -> DutRunResult:
+        start = time.monotonic()
+        timed_out, returncode, stdout = _run_command_to_log(
+            self.command_for(elf),
+            cwd=self.simulator_binary.parent,
+            timeout_seconds=timeout_seconds,
+            log_path=log_path,
+        )
+        if timed_out:
+            return DutRunResult(
+                dut=self.name,
+                status="timeout",
+                elapsed_seconds=time.monotonic() - start,
+                log=str(log_path),
+                failure_class="timeout",
+                reason="variane simulator timeout",
+            )
+        parsed = parse_chipyard_log(stdout, returncode or 0)
+        return DutRunResult(
+            dut=self.name,
+            status=parsed.status,
+            elapsed_seconds=time.monotonic() - start,
+            returncode=returncode,
+            observed_code=parsed.observed_code,
+            failure_class=parsed.failure_class,
+            observed_mcause=parsed.observed_mcause,
+            observed_mtval=parsed.observed_mtval,
+            observed_tohost=parsed.observed_tohost,
+            observation=parsed.observation,
+            observed_stage=parsed.observed_stage,
+            observed_ptw_level=parsed.observed_ptw_level,
+            observed_fault_address=parsed.observed_fault_address,
+            log=str(log_path),
+            reason=parsed.reason,
+        )
+
+
 class ChipyardMakeDut:
     def __init__(
         self,
@@ -552,7 +597,7 @@ def make_dut(
     dut_bin: Path | None = None,
     simlen: int = 100000,
     whitebox_artifacts: bool = False,
-) -> SpikeDut | ChipyardDirectDut | ChipyardMakeDut | CascadeRocketDut | XiangShanDut:
+) -> SpikeDut | ChipyardDirectDut | VarianeDirectDut | ChipyardMakeDut | CascadeRocketDut | XiangShanDut:
     if dut == "spike":
         return SpikeDut(spike=spike, isa=isa)
     if dut == "rocket":
@@ -589,6 +634,11 @@ def make_dut(
             whitebox_artifacts=whitebox_artifacts,
         )
     if dut in {"cva6", "cva6-clean"}:
+        if dut_bin is not None and dut_bin.name == "Variane_testharness":
+            return VarianeDirectDut(
+                dut_name=dut,
+                simulator_binary=dut_bin,
+            )
         return ChipyardDirectDut(
             dut_name=dut,
             chipyard_dir=chipyard_dir,
@@ -734,7 +784,7 @@ def parse_chipyard_log(text: str, returncode: int) -> ParsedDutLog:
             f"chipyard simulator returned {returncode}",
             failure_class=classify_log_failure(text, returncode),
         )
-    if "*** PASSED ***" in text:
+    if "*** PASSED ***" in text or "*** SUCCESS ***" in text:
         return ParsedDutLog("pass", PASS_TOHOST, "chipyard reported explicit pass marker")
     return ParsedDutLog(
         "infra_failure",

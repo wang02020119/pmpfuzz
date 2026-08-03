@@ -452,7 +452,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_repro(args: argparse.Namespace) -> int:
-    case_dir, case = _load_case(args.case)
+    case_dir, case, source = _load_case(args.case)
     out = args.out.resolve()
     out_cases = out / "cases" / case["name"]
     out_results = out / "results"
@@ -470,15 +470,35 @@ def _cmd_repro(args: argparse.Namespace) -> int:
         asm = out_cases / f"{case['name']}.{dut_name}.S"
         elf = out_cases / f"{case['name']}.{dut_name}.elf"
         log = result_dir / f"{case['name']}.{dut_name}.log"
-        asm.write_text(_repro_assembly_for_dut(case, dut_name), encoding="ascii")
-        compile_run = subprocess.run(
-            ["sh", str(compile_script), str(asm), str(elf)],
-            cwd=root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-        )
+        if source["mode"] == "generated_case":
+            asm.write_text(_repro_assembly_for_dut(case, dut_name), encoding="ascii")
+            compile_run = subprocess.run(
+                ["sh", str(compile_script), str(asm), str(elf)],
+                cwd=root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
+        elif source["mode"] == "standalone_asm":
+            shutil.copy2(source["asm"], asm)
+            compile_run = subprocess.run(
+                ["sh", str(compile_script), str(asm), str(elf)],
+                cwd=root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
+        elif source["mode"] == "standalone_elf":
+            shutil.copy2(source["elf"], elf)
+            compile_run = subprocess.CompletedProcess(
+                args=["copy-standalone-elf"],
+                returncode=0,
+                stdout="",
+            )
+        else:
+            raise ValueError(f"unsupported repro source mode: {source['mode']}")
         if compile_run.returncode != 0:
             log.write_text(compile_run.stdout, encoding="ascii", errors="replace")
             write_json(
@@ -672,13 +692,72 @@ def _cva6_simulator_exists(chipyard_dir: Path) -> bool:
     return any(path.exists() for path in _cva6_simulator_candidates(chipyard_dir))
 
 
-def _load_case(case_path: Path) -> tuple[Path, dict]:
+def _load_case(case_path: Path) -> tuple[Path, dict, dict[str, object]]:
     if case_path.is_dir():
         case_dir = case_path
-        return case_dir, read_json(case_dir / "case.json")
+        case_json = case_dir / "case.json"
+        if case_json.exists():
+            return case_dir, read_json(case_json), {"mode": "generated_case"}
+        return _load_standalone_case(case_dir)
     if case_path.name == "case.json":
-        return case_path.parent, read_json(case_path)
-    raise ValueError("--case must point to a generated case directory or case.json")
+        return case_path.parent, read_json(case_path), {"mode": "generated_case"}
+    if case_path.suffix in {".S", ".elf"}:
+        return _load_standalone_case(case_path)
+    raise ValueError("--case must point to a generated case directory, case.json, .S, or .elf")
+
+
+def _load_standalone_case(case_path: Path) -> tuple[Path, dict, dict[str, object]]:
+    if case_path.is_dir():
+        preferred_asm = case_path / f"{case_path.name}.S"
+        preferred_elf = case_path / f"{case_path.name}.elf"
+        if preferred_asm.exists():
+            return case_path, _standalone_case_dict(case_path.name, preferred_asm, preferred_elf), {
+                "mode": "standalone_asm",
+                "asm": preferred_asm,
+                "elf": preferred_elf if preferred_elf.exists() else None,
+            }
+        if preferred_elf.exists():
+            return case_path, _standalone_case_dict(case_path.name, None, preferred_elf), {
+                "mode": "standalone_elf",
+                "asm": None,
+                "elf": preferred_elf,
+            }
+        raise ValueError(
+            f"standalone case directory {case_path} must contain {case_path.name}.S or {case_path.name}.elf",
+        )
+    case_dir = case_path.parent
+    if case_path.suffix == ".S":
+        sibling_elf = case_dir / f"{case_path.stem}.elf"
+        return case_dir, _standalone_case_dict(case_path.stem, case_path, sibling_elf), {
+            "mode": "standalone_asm",
+            "asm": case_path,
+            "elf": sibling_elf if sibling_elf.exists() else None,
+        }
+    return case_dir, _standalone_case_dict(case_path.stem, None, case_path), {
+        "mode": "standalone_elf",
+        "asm": None,
+        "elf": case_path,
+    }
+
+
+def _standalone_case_dict(name: str, asm: Path | None, elf: Path | None) -> dict[str, object]:
+    return {
+        "seed": "standalone",
+        "index": 0,
+        "name": name,
+        "profile": "standalone-poc",
+        "expected": {
+            "allowed": True,
+            "trap_cause": None,
+            "stage": "none",
+        },
+        "required_capabilities": [],
+        "oracle_applicability": "valid",
+        "standalone": {
+            "asm": str(asm) if asm is not None else None,
+            "elf": str(elf) if elf is not None else None,
+        },
+    }
 
 
 if __name__ == "__main__":

@@ -1,0 +1,289 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from pmpfuzz.__main__ import main
+from pmpfuzz.feedback import build_feedback_schedule
+from pmpfuzz.schema import result_to_dict, scenario_to_case_dict, write_json
+from pmpfuzz.scenario import ScenarioGenerator
+from pmpfuzz.whitebox import extract_security_whitebox_signals, write_whitebox_signals
+
+
+class SecurityWhiteboxSignalsTest(unittest.TestCase):
+    def test_artifacts_are_bound_to_their_own_dut_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(
+                seed=20260630,
+                include_smepmp=False,
+                profile="boom-ptw-pmp-regression",
+            ).generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=20260630, index=0)
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+
+            for dut, filename in (("rocket-clean", "rocket.log"), ("boom-clean", "boom.log")):
+                result_dir = run_dir / "results" / f"{case['name']}_{dut}"
+                log = result_dir / filename
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text(
+                    f"PMFUZZ_PROBE dut={dut} probe=pmp_check chain=pmp-check stage=pmp addr=0x80008000 allow=1\n",
+                    encoding="ascii",
+                )
+                write_json(
+                    result_dir / "result.json",
+                    result_to_dict(
+                        case=case,
+                        dut=dut,
+                        status="pass",
+                        elapsed_seconds=0.1,
+                        returncode=0,
+                        log=log,
+                        reason=None,
+                    ),
+                )
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        pairs = {
+            (signal["dut"], Path(signal["evidence"]["artifact"]).name)
+            for signal in payload["signals"]
+            if signal["kind"] == "source_probe"
+        }
+        self.assertEqual(pairs, {("rocket-clean", "rocket.log"), ("boom-clean", "boom.log")})
+
+    def test_zero_covered_security_point_does_not_create_a_signal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression")
+            log = run_dir / "results" / case["name"] / "coverage.log"
+            log.write_text("COVERAGE: pmp_gate, 10, 0, 0\n", encoding="ascii")
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        self.assertFalse(
+            any(signal["kind"] == "security_coverage_point" for signal in payload["signals"])
+        )
+
+    def test_extracts_ptw_pmp_footprint_signal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression")
+            denied_ptw = _first_denied_ptw_address(case)
+            footprint = run_dir / "results" / case["name"] / "xiangshan.footprints"
+            footprint.write_text(f"load {denied_ptw}\n", encoding="ascii")
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        signals = payload["signals"]
+        self.assertTrue(signals)
+        signal = signals[0]
+        self.assertEqual(signal["provider"], "whitebox")
+        self.assertEqual(signal["kind"], "ptw_pmp_footprint")
+        self.assertEqual(signal["case"], case["name"])
+        self.assertEqual(signal["features"]["security_chain"], "sv39-ptw-pmp")
+        self.assertEqual(signal["features"]["pmp_stage"], "ptw")
+        self.assertEqual(signal["features"]["ptw_level"], "L1")
+        self.assertFalse(signal["features"]["pmp_allowed"])
+
+    def test_extracts_forbidden_side_effect_footprint_signal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="pmp-side-effect")
+            footprint = run_dir / "results" / case["name"] / "mem.footprints"
+            footprint.write_text(f"store {case['physical_address']}\n", encoding="ascii")
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        signal = payload["signals"][0]
+        self.assertEqual(signal["kind"], "forbidden_side_effect_footprint")
+        self.assertEqual(signal["features"]["security_chain"], "pmp-side-effect")
+        self.assertEqual(signal["features"]["access"], "store")
+        self.assertEqual(signal["features"]["address"], case["physical_address"])
+        self.assertGreaterEqual(signal["weight"], 80)
+
+    def test_whitebox_cli_writes_feedback_compatible_signal_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            out_dir = Path(tmp) / "whitebox_out"
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression")
+            denied_ptw = _first_denied_ptw_address(case)
+            (run_dir / "results" / case["name"] / "trace.footprints").write_text(
+                f"ptw-read {denied_ptw}\n",
+                encoding="ascii",
+            )
+
+            rc = main(["whitebox", "--run-dir", str(run_dir), "--out", str(out_dir)])
+
+            self.assertEqual(rc, 0)
+            signal_file = out_dir / "whitebox_signals.json"
+            self.assertTrue(signal_file.exists())
+            schedule = build_feedback_schedule(
+                [run_dir],
+                max_cases=4,
+                seed=20260629,
+                signal_files=[signal_file],
+            )
+
+        self.assertTrue(schedule["entries"])
+        self.assertEqual(schedule["entries"][0]["source_signal"]["provider"], "whitebox")
+        self.assertEqual(schedule["entries"][0]["mutation_strategy"], "ptw-pmp-neighborhood")
+
+    def test_extracts_security_perf_counter_from_xiangshan_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression")
+            log = run_dir / "results" / case["name"] / "scenario.log"
+            log.write_text(
+                "[PERF ][time=10] SimTop.cpu.l2tlb: PTW_refill,                    3\n",
+                encoding="ascii",
+            )
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        signal = payload["signals"][0]
+        self.assertEqual(signal["kind"], "security_perf_counter")
+        self.assertEqual(signal["features"]["security_chain"], "rtl-security-perf")
+        self.assertEqual(signal["features"]["perf_counter"], "PTW_refill")
+        self.assertEqual(signal["features"]["perf_value"], 3)
+
+    def test_extracts_structured_source_probe_signal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression", dut="boom-clean")
+            log = run_dir / "results" / case["name"] / "boom.log"
+            log.write_text(
+                "PMFUZZ_PROBE dut=boom-clean probe=ptw_pmp_check chain=sv39-ptw-pmp "
+                "stage=ptw level=L1 paddr=0x80014000 allow=0 match=3 cause=5\n",
+                encoding="ascii",
+            )
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        signal = payload["signals"][0]
+        self.assertEqual(signal["kind"], "source_probe")
+        self.assertEqual(signal["dut"], "boom-clean")
+        self.assertEqual(signal["features"]["security_chain"], "sv39-ptw-pmp")
+        self.assertEqual(signal["features"]["probe"], "ptw_pmp_check")
+        self.assertEqual(signal["features"]["pmp_stage"], "ptw")
+        self.assertEqual(signal["features"]["ptw_level"], "L1")
+        self.assertEqual(signal["features"]["address"], "0x80014000")
+        self.assertFalse(signal["features"]["pmp_allowed"])
+        self.assertEqual(signal["features"]["pmp_match_index"], 3)
+        self.assertEqual(signal["features"]["observed_mcause"], 5)
+        self.assertGreaterEqual(signal["weight"], 100)
+
+    def test_source_probe_signal_uses_result_dut_when_shared_source_reports_static_dut(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression", dut="boom-clean")
+            log = run_dir / "results" / case["name"] / "boom.log"
+            log.write_text(
+                "PMFUZZ_PROBE dut=rocket-clean probe=rocket_pmp_checker chain=pmp-check "
+                "stage=pmp addr=0x10000 prv=3 size=3 r=1 w=1 x=1\n",
+                encoding="ascii",
+            )
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        signal = payload["signals"][0]
+        self.assertEqual(signal["kind"], "source_probe")
+        self.assertEqual(signal["dut"], "boom-clean")
+        self.assertEqual(signal["features"]["source_probe_reported_dut"], "rocket-clean")
+        self.assertEqual(signal["features"]["source_probe_effective_dut"], "boom-clean")
+        self.assertEqual(signal["features"]["source_probe_dut"], "boom-clean")
+
+    def test_specific_tlb_perf_counter_ranks_above_generic_access_counter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="boom-ptw-pmp-regression")
+            log = run_dir / "results" / case["name"] / "scenario.log"
+            log.write_text(
+                "[PERF ][time=10] SimTop.cpu.l2tlb: access,                    200\n"
+                "[PERF ][time=10] SimTop.cpu.fetch: stallCycles_fetch_icachePrefetch_itlbMiss,                    4\n",
+                encoding="ascii",
+            )
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        self.assertGreaterEqual(len(payload["signals"]), 2)
+        self.assertEqual(payload["signals"][0]["features"]["perf_counter"], "stallCycles_fetch_icachePrefetch_itlbMiss")
+
+    def test_extracts_rtl_assertion_signal_from_verilator_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(
+                run_dir,
+                profile="boom-ptw-pmp-regression",
+                dut="boom-clean",
+                status="infra_failure",
+                failure_class="pipeline_hung",
+            )
+            log = run_dir / "results" / case["name"] / "scenario.log"
+            log.write_text(
+                "[20049000] %Error: BoomCore.sv:1411: Assertion failed in "
+                "TOP.TestDriver.testHarness.tile.core: Assertion failed: Pipeline has hung.\n"
+                '    at core.scala:1330 assert (!(idle_cycles.value(13)), "Pipeline has hung.")\n',
+                encoding="ascii",
+            )
+
+            payload = extract_security_whitebox_signals(run_dir)
+
+        signal = payload["signals"][0]
+        self.assertEqual(signal["kind"], "rtl_assertion")
+        self.assertEqual(signal["dut"], "boom-clean")
+        self.assertEqual(signal["features"]["security_chain"], "rtl-assertion")
+        self.assertEqual(signal["features"]["assertion_file"], "BoomCore.sv")
+        self.assertEqual(signal["features"]["assertion_line"], 1411)
+        self.assertIn("Pipeline has hung", signal["features"]["assertion_message"])
+        self.assertGreaterEqual(signal["weight"], 100)
+
+    def test_write_whitebox_signals_uses_default_run_subdir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            case = _write_case_result(run_dir, profile="pmp-side-effect")
+            (run_dir / "results" / case["name"] / "mem.footprints").write_text(
+                f"store {case['physical_address']}\n",
+                encoding="ascii",
+            )
+
+            path = write_whitebox_signals(run_dir)
+
+        self.assertEqual(path.name, "whitebox_signals.json")
+        self.assertEqual(path.parent.name, "whitebox")
+
+
+def _write_case_result(
+    run_dir: Path,
+    *,
+    profile: str,
+    dut: str = "xiangshan-clean",
+    status: str = "pass",
+    failure_class: str | None = None,
+) -> dict:
+    scenario = ScenarioGenerator(seed=20260630, include_smepmp=False, profile=profile).generate_batch(1)[0]
+    case = scenario_to_case_dict(scenario, seed=20260630, index=0)
+    write_json(run_dir / "cases" / case["name"] / "case.json", case)
+    result = result_to_dict(
+        case=case,
+        dut=dut,
+        status=status,
+        elapsed_seconds=0.1,
+        returncode=0 if status == "pass" else 1,
+        log=run_dir / "results" / case["name"] / "case.log",
+        reason=None,
+        failure_class=failure_class,
+        oracle_applicability="valid",
+    )
+    write_json(run_dir / "results" / case["name"] / "result.json", result)
+    return case
+
+
+def _first_denied_ptw_address(case: dict) -> str:
+    for check in case["contract_trace"]["pmp_checks"]:
+        if check["stage"] == "ptw" and not check["allowed"]:
+            return check["physical_address"]
+    raise AssertionError("case does not contain a denied PTW PMP check")
+
+
+if __name__ == "__main__":
+    unittest.main()

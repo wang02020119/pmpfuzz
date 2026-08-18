@@ -1,9 +1,3 @@
-"""Adversarial contract tests for the Cascade evaluation adapter — Phase E.
-
-Each test targets a specific frozen Phase E contract requirement. Tests that
-fail on the current implementation demonstrate genuine gaps to be repaired
-in the GREEN commit.
-"""
 
 from __future__ import annotations
 
@@ -47,17 +41,12 @@ def _last_generator_bash_script(mock_run):
 
 
 
-# ---------------------------------------------------------------------------
-# Contract 3: Campaign isolation — workspace ID includes design
-# ---------------------------------------------------------------------------
+
+
+
 
 
 class TestWorkspaceIdIncludesDesign(unittest.TestCase):
-    """Contract 3: workspace ID derives from out_dir identity + seed + design.
-
-    Two campaigns with identical out_dir and seed but different designs
-    must NOT collide in workspace ID.
-    """
 
     def test_different_designs_produce_different_workspace_ids(self):
         with TemporaryDirectory() as tmp:
@@ -75,17 +64,12 @@ class TestWorkspaceIdIncludesDesign(unittest.TestCase):
         )
 
 
-# ---------------------------------------------------------------------------
-# Contract 4: Seed effectiveness — seed reaches generator
-# ---------------------------------------------------------------------------
+
+
+
 
 
 class TestSeedReachesGenerator(unittest.TestCase):
-    """Contract 4: the passed seed must appear in the actual generator invocation.
-
-    The seed must be passed as a CLI argument or API parameter to the
-    generator, not merely used for workspace naming.
-    """
 
     def test_seed_appears_in_generator_command(self):
         with TemporaryDirectory() as tmp:
@@ -94,9 +78,9 @@ class TestSeedReachesGenerator(unittest.TestCase):
                     mock_run.return_value = MagicMock(returncode=0, stderr="")
                     out = Path(tmp, "out")
                     cascade._generate_elfs(3, out, seed=42, design="rocket")
-                    # The docker exec command: ["docker", "exec", ..., "bash", "-c", SCRIPT]
+
                     cmd_list = _generator_run_commands(mock_run)[-1]
-                    bash_script = cmd_list[5]  # the -c argument value
+                    bash_script = cmd_list[5]
         self.assertIn(
             "42",
             bash_script,
@@ -106,7 +90,6 @@ class TestSeedReachesGenerator(unittest.TestCase):
         )
 
     def test_two_seeds_produce_different_generator_commands(self):
-        """Two different seeds must produce observably different generator invocations."""
         with TemporaryDirectory() as tmp:
             with patch.object(cascade, "CASCADE_MOUNT_DIR", Path(tmp)):
                 with patch.object(cascade.subprocess, "run") as mock_run:
@@ -127,13 +110,12 @@ class TestSeedReachesGenerator(unittest.TestCase):
         )
 
 
-# ---------------------------------------------------------------------------
-# Contract 5: Per-case evidence — relative log paths
-# ---------------------------------------------------------------------------
+
+
+
 
 
 class TestRelativeLogPaths(unittest.TestCase):
-    """Contract 5: events.json must record relative log paths, not absolute."""
 
     def test_events_json_records_relative_log_paths(self):
         def fake_generate(num_elfs, out_dir, *, seed, design):
@@ -185,17 +167,12 @@ class TestRelativeLogPaths(unittest.TestCase):
                     )
 
 
-# ---------------------------------------------------------------------------
-# Contract 2: Runtime provenance — DUT binary SHA fails closed
-# ---------------------------------------------------------------------------
+
+
+
 
 
 class TestDutBinaryShaFailsClosed(unittest.TestCase):
-    """Contract 2: missing/unreadable DUT binary must fail closed.
-
-    The adapter must never substitute an empty string or the historical
-    CASCADE_IMAGE_SHA for the actual DUT binary SHA256.
-    """
 
     def test_missing_dut_binary_is_infra_failure(self):
         def fake_generate(num_elfs, out_dir, *, seed, design):
@@ -243,7 +220,6 @@ class TestDutBinaryShaFailsClosed(unittest.TestCase):
         )
 
     def test_dut_binary_sha_is_not_empty_when_binary_exists(self):
-        """When the DUT binary exists, its SHA must be a non-empty hex string."""
         def fake_generate(num_elfs, out_dir, *, seed, design):
             out_dir.mkdir(parents=True, exist_ok=True)
             (out_dir / f"{design}_0.elf").write_bytes(b"ELF")
@@ -295,18 +271,12 @@ class TestDutBinaryShaFailsClosed(unittest.TestCase):
         )
 
 
-# ---------------------------------------------------------------------------
-# Contract 6: Status classification — nonzero return ≠ infra_failure
-# ---------------------------------------------------------------------------
+
+
+
 
 
 class TestNonzeroReturnClassification(unittest.TestCase):
-    """Contract 6: nonzero return code alone is NOT infra_failure.
-
-    Classification depends on observation validity and artifact completeness.
-    A case that finishes with nonzero return but produces valid probe events
-    is 'completed', not 'infra_failure'.
-    """
 
     def test_nonzero_return_with_probe_events_is_completed(self):
         def fake_generate(num_elfs, out_dir, *, seed, design):
@@ -321,7 +291,7 @@ class TestNonzeroReturnClassification(unittest.TestCase):
                 "seed": seed,
             }
 
-        # Nonzero return but with valid probe events → must be 'completed'
+
         process = MagicMock(
             returncode=1,
             stdout="PMFUZZ_PROBE chain=pmp stage=final prv=1 addr=0x1000\n",
@@ -354,23 +324,19 @@ class TestNonzeroReturnClassification(unittest.TestCase):
                 meta["infra_failures"], 0,
                 "Contract 6 violation: nonzero return alone is not infra_failure.",
             )
-            # Also verify the events.json record (must read inside temp dir context)
+
             events = json.loads(
                 (out_dir / "events.json").read_text(encoding="ascii"))
             self.assertEqual(events[0]["status"], "completed")
             self.assertEqual(events[0]["returncode"], 1)
 
 
-# ---------------------------------------------------------------------------
-# Contract 8: Metadata budget separation
-# ---------------------------------------------------------------------------
+
+
+
 
 
 class TestMetadataBudgetSeparation(unittest.TestCase):
-    """Contract 8: metadata separates requested budget from elapsed time.
-
-    Never put actual elapsed time into time_budget_seconds.
-    """
 
     def test_time_budget_seconds_is_not_elapsed_wall_time(self):
         def fake_generate(num_elfs, out_dir, *, seed, design):
@@ -408,8 +374,8 @@ class TestMetadataBudgetSeparation(unittest.TestCase):
                             seed=101,
                         )
 
-        # Contract 8: if time_budget_seconds is present, it must not equal
-        # elapsed_wall_seconds.
+
+
         budget = meta.get("time_budget_seconds")
         elapsed = meta.get("elapsed_wall_seconds")
         if budget is not None and elapsed is not None:
@@ -419,19 +385,18 @@ class TestMetadataBudgetSeparation(unittest.TestCase):
                 "Contract 8 violation: time_budget_seconds must not contain "
                 "actual elapsed wall time.",
             )
-        # elapsed_wall_seconds must be recorded (>= 0, non-negative)
+
         self.assertGreaterEqual(
             elapsed, 0,
             "elapsed_wall_seconds must be a non-negative number")
 
 
-# ---------------------------------------------------------------------------
-# Contract 7: completion_seq / event_index behaviour
-# ---------------------------------------------------------------------------
+
+
+
 
 
 class TestCompletionSeqAndEventIndex(unittest.TestCase):
-    """Contract 7: completion_seq shared per case; event_index starts at 1 per case."""
 
     def test_completion_seq_shared_event_index_per_case(self):
         timeline = [
@@ -459,7 +424,7 @@ class TestCompletionSeqAndEventIndex(unittest.TestCase):
                 "case_id": "case-c",
                 "completion_seq": 3,
                 "elapsed_wall_seconds": 3.0,
-                "probe_events": [],  # no events → no rows
+                "probe_events": [],
             },
         ]
 
@@ -467,19 +432,18 @@ class TestCompletionSeqAndEventIndex(unittest.TestCase):
             timeline, dut="rocket-clean", campaign_id="camp", seed=1,
         )
 
-        # Case a: 2 events, both seq=1, indices 1 and 2
+
         self.assertEqual(rows[0]["completion_seq"], 1)
         self.assertEqual(rows[0]["event_index"], 1)
         self.assertEqual(rows[1]["completion_seq"], 1)
         self.assertEqual(rows[1]["event_index"], 2)
-        # Case b: 1 event, seq=2, index=1
+
         self.assertEqual(rows[2]["completion_seq"], 2)
         self.assertEqual(rows[2]["event_index"], 1)
-        # Case c has no events → no rows
+
         self.assertEqual(len(rows), 3)
 
     def test_event_index_resets_per_case(self):
-        """event_index must restart at 1 for each case."""
         timeline = [
             {
                 "case_id": "case-1",
@@ -505,9 +469,9 @@ class TestCompletionSeqAndEventIndex(unittest.TestCase):
         rows = cascade._build_security_event_timeseries(
             timeline, dut="rocket-clean", campaign_id="c", seed=1,
         )
-        # Case 1: 1 event, index 1
+
         self.assertEqual(rows[0]["event_index"], 1)
-        # Case 2: 2 events, indices 1, 2
+
         self.assertEqual(rows[1]["event_index"], 1)
         self.assertEqual(rows[2]["event_index"], 2)
 
@@ -687,25 +651,16 @@ class TestArtifactShaManifestStreaming(unittest.TestCase):
             )
 
 
-# ---------------------------------------------------------------------------
-# Phase E independent audit — RED2 tests (defects 1–7)
-# ---------------------------------------------------------------------------
 
 
-# ── Defect 1: stale returncode across loop iterations (line 335) ─────────
+
+
+
 
 
 class TestStaleReturncodeIsolation(unittest.TestCase):
-    """Defect 1: proc.returncode leaks from successful iteration into failed ones.
-
-    Python function locals persist across loop iterations. After one successful
-    case binds ``proc``, a subsequent TimeoutExpired or launch exception leaves
-    the previous ``proc`` in scope, so line 335's ``"proc" in dir()`` check
-    picks up the stale reference and reports the prior case's returncode.
-    """
 
     def _make_generate_side_effect(self, num_elfs, design):
-        """Return a side_effect callable that creates actual ELF files on disk."""
 
         def _fake_generate(n, out_dir, *, seed, design):
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -726,7 +681,6 @@ class TestStaleReturncodeIsolation(unittest.TestCase):
         return _fake_generate
 
     def test_timeout_after_success_does_not_inherit_previous_returncode(self):
-        """Case 0 succeeds (rc=0), case 1 times out → case 1 returncode != 0."""
         with TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "campaign"
             real_binary = Path(tmp) / "sim"
@@ -739,7 +693,7 @@ class TestStaleReturncodeIsolation(unittest.TestCase):
                     cascade, "_generate_elfs",
                     side_effect=self._make_generate_side_effect(2, "rocket"),
                 ):
-                    # First call succeeds, second raises TimeoutExpired
+
                     success_proc = MagicMock(
                         returncode=0,
                         stdout="PMFUZZ_PROBE chain=pmp stage=final prv=1 addr=0x1000\n",
@@ -769,7 +723,7 @@ class TestStaleReturncodeIsolation(unittest.TestCase):
             self.assertEqual(len(events), 2,
                              "Both cases must produce terminal records")
             self.assertEqual(events[0]["status"], "completed")
-            # The timeout case must NOT inherit returncode 0 from the first case.
+
             timeout_rc = events[1]["returncode"]
             self.assertIsNone(
                 timeout_rc,
@@ -778,7 +732,6 @@ class TestStaleReturncodeIsolation(unittest.TestCase):
             )
 
     def test_exception_after_success_does_not_inherit_previous_returncode(self):
-        """Case 0 succeeds (rc=0), case 1 gets launch OSError → returncode != 0."""
         with TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "campaign"
             real_binary = Path(tmp) / "sim"
@@ -825,7 +778,6 @@ class TestStaleReturncodeIsolation(unittest.TestCase):
             )
 
     def test_terminal_statuses_and_log_files_always_exist(self):
-        """Every case (success, timeout, exception) gets status, log paths, files."""
         with TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "campaign"
             real_binary = Path(tmp) / "sim"
@@ -873,7 +825,7 @@ class TestStaleReturncodeIsolation(unittest.TestCase):
                         evt["status"],
                         ("completed", "timeout", "infra_failure"),
                     )
-                    # Log paths are relative
+
                     for key in ("stdout_log", "stderr_log"):
                         self.assertFalse(
                             Path(evt[key]).is_absolute(),
@@ -886,16 +838,10 @@ class TestStaleReturncodeIsolation(unittest.TestCase):
                         )
 
 
-# ── Defect 2: workspace path identity collision (lines 56-63) ───────────
+
 
 
 class TestWorkspacePathCanonicalIdentity(unittest.TestCase):
-    """Defect 2: same basename different parent → workspace ID collision.
-
-    ``_generation_workspace`` hashes only ``out_dir.resolve().name``, so
-    ``/a/campaign`` and ``/b/campaign`` share a workspace ID when seed and
-    design match.  The workspace ID must derive from the full canonical path.
-    """
 
     def test_different_full_paths_same_basename_yield_different_workspaces(self):
         with TemporaryDirectory() as tmp:
@@ -934,16 +880,10 @@ class TestWorkspacePathCanonicalIdentity(unittest.TestCase):
             )
 
 
-# ── Defect 3: per-case ELF hash truncated to first only (lines 95-108, 339)
+
 
 
 class TestPerCaseElfFullHash(unittest.TestCase):
-    """Defect 3: each case record must contain the full 64-hex SHA256 of its ELF.
-
-    Currently ``_generate_elfs`` computes only the first generated ELF's hash,
-    truncates to 16 hex characters, and ``run_cascade_baseline`` writes that
-    same value for every case (line 339).
-    """
 
     def test_different_elf_contents_produce_different_full_hashes(self):
         with TemporaryDirectory() as tmp:
@@ -951,15 +891,15 @@ class TestPerCaseElfFullHash(unittest.TestCase):
             real_binary = Path(tmp) / "sim"
             real_binary.write_bytes(b"binary-content")
 
-            # Create two ELF files with observably different content
+
             def fake_generate(n, out_dir, *, seed, design):
                 out_dir.mkdir(parents=True, exist_ok=True)
                 for i in range(n):
-                    # Different content per case
+
                     content = bytes([(seed + i * 7) % 256]) * 128
                     (out_dir / f"{design}_{i}.elf").write_bytes(content)
-                # Return a truncated hash of the *first* ELF only (simulating
-                # the current bug so the test can detect it).
+
+
                 import hashlib
                 first_elf_content = (out_dir / f"{design}_0.elf").read_bytes()
                 first_short = hashlib.sha256(first_elf_content).hexdigest()[:16]
@@ -1022,7 +962,7 @@ class TestPerCaseElfFullHash(unittest.TestCase):
                         f"64-hex SHA256 of that case's actual ELF. "
                         f"Got {recorded!r}, expected {expected_full!r}",
                     )
-                    # Must differ between cases (different ELF content)
+
                     if i > 0:
                         prev = events[i - 1].get("elf_sha256", "")
                         self.assertNotEqual(
@@ -1033,20 +973,12 @@ class TestPerCaseElfFullHash(unittest.TestCase):
                         )
 
 
-# ── Defect 4: missing ELF silently continues (lines 285-287) ─────────────
+
 
 
 class TestMissingElfTerminalEvidence(unittest.TestCase):
-    """Defect 4: missing expected ELF must produce terminal record + logs.
-
-    Currently lines 285-287 ``continue`` silently, producing no events.json
-    record, no timeline entry, and breaking reconciliation against
-    ``requested_cases``.  Every requested case index must produce exactly one
-    terminal case evidence record with contiguous ``completion_seq``.
-    """
 
     def _make_partial_generator(self, num_create, _design):
-        """Create only ``num_create`` ELF files out of ``n`` requested."""
 
         def _fake(n, out_dir, *, seed, design):
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -1067,7 +999,6 @@ class TestMissingElfTerminalEvidence(unittest.TestCase):
         return _fake
 
     def test_missing_elf_yields_infra_failure_terminal_record(self):
-        """Request 3 cases, generate 2 → 3 terminal records, contiguous seq."""
         with TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "campaign"
             real_binary = Path(tmp) / "sim"
@@ -1108,7 +1039,7 @@ class TestMissingElfTerminalEvidence(unittest.TestCase):
                 f"only {len(events)} found (missing ELF was silently skipped)",
             )
 
-            # completion_seq must be contiguous: 1, 2, 3
+
             seqs = [e["completion_seq"] for e in events]
             self.assertEqual(
                 seqs,
@@ -1116,10 +1047,10 @@ class TestMissingElfTerminalEvidence(unittest.TestCase):
                 f"completion_seq must be contiguous 1..N, got {seqs}",
             )
 
-            # The missing-ELF case (index 2) must be infra_failure
+
             missing = events[2]
             self.assertEqual(missing["status"], "infra_failure")
-            # stdout/stderr paths must be relative and the files must exist
+
             for key in ("stdout_log", "stderr_log"):
                 log_rel = missing[key]
                 self.assertFalse(
@@ -1133,7 +1064,6 @@ class TestMissingElfTerminalEvidence(unittest.TestCase):
                 )
 
     def test_missing_elf_reconciliation_counts_match(self):
-        """requested_cases == terminal records; categories sum to requested."""
         with TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "campaign"
             real_binary = Path(tmp) / "sim"
@@ -1187,20 +1117,12 @@ class TestMissingElfTerminalEvidence(unittest.TestCase):
             )
 
 
-# ── Defect 5: DUT binary validated after side effects (lines 353-389) ────
+
 
 
 class TestDutBinaryPreflightValidation(unittest.TestCase):
-    """Defect 5: DUT binary validated after generation and simulation.
-
-    Missing/non-readable DUT must fail closed *before* generator and simulator
-    invocation.  ``exists() and is_file()`` does not prove readable — a
-    PermissionError/OSError from ``read_bytes`` currently aborts without a
-    structured result.
-    """
 
     def test_missing_dut_binary_prevents_generation(self):
-        """Missing DUT → _generate_elfs must never be called."""
         with TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "campaign"
             nonexistent = str(Path(tmp) / "nonexistent_simulator")
@@ -1215,8 +1137,8 @@ class TestDutBinaryPreflightValidation(unittest.TestCase):
                 cascade._SIM_BINARIES, {"rocket-clean": nonexistent}, clear=False
             ):
                 with patch.object(cascade, "_generate_elfs", gen_mock):
-                    # Also mock subprocess.run so the simulation loop doesn't
-                    # crash if we somehow reach it.
+
+
                     with patch.object(cascade.subprocess, "run") as mock_run:
                         mock_run.return_value = MagicMock(
                             returncode=0, stdout="", stderr=""
@@ -1234,7 +1156,6 @@ class TestDutBinaryPreflightValidation(unittest.TestCase):
             self.assertEqual(meta.get("status"), "infra_failure")
 
     def test_unreadable_dut_binary_returns_infra_failure_not_exception(self):
-        """DUT file exists but read_bytes raises OSError → no exception."""
         with TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "campaign"
             dut_binary = Path(tmp) / "unreadable_sim"
@@ -1246,7 +1167,7 @@ class TestDutBinaryPreflightValidation(unittest.TestCase):
                 "seed": 1, "elf_sha256": "0" * 16,
             })
 
-            # read_bytes raises OSError for the DUT binary path only.
+
             real_read_bytes = Path.read_bytes
 
             def _se(path_self):
@@ -1289,24 +1210,16 @@ class TestDutBinaryPreflightValidation(unittest.TestCase):
             )
 
 
-# ── Defect 6: design propagated to helper invocation (RED3 unskipped) ────
+
 
 
 class TestDesignReachesGeneratorInvocation(unittest.TestCase):
-    """RED3-7: generator invocation must pass --design to the helper script.
-
-    The ``_generate_elfs`` docker exec command must invoke the new
-    ``cascade_generate_campaign.py`` helper with ``--design <design>``
-    as a parsed argument, not merely use design for workspace naming.
-    """
 
     @staticmethod
     def _last_bash_script(mock_run):
-        """Extract the bash -c script from the most recent subprocess.run call."""
         return _last_generator_bash_script(mock_run)
 
     def test_different_designs_produce_different_helper_commands(self):
-        """rocket vs boom → observably different --design values in invocation."""
         with TemporaryDirectory() as tmp:
             with patch.object(cascade, "CASCADE_MOUNT_DIR", Path(tmp) / "mount"):
                 with patch.object(cascade.subprocess, "run") as mock_run:
@@ -1330,7 +1243,6 @@ class TestDesignReachesGeneratorInvocation(unittest.TestCase):
             )
 
     def test_design_value_appears_as_parsed_flag(self):
-        """The design name must appear as --design <value>, not just in paths."""
         with TemporaryDirectory() as tmp:
             with patch.object(cascade, "CASCADE_MOUNT_DIR", Path(tmp) / "mount"):
                 with patch.object(cascade.subprocess, "run") as mock_run:
@@ -1354,19 +1266,12 @@ class TestDesignReachesGeneratorInvocation(unittest.TestCase):
             )
 
 
-# ── Defect 7: design not validated before shell command construction ─────
+
 
 
 class TestDesignValidationBeforeSubprocess(unittest.TestCase):
-    """Defect 7: invalid design must be rejected before subprocess.
-
-    ``_generate_elfs`` uses a shell command string with workspace and design
-    values.  Design must be validated against the fixed allowed set before
-    command construction to prevent injection or undefined behavior.
-    """
 
     def test_invalid_design_rejected_before_subprocess(self):
-        """Passing an invalid design raises ValueError before subprocess.run."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
             out.mkdir(parents=True, exist_ok=True)
@@ -1376,11 +1281,10 @@ class TestDesignValidationBeforeSubprocess(unittest.TestCase):
                     cascade._generate_elfs(
                         1, out, seed=1, design="invalid_design_xyz"
                     )
-            # Subprocess.run must NOT have been called
+
             mock_run.assert_not_called()
 
     def test_valid_designs_are_accepted(self):
-        """All designs in _DESIGN_MAP values must be accepted."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
             out.mkdir(parents=True, exist_ok=True)
@@ -1397,28 +1301,21 @@ class TestDesignValidationBeforeSubprocess(unittest.TestCase):
                                 f"Valid design {design!r} (from _DESIGN_MAP) "
                                 f"must be accepted"
                             )
-            # Designs are valid: subprocess should have been called for each
+
             self.assertGreaterEqual(
                 mock_run.call_count,
                 len(set(cascade._DESIGN_MAP.values())),
                 "Each valid design must reach the generator subprocess",
             )
 
-# ---------------------------------------------------------------------------
-# Phase E audit round 3 — RED3 tests (genuine failures on 9e4541c)
-# ---------------------------------------------------------------------------
 
 
-# ── RED3-1: No legacy do_genmanyelfs.py ──────────────────────────────────
+
+
+
 
 
 class TestNoLegacyDoGenmanyelfs(unittest.TestCase):
-    """RED3-1: _generate_elfs must not invoke the legacy do_genmanyelfs.py.
-
-    The authoritative server evidence confirms do_genmanyelfs.py accepts only
-    positional (num_elfs, target_dir), hardcodes rocket, and silently ignores
-    --seed.  The adapter must switch to the new seeded multi-design helper.
-    """
 
     def test_generator_command_does_not_invoke_do_genmanyelfs(self):
         with TemporaryDirectory() as tmp:
@@ -1453,12 +1350,10 @@ class TestNoLegacyDoGenmanyelfs(unittest.TestCase):
         )
 
 
-# ── RED3-2: Helper invocation contains parsed arguments ───────────────────
+
 
 
 class TestHelperInvocationArgs(unittest.TestCase):
-    """RED3-2: The new helper must receive --design, --seed, --count, --output
-    as actual parsed CLI arguments (not positional, not hardcoded)."""
 
     def test_helper_invocation_has_design_flag(self):
         with TemporaryDirectory() as tmp:
@@ -1523,7 +1418,6 @@ class TestHelperInvocationArgs(unittest.TestCase):
         )
 
     def test_all_four_designs_propagate_to_helper_invocation(self):
-        """Every allowed design in _DESIGN_MAP must reach --design flag."""
         failures = []
         for dut, design in cascade._DESIGN_MAP.items():
             with TemporaryDirectory() as tmp:
@@ -1550,7 +1444,6 @@ class TestHelperInvocationArgs(unittest.TestCase):
 
 
 class TestContainerWorkspaceStaging(unittest.TestCase):
-    """Live contract: helper and outputs must not rely on bind-mount visibility."""
 
     def test_generate_elfs_stages_helper_into_container_before_generator_exec(self):
         invocations = []
@@ -1657,16 +1550,10 @@ class TestContainerWorkspaceStaging(unittest.TestCase):
         )
 
 
-# ── RED3-3: Helper argument validation (no Cascade imports at module level)
+
 
 
 class TestHelperArgumentParsing(unittest.TestCase):
-    """RED3-3: Helper validates args and defers Cascade imports until execution.
-
-    The helper module must be importable without the Cascade container
-    environment.  Cascade-specific imports (gen_new_test_instance etc.)
-    must be deferred until after argument validation.
-    """
 
     _helper = None
     _import_error = None
@@ -1674,7 +1561,7 @@ class TestHelperArgumentParsing(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            from scripts.evaluation.baseline_adapters import \
+            from scripts.evaluation.baseline_adapters import\
                 cascade_generate_campaign as _h
             cls._helper = _h
         except ImportError as e:
@@ -1688,7 +1575,6 @@ class TestHelperArgumentParsing(unittest.TestCase):
             )
 
     def test_module_import_does_not_load_cascade_modules(self):
-        """Importing the helper must not pull in analyzeelfs or Cascade internals."""
         cascade_internals = {
             k for k in sys.modules
             if k.startswith("analyzeelfs") or k.startswith("cascade_meta")
@@ -1700,7 +1586,6 @@ class TestHelperArgumentParsing(unittest.TestCase):
         )
 
     def test_rejects_invalid_design(self):
-        """--design invalid_madeup must be rejected with SystemExit."""
         with self.assertRaises((SystemExit, ValueError)):
             parser = self._helper.build_arg_parser()
             parser.parse_args([
@@ -1709,7 +1594,6 @@ class TestHelperArgumentParsing(unittest.TestCase):
             ])
 
     def test_rejects_negative_seed(self):
-        """--seed -1 must be rejected."""
         with self.assertRaises((SystemExit, ValueError)):
             parser = self._helper.build_arg_parser()
             args = parser.parse_args([
@@ -1719,7 +1603,6 @@ class TestHelperArgumentParsing(unittest.TestCase):
             self._helper.validate_args(args)
 
     def test_rejects_zero_count(self):
-        """--count 0 must be rejected."""
         with self.assertRaises((SystemExit, ValueError)):
             parser = self._helper.build_arg_parser()
             args = parser.parse_args([
@@ -1729,7 +1612,6 @@ class TestHelperArgumentParsing(unittest.TestCase):
             self._helper.validate_args(args)
 
     def test_rejects_negative_count(self):
-        """--count -5 must be rejected."""
         with self.assertRaises((SystemExit, ValueError)):
             parser = self._helper.build_arg_parser()
             args = parser.parse_args([
@@ -1739,7 +1621,6 @@ class TestHelperArgumentParsing(unittest.TestCase):
             self._helper.validate_args(args)
 
     def test_accepts_valid_args(self):
-        """All four allowed designs + valid seed/count must pass validation."""
         for design in sorted(self._helper.ALLOWED_DESIGNS):
             with self.subTest(design=design):
                 parser = self._helper.build_arg_parser()
@@ -1752,7 +1633,6 @@ class TestHelperArgumentParsing(unittest.TestCase):
                 self._helper.validate_args(args)
 
     def test_allowed_designs_matches_design_map_values(self):
-        """ALLOWED_DESIGNS must exactly match _DESIGN_MAP values."""
         self.assertEqual(
             self._helper.ALLOWED_DESIGNS,
             frozenset(cascade._DESIGN_MAP.values()),
@@ -1760,40 +1640,34 @@ class TestHelperArgumentParsing(unittest.TestCase):
         )
 
 
-# ── RED4 tests: Official Cascade descriptor API (tuple-based) ───────────
-#
-# The authoritative server source evidence (cascade/fuzzfromdescriptor.py,
-# analyzeelfs/genmanyelfs.py) defines a tuple-based API:
-#
-#   gen_new_test_instance(design_name, randseed, can_authorize_privileges,
-#                         fixed_memsize=None, fixed_num_bbs=None)
-#       → (memsize, design_name, randseed, nmax_bbs, authorize_privileges)
-#
-#   gen_fuzzerstate_elf_expectedvals(memsize, design_name, randseed,
-#       nmax_bbs, authorize_privileges, check_pc_spike_again, ...)
-#       → (fuzzerstate, rtl_elfpath, expected_regvals,
-#          time_gen_bbs, time_spike, time_gen_elf)
-#
-# The generator MUST import from ``cascade.fuzzfromdescriptor`` (the
-# defining module), call ``calibrate_spikespeed()`` and
-# ``profile_get_medeleg_mask(design)`` from common.spike / common.profiledesign
-# before generation, unpack tuples, move the returned rtl_elfpath into the
-# output directory, and write sidecar JSON with all tuple fields.
-#
-# These tests replace RED3 tests that encoded the false object/.randseed API
-# (mocking ``analyzeelfs.genmanyelfs`` with MagicMock descriptors).
 
 
-# ── Shared RED4 mock helpers ───────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def _red4_mock_modules(*, descriptor_side_effect=None, elf_side_effect=None):
-    """Build sys.modules dict with fakes for the authoritative Cascade paths.
-
-    Installs fakes at ``cascade.fuzzfromdescriptor``, ``common.spike``,
-    and ``common.profiledesign`` — the exact defining modules used by the
-    official server source.
-    """
     mock_fuzz = MagicMock()
     mock_spike = MagicMock()
     mock_profile = MagicMock()
@@ -1808,8 +1682,8 @@ def _red4_mock_modules(*, descriptor_side_effect=None, elf_side_effect=None):
     mock_spike.calibrate_spikespeed = MagicMock()
     mock_profile.profile_get_medeleg_mask = MagicMock()
 
-    # Build parent packages so ``from cascade.fuzzfromdescriptor import …``
-    # and ``from common.spike import …`` resolve.
+
+
     mock_cascade_pkg = MagicMock()
     mock_cascade_pkg.fuzzfromdescriptor = mock_fuzz
     mock_common_pkg = MagicMock()
@@ -1826,12 +1700,6 @@ def _red4_mock_modules(*, descriptor_side_effect=None, elf_side_effect=None):
 
 
 def _red4_descriptor_fake():
-    """Return a fake ``gen_new_test_instance`` producing deterministic 5-tuples.
-
-    The fake uses ``random.random()`` so per-case ``random.seed()`` calls
-    inside ``generate_campaign`` are implicitly verified: same seed →
-    same random draw → same tuple; different seed → different output.
-    """
     import random as _random
 
     def _fake(design_name, randseed, can_auth,
@@ -1849,10 +1717,6 @@ def _red4_descriptor_fake():
 
 
 def _red4_elf_fake():
-    """Return a fake ``gen_fuzzerstate_elf_expectedvals`` that creates a real
-    temporary ELF file and returns its path in the 6-tuple, mimicking the
-    official API behaviour that the caller must *move* the returned file.
-    """
     import tempfile as _tempfile
 
     def _fake(memsize, design_name, randseed, nmax_bbs, authorize_privileges,
@@ -1885,15 +1749,10 @@ def _red4_spikespeed_lock_worker(queue, lock_path: str, worker_id: int):
     helper._call_with_spikespeed_lock(_critical)
 
 
-# ── RED4-1: Descriptor tuple contract ───────────────────────────────────
+
 
 
 class TestDescriptorTupleContract(unittest.TestCase):
-    """RED4-1: gen_new_test_instance returns a 5-tuple, not an object.
-
-    The helper must unpack as
-    ``(memsize, design_name, randseed, nmax_bbs, authorize_privileges)``.
-    """
 
     _helper = None
     _import_error = None
@@ -1901,7 +1760,7 @@ class TestDescriptorTupleContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            from scripts.evaluation.baseline_adapters import \
+            from scripts.evaluation.baseline_adapters import\
                 cascade_generate_campaign as _h
             cls._helper = _h
         except ImportError as e:
@@ -1915,7 +1774,6 @@ class TestDescriptorTupleContract(unittest.TestCase):
             )
 
     def test_descriptor_is_5_tuple_not_object(self):
-        """gen_new_test_instance returns a 5-tuple with deterministic fields."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules, mock_fuzz, mock_spike, mock_profile = _red4_mock_modules(
@@ -1926,14 +1784,13 @@ class TestDescriptorTupleContract(unittest.TestCase):
                 rc = self._helper.generate_campaign(
                     "rocket", seed=42, count=1, output_dir=out)
 
-            # Verify gen_new_test_instance was called with correct signature.
+
             call = mock_fuzz.gen_new_test_instance.call_args
             self.assertEqual(call[0][0], "rocket")
-            self.assertEqual(call[0][1], 42)  # derived_instance_id = seed + 0
-            self.assertEqual(call[0][2], True)  # can_authorize_privileges
+            self.assertEqual(call[0][1], 42)
+            self.assertEqual(call[0][2], True)
 
     def test_derived_instance_ids_are_seed_plus_case_index(self):
-        """Each case uses derived_instance_id = campaign_seed + case_index."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules, mock_fuzz, _, _ = _red4_mock_modules(
@@ -1947,7 +1804,7 @@ class TestDescriptorTupleContract(unittest.TestCase):
         calls = mock_fuzz.gen_new_test_instance.call_args_list
         expected_ids = [100, 101, 102, 103]
         for i, call in enumerate(calls):
-            instance_id = call[0][1]  # second positional arg = randseed
+            instance_id = call[0][1]
             self.assertEqual(
                 instance_id, expected_ids[i],
                 f"Case {i}: derived instance_id must be {expected_ids[i]}, "
@@ -1955,7 +1812,6 @@ class TestDescriptorTupleContract(unittest.TestCase):
             )
 
     def test_same_inputs_produce_identical_descriptor_calls(self):
-        """Same (design, seed, count) → identical gen_new_test_instance args."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
 
@@ -1984,7 +1840,6 @@ class TestDescriptorTupleContract(unittest.TestCase):
                 self.assertEqual(calls_a[i], calls_b[i])
 
     def test_different_seeds_produce_different_descriptor_calls(self):
-        """Seed 7 vs 13 → different derived instance IDs."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules_a, mock_fuzz_a, _, _ = _red4_mock_modules(
@@ -2012,7 +1867,6 @@ class TestDescriptorTupleContract(unittest.TestCase):
                 self.assertNotEqual(calls_a[i], calls_b[i])
 
     def test_design_propagates_as_first_arg(self):
-        """Design argument must be the first positional arg."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules, mock_fuzz, _, _ = _red4_mock_modules(
@@ -2221,11 +2075,10 @@ class TestDescriptorTupleContract(unittest.TestCase):
             self.assertEqual(sidecar["target_operation_id"], "bb1-i0")
 
 
-# ── RED4-2: gen_fuzzerstate_elf_expectedvals exact signature ────────────
+
 
 
 class TestGenFunctionExactSignature(unittest.TestCase):
-    """RED4-2: 6-arg call with tuple fields + check_pc_spike_again=False."""
 
     _helper = None
     _import_error = None
@@ -2233,7 +2086,7 @@ class TestGenFunctionExactSignature(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            from scripts.evaluation.baseline_adapters import \
+            from scripts.evaluation.baseline_adapters import\
                 cascade_generate_campaign as _h
             cls._helper = _h
         except ImportError as e:
@@ -2246,8 +2099,6 @@ class TestGenFunctionExactSignature(unittest.TestCase):
             )
 
     def test_gen_fuzzerstate_called_with_exact_six_args(self):
-        """gen_fuzzerstate_elf_expectedvals receives the unpacked descriptor
-        tuple fields as separate positional args plus False."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules, _, mock_spike, mock_profile = _red4_mock_modules(
@@ -2269,9 +2120,9 @@ class TestGenFunctionExactSignature(unittest.TestCase):
             len(args), 6,
             f"Expected exactly 6 positional args, got {len(args)}: {args!r}",
         )
-        # args[0] = memsize, args[1] = design_name, args[2] = randseed,
-        # args[3] = nmax_bbs, args[4] = authorize_privileges,
-        # args[5] = check_pc_spike_again (must be False)
+
+
+
         self.assertIsInstance(args[0], int, "memsize must be int")
         self.assertEqual(args[1], "rocket", "design_name must be 'rocket'")
         self.assertIsInstance(args[2], int, "randseed must be int")
@@ -2283,12 +2134,10 @@ class TestGenFunctionExactSignature(unittest.TestCase):
         )
 
     def test_gen_fuzzerstate_args_match_descriptor_tuple_fields(self):
-        """The five tuple fields from gen_new_test_instance must feed directly
-        into gen_fuzzerstate_elf_expectedvals calls."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
 
-            # Craft a specific descriptor so we can check field propagation.
+
             def _fixed_descriptor(dn, rs, ca, fm=None, fn=None):
                 return (8192, dn, rs, 20, ca)
 
@@ -2301,21 +2150,18 @@ class TestGenFunctionExactSignature(unittest.TestCase):
                                                output_dir=out)
 
         elf_call = mock_fuzz.gen_fuzzerstate_elf_expectedvals.call_args
-        self.assertEqual(elf_call[0][0], 8192)     # memsize from descriptor
-        self.assertEqual(elf_call[0][1], "cva6")    # design_name from descriptor
-        self.assertEqual(elf_call[0][2], 5)         # randseed from descriptor
-        self.assertEqual(elf_call[0][3], 20)        # nmax_bbs from descriptor
-        self.assertEqual(elf_call[0][4], True)      # authorize_privileges
-        self.assertIs(elf_call[0][5], False)        # check_pc_spike_again
+        self.assertEqual(elf_call[0][0], 8192)
+        self.assertEqual(elf_call[0][1], "cva6")
+        self.assertEqual(elf_call[0][2], 5)
+        self.assertEqual(elf_call[0][3], 20)
+        self.assertEqual(elf_call[0][4], True)
+        self.assertIs(elf_call[0][5], False)
 
 
-# ── RED4-3: ELF move from returned rtl_elfpath ──────────────────────────
+
 
 
 class TestElfMoveFromReturnedPath(unittest.TestCase):
-    """RED4-3: Helper must move (not copy) the rtl_elfpath from the 6-tuple
-    return into ``{design}_{case_index}.elf``.  The source path must no
-    longer exist after the move."""
 
     _helper = None
     _import_error = None
@@ -2323,7 +2169,7 @@ class TestElfMoveFromReturnedPath(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            from scripts.evaluation.baseline_adapters import \
+            from scripts.evaluation.baseline_adapters import\
                 cascade_generate_campaign as _h
             cls._helper = _h
         except ImportError as e:
@@ -2336,7 +2182,6 @@ class TestElfMoveFromReturnedPath(unittest.TestCase):
             )
 
     def test_elf_is_moved_from_returned_path_to_output_name(self):
-        """After generation the output ELF exists and the source is gone."""
         source_paths = []
 
         def _capturing_elf_fake(memsize, design_name, randseed, nmax_bbs,
@@ -2361,7 +2206,7 @@ class TestElfMoveFromReturnedPath(unittest.TestCase):
                 self._helper.generate_campaign("rocket", seed=1, count=2,
                                                output_dir=out)
 
-            # Output ELFs must exist at the expected names.
+
             for i in range(2):
                 dest = out / f"rocket_{i}.elf"
                 self.assertTrue(
@@ -2373,7 +2218,7 @@ class TestElfMoveFromReturnedPath(unittest.TestCase):
                     f"Output ELF {dest} must not be empty",
                 )
 
-            # Source paths must no longer exist (helper used move, not copy).
+
             for src in source_paths:
                 self.assertFalse(
                     Path(src).exists(),
@@ -2382,7 +2227,6 @@ class TestElfMoveFromReturnedPath(unittest.TestCase):
                 )
 
     def test_elf_naming_uses_case_index(self):
-        """ELF names follow {design}_{case_index}.elf pattern."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules, _, _, _ = _red4_mock_modules(
@@ -2399,11 +2243,10 @@ class TestElfMoveFromReturnedPath(unittest.TestCase):
                              f"ELF names must use case_index, got {actual}")
 
 
-# ── RED4-4: Sidecar full tuple fields ───────────────────────────────────
+
 
 
 class TestSidecarFullTupleFields(unittest.TestCase):
-    """RED4-4: Sidecar JSON records every tuple field plus campaign metadata."""
 
     _helper = None
     _import_error = None
@@ -2411,7 +2254,7 @@ class TestSidecarFullTupleFields(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            from scripts.evaluation.baseline_adapters import \
+            from scripts.evaluation.baseline_adapters import\
                 cascade_generate_campaign as _h
             cls._helper = _h
         except ImportError as e:
@@ -2424,9 +2267,7 @@ class TestSidecarFullTupleFields(unittest.TestCase):
             )
 
     def test_sidecar_records_all_tuple_fields(self):
-        """Each sidecar must contain memsize, design, randseed, nmax_bbs,
-        authorize_privileges plus campaign_seed, case_index, derived_instance_id."""
-        # Use a fixed descriptor so we can assert exact field values.
+
         def _fixed_descriptor(dn, rs, ca, fm=None, fn=None):
             return (8192, dn, rs, 20, ca)
 
@@ -2449,14 +2290,14 @@ class TestSidecarFullTupleFields(unittest.TestCase):
                     )
                     sc = json.loads(sidecar_path.read_text(encoding="ascii"))
 
-                    # Campaign-level fields
+
                     self.assertEqual(sc["campaign_seed"], 5)
                     self.assertEqual(sc["case_index"], case_index)
                     self.assertEqual(
                         sc["derived_instance_id"], 5 + case_index,
                     )
 
-                    # Tuple fields
+
                     self.assertEqual(sc["memsize"], 8192)
                     self.assertEqual(sc["design"], "rocket")
                     self.assertEqual(sc["randseed"], 5 + case_index)
@@ -2464,7 +2305,6 @@ class TestSidecarFullTupleFields(unittest.TestCase):
                     self.assertEqual(sc["authorize_privileges"], True)
 
     def test_sidecars_are_one_to_one_with_elfs(self):
-        """Exactly one .json sidecar per .elf; no orphan files."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules, _, _, _ = _red4_mock_modules(
@@ -2490,12 +2330,10 @@ class TestSidecarFullTupleFields(unittest.TestCase):
                 )
 
 
-# ── RED4-5: Calibration and profile setup contract ──────────────────────
+
 
 
 class TestCalibrationSetupContract(unittest.TestCase):
-    """RED4-5: calibrate_spikespeed() and profile_get_medeleg_mask(design)
-    must be called in setup order BEFORE any ELF generation."""
 
     _helper = None
     _import_error = None
@@ -2503,7 +2341,7 @@ class TestCalibrationSetupContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            from scripts.evaluation.baseline_adapters import \
+            from scripts.evaluation.baseline_adapters import\
                 cascade_generate_campaign as _h
             cls._helper = _h
         except ImportError as e:
@@ -2516,7 +2354,6 @@ class TestCalibrationSetupContract(unittest.TestCase):
             )
 
     def test_calibrate_spikespeed_called_before_elf_generation(self):
-        """calibrate_spikespeed must be invoked during setup."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules, _, mock_spike, mock_profile = _red4_mock_modules(
@@ -2531,7 +2368,6 @@ class TestCalibrationSetupContract(unittest.TestCase):
         mock_profile.profile_get_medeleg_mask.assert_called_once_with("rocket")
 
     def test_calibration_runs_under_shared_spikespeed_lock(self):
-        """Concurrent formal waves must route calibration through the shared lock."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules, _, mock_spike, _ = _red4_mock_modules(
@@ -2550,16 +2386,14 @@ class TestCalibrationSetupContract(unittest.TestCase):
         mock_spike.calibrate_spikespeed.assert_called_once()
 
     def test_calibration_runs_before_descriptor_generation(self):
-        """calibrate_spikespeed + profile_get_medeleg_mask must complete
-        before the first gen_new_test_instance call."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules, mock_fuzz, mock_spike, mock_profile = _red4_mock_modules(
                 descriptor_side_effect=_red4_descriptor_fake(),
                 elf_side_effect=_red4_elf_fake(),
             )
-            # Attach a parent mock so we can use assert_has_calls with
-            # any-order checking turned off to verify sequence.
+
+
             parent = MagicMock()
             parent.attach_mock(mock_spike.calibrate_spikespeed,
                                "calibrate_spikespeed")
@@ -2572,7 +2406,7 @@ class TestCalibrationSetupContract(unittest.TestCase):
                 self._helper.generate_campaign("boom", seed=7, count=2,
                                                output_dir=out)
 
-        # Verify calibration/profile calls precede the first descriptor call.
+
         calib_idx = parent.mock_calls.index(
             unittest.mock.call.calibrate_spikespeed())
         profile_idx = parent.mock_calls.index(
@@ -2586,7 +2420,6 @@ class TestCalibrationSetupContract(unittest.TestCase):
                         "profile_get_medeleg_mask must run before gen_new_test_instance")
 
     def test_shared_spikespeed_lock_serializes_parallel_calibration(self):
-        """The shared spikespeed lock must serialize concurrent calibrations."""
         import multiprocessing
         import os
 
@@ -2632,7 +2465,6 @@ class TestCalibrationSetupContract(unittest.TestCase):
         )
 
     def test_different_designs_get_correct_profile_call(self):
-        """profile_get_medeleg_mask receives the actual design name."""
         for design in ("rocket", "boom", "cva6", "xiangshan"):
             with self.subTest(design=design):
                 with TemporaryDirectory() as tmp:
@@ -2648,13 +2480,10 @@ class TestCalibrationSetupContract(unittest.TestCase):
                 mock_profile.profile_get_medeleg_mask.assert_called_with(design)
 
 
-# ── RED4-6: Generation failure modes ────────────────────────────────────
+
 
 
 class TestGenerationFailureModes(unittest.TestCase):
-    """RED4-6: generate_campaign must fail closed on malformed data, missing
-    ELF, generation exception, and move failure.  No misleading sidecar or
-    partial destination file may remain for the failed case."""
 
     _helper = None
     _import_error = None
@@ -2662,7 +2491,7 @@ class TestGenerationFailureModes(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            from scripts.evaluation.baseline_adapters import \
+            from scripts.evaluation.baseline_adapters import\
                 cascade_generate_campaign as _h
             cls._helper = _h
         except ImportError as e:
@@ -2674,39 +2503,33 @@ class TestGenerationFailureModes(unittest.TestCase):
                 f"RED4: Helper not found. Import error: {self._import_error}"
             )
 
-    # ── helpers ────────────────────────────────────────────────────────
+
 
     @staticmethod
     def _malformed_descriptor_fake():
-        """Return a 3-tuple instead of the required 5-tuple."""
         def _fake(dn, rs, ca, fm=None, fn=None):
-            return (4096, dn, rs)  # only 3 elements
+            return (4096, dn, rs)
         return _fake
 
     @staticmethod
     def _missing_elf_fake():
-        """Return a path that does not exist on disk."""
         def _fake(memsize, dn, rs, nmax, auth, check_pc, *args, **kwargs):
             import tempfile
             tmp = tempfile.NamedTemporaryFile(suffix=".elf", delete=False)
             nonexistent = str(Path(tmp.name))
             tmp.close()
-            Path(nonexistent).unlink()  # delete immediately
+            Path(nonexistent).unlink()
             return (None, nonexistent, None, 0.1, 0.2, 0.3)
         return _fake
 
     @staticmethod
     def _raising_elf_fake():
-        """Raise RuntimeError during ELF generation."""
         def _fake(*args, **kwargs):
             raise RuntimeError("simulated generation crash")
         return _fake
 
     @staticmethod
     def _move_blocking_elf_fake():
-        """Return a valid path, but produce an OSError on shutil.move by
-        making the destination directory read-only after the fake returns
-        (the test does that part).  Here we just return a valid file."""
         import tempfile
         tmp = tempfile.NamedTemporaryFile(suffix=".elf", delete=False)
         tmp.write(b"ELF")
@@ -2717,10 +2540,9 @@ class TestGenerationFailureModes(unittest.TestCase):
             return (None, rtl, None, 0.1, 0.2, 0.3)
         return _fake, rtl
 
-    # ── tests ──────────────────────────────────────────────────────────
+
 
     def test_malformed_descriptor_returns_nonzero(self):
-        """Descriptor with wrong tuple length → nonzero return, no sidecar."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules, _, _, _ = _red4_mock_modules(
@@ -2735,14 +2557,13 @@ class TestGenerationFailureModes(unittest.TestCase):
             rc, 0,
             "Malformed descriptor must cause nonzero return",
         )
-        # No successful sidecar for the failed case
+
         self.assertFalse(
             (out / "rocket_0.json").exists(),
             "No sidecar must be written for a failed case",
         )
 
     def test_missing_returned_elf_returns_nonzero(self):
-        """Returned rtl_elfpath doesn't exist → nonzero, no sidecar."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules, _, _, _ = _red4_mock_modules(
@@ -2759,7 +2580,6 @@ class TestGenerationFailureModes(unittest.TestCase):
                          "No sidecar for failed case")
 
     def test_generation_exception_returns_nonzero(self):
-        """gen_fuzzerstate_elf_expectedvals raises → nonzero, no sidecar."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             modules, _, _, _ = _red4_mock_modules(
@@ -2776,26 +2596,25 @@ class TestGenerationFailureModes(unittest.TestCase):
                          "No sidecar for failed case")
 
     def test_move_failure_returns_nonzero_and_cleans_up(self):
-        """shutil.move raises OSError → nonzero, no sidecar, no dest ELF."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
             elf_fake, rtl_path = self._move_blocking_elf_fake()
 
-            # Make output dir read-only so move fails.
+
             out.mkdir(parents=True, exist_ok=True)
             modules, _, _, _ = _red4_mock_modules(
                 descriptor_side_effect=_red4_descriptor_fake(),
                 elf_side_effect=elf_fake,
             )
             with patch.dict(sys.modules, modules):
-                # Make the output dir read-only *after* mkdir inside
-                # generate_campaign succeeds but before the move.
-                # The move itself will fail because shutil.move won't
-                # be able to create the destination.  We simulate this
-                # by pre-creating a file that can't be overwritten.
-                # Actually: shutil.move moves the file — if the
-                # destination parent is writable it will succeed.
-                # Better: mock shutil.move to raise.
+
+
+
+
+
+
+
+
                 with patch("shutil.move", side_effect=OSError("move failed")):
                     rc = self._helper.generate_campaign(
                         "rocket", seed=4, count=1, output_dir=out)
@@ -2804,23 +2623,21 @@ class TestGenerationFailureModes(unittest.TestCase):
                             "Move failure must cause nonzero return")
         self.assertFalse((out / "rocket_0.json").exists(),
                          "No sidecar for failed move")
-        # Also clean up the temp source file
+
         try:
             Path(rtl_path).unlink(missing_ok=True)
         except Exception:
             pass
 
     def test_first_case_fails_second_succeeds(self):
-        """Case 0 fails (malformed), case 1 succeeds → rc nonzero,
-        only case 1 has ELF + sidecar."""
         call_count = [0]
 
         def _alternating_descriptor(dn, rs, ca, fm=None, fn=None):
             call_count[0] += 1
             if call_count[0] == 1:
-                return (4096, dn, rs)  # malformed: 3-tuple
+                return (4096, dn, rs)
             else:
-                return (4096, dn, rs, 10, ca)  # valid 5-tuple
+                return (4096, dn, rs, 10, ca)
 
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "elfs"
@@ -2834,7 +2651,7 @@ class TestGenerationFailureModes(unittest.TestCase):
 
         self.assertNotEqual(rc, 0,
                             "Any case failure must cause nonzero return")
-        # Case 0: no sidecar, no ELF
+
         self.assertFalse(
             (out / "rocket_0.json").exists(),
             "Case 0 failed → no sidecar",
@@ -2843,25 +2660,19 @@ class TestGenerationFailureModes(unittest.TestCase):
             (out / "rocket_0.elf").exists(),
             "Case 0 failed → no ELF",
         )
-        # Case 1: sidecar + ELF exist
-        # (GREEN4 may stop on first failure; if so case 1 won't exist.
-        #  Either behaviour is acceptable — the key invariant is no
-        #  misleading evidence for the failed case.)
-        # For strictness we test that case 1 either has both or neither.
 
 
-# ── RED3-6: Helper failure modes fail closed ──────────────────────────────
+
+
+
+
+
+
 
 
 class TestHelperFailureModes(unittest.TestCase):
-    """RED3-6: Missing/extra outputs and nonzero helper return must fail closed.
-
-    These tests validate the adapter's _generate_elfs function handles
-    helper invocation failures correctly.
-    """
 
     def test_nonzero_helper_return_causes_generation_failure(self):
-        """returncode != 0 → _generate_elfs returns success=False."""
         with TemporaryDirectory() as tmp:
             with patch.object(cascade, "CASCADE_MOUNT_DIR", Path(tmp)):
                 with patch.object(cascade.subprocess, "run") as mock_run:
@@ -2878,7 +2689,6 @@ class TestHelperFailureModes(unittest.TestCase):
         self.assertEqual(result["returncode"], 1)
 
     def test_spike_timeout_helper_failure_retries_generation_once(self):
-        """Spike timeout helper failures are retryable and must not fail the batch immediately."""
         with TemporaryDirectory() as tmp:
             with patch.object(cascade, "CASCADE_MOUNT_DIR", Path(tmp)):
                 out = Path(tmp, "out")
@@ -2935,13 +2745,12 @@ class TestHelperFailureModes(unittest.TestCase):
         )
 
     def test_missing_expected_elf_causes_failure(self):
-        """Helper returns 0 but produces fewer ELFs than count → failure."""
         with TemporaryDirectory() as tmp:
             with patch.object(cascade, "CASCADE_MOUNT_DIR", Path(tmp)):
                 with patch.object(cascade.subprocess, "run") as mock_run:
                     mock_run.return_value = MagicMock(returncode=0, stderr="")
                     out = Path(tmp, "out")
-                    # Compute workspace, create only 1 ELF when requesting 3
+
                     ws = cascade._generation_workspace(
                         out, seed=0, design="rocket")
                     elfs_dir = ws / "elfs"
@@ -2959,7 +2768,6 @@ class TestHelperFailureModes(unittest.TestCase):
         )
 
     def test_extra_unexpected_elf_causes_failure(self):
-        """Helper produces ELFs beyond count → must be rejected as extra files."""
         with TemporaryDirectory() as tmp:
             with patch.object(cascade, "CASCADE_MOUNT_DIR", Path(tmp)):
                 with patch.object(cascade.subprocess, "run") as mock_run:
@@ -2969,7 +2777,7 @@ class TestHelperFailureModes(unittest.TestCase):
                         out, seed=0, design="rocket")
                     elfs_dir = ws / "elfs"
                     elfs_dir.mkdir(parents=True, exist_ok=True)
-                    # Create 3 ELFs when only 1 was requested
+
                     for i in range(3):
                         (elfs_dir / f"rocket_{i}.elf").write_bytes(b"x")
                         (elfs_dir / f"rocket_{i}.json").write_text("{}")
@@ -2984,7 +2792,6 @@ class TestHelperFailureModes(unittest.TestCase):
         )
 
     def test_elf_without_sidecar_causes_failure(self):
-        """An ELF without a matching .json sidecar must fail closed."""
         with TemporaryDirectory() as tmp:
             with patch.object(cascade, "CASCADE_MOUNT_DIR", Path(tmp)):
                 with patch.object(cascade.subprocess, "run") as mock_run:
@@ -2994,9 +2801,9 @@ class TestHelperFailureModes(unittest.TestCase):
                         out, seed=0, design="rocket")
                     elfs_dir = ws / "elfs"
                     elfs_dir.mkdir(parents=True, exist_ok=True)
-                    # Create ELF but NO sidecar
+
                     (elfs_dir / "rocket_0.elf").write_bytes(b"a")
-                    # Deliberately omit rocket_0.json
+
 
                     result = cascade._generate_elfs(
                         1, out, seed=0, design="rocket")
@@ -3007,7 +2814,6 @@ class TestHelperFailureModes(unittest.TestCase):
         )
 
     def test_sidecar_without_elf_causes_failure(self):
-        """A .json sidecar without a matching ELF must fail closed."""
         with TemporaryDirectory() as tmp:
             with patch.object(cascade, "CASCADE_MOUNT_DIR", Path(tmp)):
                 with patch.object(cascade.subprocess, "run") as mock_run:
@@ -3017,9 +2823,9 @@ class TestHelperFailureModes(unittest.TestCase):
                         out, seed=0, design="rocket")
                     elfs_dir = ws / "elfs"
                     elfs_dir.mkdir(parents=True, exist_ok=True)
-                    # Create sidecar but NO ELF
+
                     (elfs_dir / "rocket_0.json").write_text("{}")
-                    # Deliberately omit rocket_0.elf
+
 
                     result = cascade._generate_elfs(
                         1, out, seed=0, design="rocket")

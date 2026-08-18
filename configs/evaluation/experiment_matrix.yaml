@@ -1,9 +1,4 @@
-# PMPFuzz Evaluation Experiment Matrix
-# Schema version: 1.0
-# Generated: 2026-07-12
-
 experiments:
-  # --- RQ2: Internal coverage ablation ---
   E1-sem:
     description: "Semantic coverage: random vs guided"
     variants: [random, guided]
@@ -44,7 +39,6 @@ experiments:
     bootstrap_size: 32
     round_size: 32
 
-  # --- RQ3: Whitebox feedback ablation ---
   E2-WB:
     description: "Black-box vs black-box+whitebox feedback"
     variants: [bb, bb-wb]
@@ -55,7 +49,6 @@ experiments:
     bootstrap_size: 32
     round_size: 32
 
-  # --- RQ4: External baseline comparison ---
   E3:
     description: "PMPFuzz vs riscv-dv vs Cascade"
     methods: [pmpfuzz, riscv-dv, cascade]
@@ -65,7 +58,6 @@ experiments:
     time_budget_hours: 6
     executed_test_budget: 2000
 
-# Pilot experiments
 pilot:
   description: "Parameter calibration and feasibility check"
   duts: [rocket-clean, boom-clean]
@@ -75,9 +67,8 @@ pilot:
   round_size: 32
   time_budget_minutes: 30
 
-# Formal parameters (to be finalized after pilot)
 formal:
-  time_budget_hours: null  # Set after pilot
+  time_budget_hours: null
   jobs: 1
   per_case_timeout_seconds: 10
   round_size: 32

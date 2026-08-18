@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
-"""Cascade baseline adapter.
-
-Uses the existing ``codex_cascade_cpu_fuzzing`` Docker container and keeps the
-original Phase E engineering contracts intact while adding optional HPM
-coverage instrumentation and continuous multi-batch execution.
-"""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path as _Path
-# Ensure repository-local imports work when the adapter is executed directly.
+
 _script_root = _Path(__file__).resolve().parents[3]
 if str(_script_root) not in sys.path:
     sys.path.insert(0, str(_script_root))
@@ -2432,9 +2426,9 @@ def run_cascade_baseline(
     return meta
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def main(argv: list[str] | None = None) -> int:

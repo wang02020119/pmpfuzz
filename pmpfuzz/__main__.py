@@ -568,7 +568,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     on_complete = None
     recorder = None
     if args.record_timeline:
-        # Initialize timeline recorder.
+
         campaign_id = args.campaign_id or f"{config.dut}__{config.profile}__seed-{config.seed}"
         variant = args.variant or "unknown"
         metrics_dir = config.out / "metrics"
@@ -581,7 +581,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
             dut=config.dut,
             seed=config.seed,
         )
-        # Populate target bins BEFORE running any cases (probe capability now)
         _populate_timeline_targets(recorder, config)
         recorder.write_metadata(
             source_sha=_git_head_sha(),
@@ -616,11 +615,11 @@ def _cmd_repro(args: argparse.Namespace) -> int:
     out_results.mkdir(parents=True, exist_ok=True)
     write_json(out_cases / "case.json", case)
 
-    # Resolve dut list and ISA before the DUT loop
+
     dut_names = [item.strip() for item in args.dut.split(",") if item.strip()]
     isa = args.isa or ("rv64gc" if args.no_smepmp else "rv64gc_smepmp")
 
-    # Write run.json for repro
+
     write_json(
         out / "run.json",
         {
@@ -632,7 +631,7 @@ def _cmd_repro(args: argparse.Namespace) -> int:
         },
     )
 
-    # Write dut_capabilities.json for all DUTs
+
     repro_capabilities = {}
     for dut_name in dut_names:
         chipyard_dir = args.chipyard_dir or (
@@ -898,7 +897,6 @@ def _load_case(case_path: Path) -> tuple[Path, dict]:
 
 
 def _populate_timeline_targets(recorder, config: RunnerConfig) -> None:
-    """Populate target bin sets from DUT capability after campaign setup."""
     from .capabilities import capability_for_dut
     from .coverage import compute_coverage_targets
     from .semantic_coverage import CORE_STATEFUL_TARGET
@@ -934,7 +932,6 @@ def _populate_timeline_targets(recorder, config: RunnerConfig) -> None:
 
 
 def _git_head_sha() -> str | None:
-    """Return the current git HEAD commit SHA or None."""
     try:
         import subprocess
         result = subprocess.run(

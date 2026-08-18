@@ -1,4 +1,3 @@
-"""Smoke tests for evaluation scripts (import and basic function)."""
 
 from __future__ import annotations
 
@@ -13,7 +12,6 @@ from scripts.evaluation.analysis.aggregate_results import aggregate
 
 
 class TestValidateTimeline(unittest.TestCase):
-    """Basic tests for timeline validation."""
 
     def test_missing_campaign(self):
         report = validate_timeline(Path("/nonexistent/campaign"))
@@ -111,7 +109,7 @@ class TestValidateTimeline(unittest.TestCase):
                 "\n".join(json.dumps(line, ensure_ascii=True, sort_keys=True) for line in timeline),
                 encoding="ascii",
             )
-            # Write minimal metadata so the validator passes metadata_exists check.
+
             (campaign / "metrics" / "campaign_metadata.json").write_text(json.dumps({
                 "campaign_id": "test-campaign",
                 "variant": "guided-semantic",
@@ -131,7 +129,6 @@ class TestValidateTimeline(unittest.TestCase):
 
 
 class TestAggregateResults(unittest.TestCase):
-    """Basic tests for result aggregation."""
 
     def test_empty_aggregate(self):
         with TemporaryDirectory() as tmp:
@@ -139,7 +136,7 @@ class TestAggregateResults(unittest.TestCase):
             root.mkdir()
             (root / "aggregate").mkdir()
             outputs = aggregate(root, "test-experiment")
-            # Should produce at least statistics.json even with no data
+
             stats_path = root / "aggregate" / "statistics.json"
             self.assertTrue(stats_path.exists(), f"Not found: {stats_path}")
             stats = json.loads(stats_path.read_text(encoding="ascii"))
@@ -225,11 +222,11 @@ class TestFormalMatrixProgress(unittest.TestCase):
             },
         }
 
-        with patch.object(formal, "assert_frozen_inputs"), \
-             patch.object(formal, "refresh_entry_progress", side_effect=[(False, snapshot), (False, snapshot)]), \
-             patch.object(formal, "atomic_write_json") as atomic_write, \
-             patch.object(formal, "log"), \
-             patch.object(formal.time, "sleep"), \
+        with patch.object(formal, "assert_frozen_inputs"),\
+             patch.object(formal, "refresh_entry_progress", side_effect=[(False, snapshot), (False, snapshot)]),\
+             patch.object(formal, "atomic_write_json") as atomic_write,\
+             patch.object(formal, "log"),\
+             patch.object(formal.time, "sleep"),\
              patch.object(formal.time, "monotonic", side_effect=[1000.0, 1001.0]):
             formal.monitor_wave("8.3-8.4-wave03", [entry])
 

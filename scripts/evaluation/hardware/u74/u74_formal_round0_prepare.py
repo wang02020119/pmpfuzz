@@ -372,9 +372,9 @@ def _prot_for_entry(entry: PmpEntry) -> int:
     prot |= 0x4 if entry.execute else 0
     prot |= 0x80 if entry.locked else 0
     if entry.address_mode == AddressMode.TOR:
-        # PMP_A field (bits 4:3): 0b01 = TOR.  OpenSBI's pmp_set derives NA4/
-        # NAPOT from log2len but cannot infer TOR, so the mode must be encoded
-        # explicitly in the pmpcfg A-field.
+
+
+
         prot |= 0x08
     return prot
 
@@ -390,8 +390,8 @@ def _mpp_for_scenario(scenario: PmpScenario) -> int:
     raise ValueError(f"unsupported privilege for U74 lowering: {privilege!r}")
 
 
-# Board ext page-table region used by pmpfuzz_setup_ext_mapping, plus the
-# dedicated page used as the lowered sv39 target (disjoint from the tables).
+
+
 _U74_EXT_ROOT_PA = 0x41000000
 _U74_SV39_TARGET_PA = 0x41004000
 _U74_SV39_SATP = (8 << 60) | (_U74_EXT_ROOT_PA >> 12)
@@ -409,11 +409,11 @@ def _lower_sv39_scenario(case: dict[str, Any], scenario: PmpScenario, *, ordinal
         bounds = _entry_bounds(entry, scenario.entries)
         entry_base = bounds[0] if bounds is not None else None
         if entry_base is not None and entry_base == PAGE_TABLE_BASE:
-            # Page-table read entry -> protect the board ext page-table region.
+
             addr = _U74_EXT_ROOT_PA
-            size = 0x4000  # NAPOT covering 0x41000000..0x41003fff
+            size = 0x4000
         else:
-            # Target-page entry -> protect the dedicated sv39 target page.
+
             addr = target_pa
             size = 0x1000
         lowered_entries.append(

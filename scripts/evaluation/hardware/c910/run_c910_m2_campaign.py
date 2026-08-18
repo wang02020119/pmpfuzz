@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""Run or prepare the pre-registered C910 M-2 guided-vs-random campaign.
-
-The safe default is a dry run: parse the frozen manifests, materialize the C
-manifest source needed by OpenSBI, and write a run plan.  Hardware actions are
-enabled explicitly with --build-remote, --upload-sidecars, --run-board, and
---analyze.
-"""
 from __future__ import annotations
 
 import argparse
@@ -77,7 +70,6 @@ def _execution_modes(registration: dict[str, Any]) -> list[str]:
 
 
 def build_round_plan(*, m2_root: Path, out_dir: Path) -> list[dict[str, Any]]:
-    """Return the six pre-registered round descriptors in execution order."""
     m2_root = Path(m2_root)
     out_dir = Path(out_dir)
     registration = _read_json(m2_root / "registration.json")
@@ -122,7 +114,6 @@ def build_round_plan(*, m2_root: Path, out_dir: Path) -> list[dict[str, Any]]:
 
 
 def materialize_round_sources(plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Write generated C sources and local manifest/provenance copies."""
     materialized: list[dict[str, Any]] = []
     for item in plan:
         manifest_path = Path(item["manifest_path"])

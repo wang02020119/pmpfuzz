@@ -26,7 +26,6 @@ from c910_build_seed_pool import build_seed_pool
 
 
 def _uart_for_record(case: dict, *, result: str, cause: int | None) -> str:
-    """Synthetic UART case block for a generated sv39_access/mprv_bare case."""
     record = case["uart_record"]
     parser = case["uart_parser"]
     if parser == "mprv":
@@ -64,7 +63,7 @@ class C910GeneratedCaseTest(unittest.TestCase):
             predicted["bins"],
         )
         self.assertEqual(case["uart_parser"], "mprv")
-        self.assertEqual(case["generated_params"]["runner_code"], 1)  # sv39_access
+        self.assertEqual(case["generated_params"]["runner_code"], 1)
 
     def test_generated_case_mprv_bare_translation_bare(self):
         params = construct_params_for_bin(
@@ -73,7 +72,7 @@ class C910GeneratedCaseTest(unittest.TestCase):
         )
         case = build_generated_case(params=params, index=1)
         self.assertEqual(case["translation"], "bare")
-        self.assertEqual(case["generated_params"]["runner_code"], 2)  # mprv_bare
+        self.assertEqual(case["generated_params"]["runner_code"], 2)
 
     def test_every_reachable_bin_constructs_or_is_declared(self):
         for bin_id in REACHABLE_BINS:
@@ -202,7 +201,7 @@ class C910GeneratorTest(unittest.TestCase):
         )
         self.assertEqual(result["stats"]["targeted_bin_count"], min(len(missing), 16))
         self.assertEqual(len(catalog_selected) + len(generated), 16)
-        # skipped bins are benign duplicates: already covered by a selected case.
+
         all_pred = set()
         for case in catalog_selected + generated:
             all_pred.update(case.get("predicted_bins") or [])

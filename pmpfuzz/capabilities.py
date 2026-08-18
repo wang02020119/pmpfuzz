@@ -55,11 +55,11 @@ def capability_for_dut(
     supported_capabilities = dict(spec["supported_capabilities"])
     observation_capabilities = dict(spec.get("observation_capabilities") or _COMMON_OBSERVATION)
 
-    # -- ISA-driven Smepmp override for Spike ---------------------------------
+
     if dut == "spike" and isa is not None:
         effective_smepmp = "smepmp" in isa.lower()
         supported_capabilities["smepmp"] = effective_smepmp
-        # rlb is hardwired to zero on Spike regardless of ISA
+
         supported_capabilities["smepmp_rlb"] = False
         if not effective_smepmp:
             notes.append(f"Spike ISA={isa} does not include Smepmp; Smepmp marked unsupported")
@@ -168,13 +168,6 @@ def oracle_applicability_for_result(
 
 
 def capability_coverage_projection(capability: dict[str, Any]) -> dict[str, Any]:
-    """Return the subset of capability fields that affect C_T (coverage target).
-
-    Only fields that change the oracle-applicability decision or target-space
-    enumeration are included.  Paths, timestamps, notes, and smepmp diagnostic
-    descriptions (warl_behavior, probe_status, etc.) are deliberately excluded.
-    Whether Smepmp is supported is already reflected by supported_capabilities.
-    """
     return {
         "schema_version": capability.get("schema_version"),
         "dut": capability.get("dut"),

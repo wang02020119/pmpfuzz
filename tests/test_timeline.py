@@ -1,20 +1,3 @@
-"""Tests for timeline recording — execution-qualified coverage over time.
-
-Validates:
-1. elapsed_wall_seconds is monotonically non-decreasing
-2. completion_seq grows continuously from 0
-3. Four coverage rates are monotonically non-decreasing
-4. valid mismatch increases coverage
-5. invalid observation does NOT increase coverage
-6. wrong_phase does NOT increase coverage
-7. timeout/inconclusive/unsupported do NOT increase coverage
-8. denominator stays constant within a campaign
-9. denominator=0 yields rate=null
-10. Timeline final row matches execution coverage
-11. Concurrent fake tasks record in real completion order (not sorted)
-12. Process interrupt — completed lines are still parseable
-13. Existing non-empty output dir rejects silent overwrite
-"""
 
 from __future__ import annotations
 
@@ -32,13 +15,12 @@ from pmpfuzz.timeline import TimelineRecorder, timeline_on_complete_factory
 
 
 class TestTimelineRecorder(unittest.TestCase):
-    """Unit tests for TimelineRecorder."""
 
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.run_dir = Path(self.tmp.name) / "out"
         self.run_dir.mkdir(parents=True)
-        # Create minimal cases and results directories
+
         (self.run_dir / "cases").mkdir(exist_ok=True)
         (self.run_dir / "results").mkdir(exist_ok=True)
 
@@ -65,7 +47,6 @@ class TestTimelineRecorder(unittest.TestCase):
         return r
 
     def _make_case(self, name="test_case_0"):
-        """Make a minimal eligible case dict (with bins matching target)."""
         return {
             "name": name,
             "profile": "pmp-boundary",
@@ -80,7 +61,6 @@ class TestTimelineRecorder(unittest.TestCase):
         }
 
     def _make_result_pass(self, name="test_case_0", oracle_applicability="valid"):
-        """Make a minimal pass result that should qualify."""
         return {
             "name": name,
             "status": "pass",
@@ -95,7 +75,6 @@ class TestTimelineRecorder(unittest.TestCase):
         }
 
     def _make_result_mismatch(self, name="test_case_0"):
-        """Make a valid mismatch result."""
         return {
             "name": name,
             "status": "fail",
@@ -118,7 +97,7 @@ class TestTimelineRecorder(unittest.TestCase):
         (case_dir / "case.json").write_text(json.dumps(case), encoding="ascii")
         (result_dir / "result.json").write_text(json.dumps(result), encoding="ascii")
 
-    # --- Test 1: elapsed_wall_seconds monotonically non-decreasing ---
+
     def test_wall_seconds_monotonic(self):
         recorder = self._make_recorder()
         case = self._make_case("c0")
@@ -127,16 +106,16 @@ class TestTimelineRecorder(unittest.TestCase):
 
         recorder.record(case, result_pass, elapsed_wall_seconds=10.0, case_elapsed_seconds=2.0)
         recorder.record(case, result_pass, elapsed_wall_seconds=15.0, case_elapsed_seconds=3.0)
-        recorder.record(case, result_pass, elapsed_wall_seconds=15.0, case_elapsed_seconds=1.0)  # same is OK
+        recorder.record(case, result_pass, elapsed_wall_seconds=15.0, case_elapsed_seconds=1.0)
         recorder.record(case, result_pass, elapsed_wall_seconds=20.0, case_elapsed_seconds=2.5)
 
         lines = self._read_timeline_lines()
-        times = [line["elapsed_wall_seconds"] for line in lines[1:]]  # skip baseline
+        times = [line["elapsed_wall_seconds"] for line in lines[1:]]
         self.assertEqual(times, [10.0, 15.0, 15.0, 20.0])
         for i in range(1, len(times)):
             self.assertGreaterEqual(times[i], times[i - 1])
 
-    # --- Test 2: completion_seq grows continuously from 0 ---
+
     def test_completion_seq_continuous(self):
         recorder = self._make_recorder()
         case = self._make_case("c0")
@@ -150,10 +129,10 @@ class TestTimelineRecorder(unittest.TestCase):
         seqs = [line["completion_seq"] for line in lines]
         self.assertEqual(seqs, [0, 1, 2, 3, 4, 5])
 
-    # --- Test 3: Four coverage rates monotonically non-decreasing ---
+
     def test_coverage_rates_monotonic(self):
         recorder = self._make_recorder()
-        # Case that covers one semantic bin
+
         case = self._make_case("c0")
         result_pass = self._make_result_pass("c0")
         self._write_case_and_result("c0", case, result_pass)
@@ -168,7 +147,7 @@ class TestTimelineRecorder(unittest.TestCase):
             self.assertGreaterEqual(lines[i]["security_triples_rate"] or 0, lines[i - 1]["security_triples_rate"] or 0)
             self.assertGreaterEqual(lines[i]["predicates_rate"] or 0, lines[i - 1]["predicates_rate"] or 0)
 
-    # --- Test 4: valid mismatch increases coverage ---
+
     def test_valid_mismatch_counts_for_coverage(self):
         recorder = self._make_recorder()
         case = self._make_case("c_mismatch")
@@ -182,7 +161,7 @@ class TestTimelineRecorder(unittest.TestCase):
         self.assertTrue(last["coverage_eligible"], "valid mismatch should be coverage-eligible")
         self.assertEqual(last["eligible_cases"], 1)
 
-    # --- Test 5: invalid observation does NOT increase coverage ---
+
     def test_invalid_observation_skipped(self):
         recorder = self._make_recorder()
         case = self._make_case("c_bad")
@@ -205,7 +184,7 @@ class TestTimelineRecorder(unittest.TestCase):
         self.assertEqual(last["eligible_cases"], 0)
         self.assertEqual(last["semantic_covered"], 0)
 
-    # --- Test 6: wrong_phase does NOT increase coverage ---
+
     def test_wrong_phase_skipped(self):
         recorder = self._make_recorder()
         case = self._make_case("c_wrong_phase")
@@ -228,7 +207,7 @@ class TestTimelineRecorder(unittest.TestCase):
         self.assertFalse(last["coverage_eligible"])
         self.assertEqual(last["eligible_cases"], 0)
 
-    # --- Test 7: timeout/inconclusive/unsupported do NOT increase coverage ---
+
     def test_non_pass_fail_statuses_skipped(self):
         for bad_status in ("timeout", "inconclusive", "compile_fail"):
             recorder = self._make_recorder()
@@ -250,7 +229,7 @@ class TestTimelineRecorder(unittest.TestCase):
             self.assertFalse(last["coverage_eligible"], f"status={bad_status} should not be eligible")
             self.assertEqual(last["eligible_cases"], 0)
 
-    # --- Test 8: denominator stays constant within a campaign ---
+
     def test_denominator_constant(self):
         recorder = self._make_recorder()
         case = self._make_case("c0")
@@ -268,7 +247,7 @@ class TestTimelineRecorder(unittest.TestCase):
             self.assertEqual(line["security_triples_target"], baseline["security_triples_target"])
             self.assertEqual(line["predicates_target"], baseline["predicates_target"])
 
-    # --- Test 9: denominator=0 yields rate=null ---
+
     def test_zero_denominator_yields_null_rate(self):
         recorder = TimelineRecorder(
             run_dir=self.run_dir,
@@ -294,7 +273,7 @@ class TestTimelineRecorder(unittest.TestCase):
         self.assertIsNone(last["security_triples_rate"])
         self.assertIsNone(last["predicates_rate"])
 
-    # --- Test 10: final timeline row matches coverage state ---
+
     def test_final_timeline_matches_coverage_state(self):
         recorder = self._make_recorder()
         case = self._make_case("c0")
@@ -311,12 +290,11 @@ class TestTimelineRecorder(unittest.TestCase):
         self.assertEqual(last["security_triples_covered"], state["security_triples"]["covered_target_bins"])
         self.assertEqual(last["predicates_covered"], state["predicates"]["covered_target_bins"])
 
-    # --- Test 11: concurrent fake tasks record in completion order (not name order) ---
+
     def test_completion_order_preserved(self):
-        """Verify that the callback approach preserves true completion order."""
         from pmpfuzz.runner import _run_indexed_work_with_budget
 
-        # Fake clock that advances by 1 second per call
+
         clock_state = [0.0]
 
         def fake_clock():
@@ -329,8 +307,8 @@ class TestTimelineRecorder(unittest.TestCase):
         def on_complete(index, scenario, result, completion_seq, campaign_elapsed):
             recording.append((completion_seq, result.name))
 
-        # Create work items where item 2 finishes before item 1
-        # Item 0: fast, item 1: slow (but in real system they complete as submitted)
+
+
         work = [
             (0, {"name": "task-fast"}),
             (1, {"name": "task-slow"}),
@@ -339,7 +317,7 @@ class TestTimelineRecorder(unittest.TestCase):
         def run_one(index, item):
             name = item["name"]
             if name == "task-slow":
-                time.sleep(0.05)  # actually slower
+                time.sleep(0.05)
             return CampaignResult(
                 name=name, profile="pmp-boundary", status="pass",
                 expected_allowed=True, expected_cause=None,
@@ -353,16 +331,16 @@ class TestTimelineRecorder(unittest.TestCase):
             on_complete=on_complete,
         )
 
-        # task-fast should complete before task-slow (it has no sleep)
+
         names_in_order = [r.name for r in results]
         self.assertEqual(names_in_order[0], "task-fast")
         self.assertEqual(names_in_order[1], "task-slow")
 
-        # Recording should also show completion order
+
         self.assertEqual(recording[0][1], "task-fast")
         self.assertEqual(recording[1][1], "task-slow")
 
-    # --- Test 12: process interrupt — completed lines still parseable ---
+
     def test_interrupt_lines_parseable(self):
         recorder = self._make_recorder()
         case = self._make_case("c0")
@@ -372,11 +350,11 @@ class TestTimelineRecorder(unittest.TestCase):
         for i in range(5):
             recorder.record(case, result_pass, elapsed_wall_seconds=(i + 1) * 2.0, case_elapsed_seconds=0.5)
 
-        # Read back — all lines should be valid JSON
+
         path = recorder.output_path
         raw = path.read_text(encoding="ascii")
         lines = raw.strip().split("\n")
-        self.assertEqual(len(lines), 6)  # baseline + 5 records
+        self.assertEqual(len(lines), 6)
         for i, line in enumerate(lines):
             try:
                 obj = json.loads(line)
@@ -384,9 +362,9 @@ class TestTimelineRecorder(unittest.TestCase):
             except json.JSONDecodeError as exc:
                 self.fail(f"Line {i} is not valid JSON: {exc}")
 
-    # --- Test 13: existing non-empty output dir — append, don't overwrite ---
+
     def test_resume_from_existing_timeline(self):
-        # First session — write 2 records
+
         r1 = self._make_recorder()
         case = self._make_case("c0")
         result_pass = self._make_result_pass("c0")
@@ -398,7 +376,7 @@ class TestTimelineRecorder(unittest.TestCase):
         self.assertTrue(r1.output_path.exists())
         size_before = r1.output_path.stat().st_size
 
-        # Second session — same campaign_id, same output path
+
         r2 = TimelineRecorder(
             run_dir=self.run_dir,
             campaign_id="test-campaign",
@@ -414,25 +392,25 @@ class TestTimelineRecorder(unittest.TestCase):
         for i in range(2):
             r2.record(case, result_pass, elapsed_wall_seconds=(i + 3) * 3.0, case_elapsed_seconds=0.5)
 
-        # Should have appended, so size increased
+
         size_after = r2.output_path.stat().st_size
         self.assertGreater(size_after, size_before, "Timeline should append, not overwrite")
 
-        # Total lines: original baseline + 2 first-session + 2 second-session = 5
+
         lines = self._read_timeline_lines()
         self.assertEqual(len(lines), 5)
 
-    # --- Additional: baseline row has correct shape ---
+
     def test_baseline_row_shape(self):
         recorder = self._make_recorder()
         case = self._make_case("c0")
         result_pass = self._make_result_pass("c0")
         self._write_case_and_result("c0", case, result_pass)
-        # Trigger lazy baseline write via one record
+
         recorder.record(case, result_pass, elapsed_wall_seconds=1.0, case_elapsed_seconds=0.5)
 
         lines = self._read_timeline_lines()
-        self.assertGreaterEqual(len(lines), 2)  # baseline + at least one record
+        self.assertGreaterEqual(len(lines), 2)
         baseline = lines[0]
         self.assertEqual(baseline["completion_seq"], 0)
         self.assertEqual(baseline["elapsed_wall_seconds"], 0.0)
@@ -440,7 +418,7 @@ class TestTimelineRecorder(unittest.TestCase):
         self.assertEqual(baseline["eligible_cases"], 0)
         self.assertIsNone(baseline["case_id"])
 
-    # --- Additional: write_metadata creates valid JSON ---
+
     def test_write_metadata(self):
         recorder = self._make_recorder()
         recorder.write_metadata(
@@ -457,7 +435,7 @@ class TestTimelineRecorder(unittest.TestCase):
         self.assertEqual(meta["campaign_id"], "test-campaign")
         self.assertEqual(meta["source_sha"], "abc123")
 
-    # --- Helpers ---
+
     def _read_timeline_lines(self):
         path = Path(self.tmp.name) / "out" / "metrics" / "coverage_timeline.jsonl"
         if not path.exists():
@@ -466,7 +444,6 @@ class TestTimelineRecorder(unittest.TestCase):
 
 
 class TestTimelineCallbackFactory(unittest.TestCase):
-    """Tests for timeline_on_complete_factory."""
 
     def test_factory_reads_case_and_result_from_disk(self):
         tmp = TemporaryDirectory()
@@ -489,7 +466,7 @@ class TestTimelineCallbackFactory(unittest.TestCase):
 
         callback = timeline_on_complete_factory(recorder)
 
-        # Write case and result to disk first
+
         case_dir = run_dir / "cases" / "test_case_0"
         result_dir = run_dir / "results" / "test_case_0"
         case_dir.mkdir(parents=True)
@@ -526,11 +503,11 @@ class TestTimelineCallbackFactory(unittest.TestCase):
         with patch("pmpfuzz.timeline.time.monotonic", return_value=1234.5):
             callback(0, {}, result, 1, 42.5)
 
-        # Timeline should have been written
+
         tl_path = run_dir / "metrics" / "coverage_timeline.jsonl"
         self.assertTrue(tl_path.exists())
         lines = [json.loads(line) for line in tl_path.read_text(encoding="ascii").strip().split("\n") if line.strip()]
-        self.assertGreaterEqual(len(lines), 2)  # baseline + at least one record
+        self.assertGreaterEqual(len(lines), 2)
         self.assertEqual(lines[-1]["completion_monotonic_seconds"], 1234.5)
 
 

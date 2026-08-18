@@ -1,4 +1,3 @@
-"""R5 (SV-generator eUVM port) unit tests: no-graft stats + probe provenance."""
 import json
 import subprocess
 import sys
@@ -7,8 +6,8 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "scripts" / "evaluation" / "baseline_adapters"))
-import riscv_dv  # noqa: E402
-import riscv_dv_splice  # noqa: E402
+import riscv_dv
+import riscv_dv_splice
 
 
 class TestR5Stats(unittest.TestCase):

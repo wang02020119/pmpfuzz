@@ -199,38 +199,38 @@ def _selection_rules_for_mutant(mutant_id: str) -> tuple[str, CasePredicate, Cas
         return (
             "ptw_fault_cases_vs_pte_permission_sv39_controls",
             lambda case, label: str(label.get("expected_stage") or "") == "page_table_walk" and str(case.get("family") or "") == "C4.ptw_and_translated_access",
-            # PTW-PMP bypass can legitimately perturb sv39 cases whose expected outcome is
-            # `none` or `final_access`, because those cases still depend on the PTW memory
-            # access being checked under the original privilege. `pte_permission` cases keep
-            # the PTW leg non-activating while still exercising translated execution.
+
+
+
+
             lambda case, label: _is_sv39_case(case) and str(label.get("expected_stage") or "") == "pte_permission",
         )
     if mutant_id == "M09":
         return (
             "final_access_fault_cases_vs_other_sv39_controls",
             lambda case, label: _is_sv39_case(case) and str(label.get("expected_stage") or "") == "final_access",
-            # Final-access bypass can also perturb sv39 cases whose reference result is
-            # successful completion, because those cases still depend on the translated
-            # access permissions cached in the TLB refill path. PTE-permission denials
-            # remain non-activating because they fault before the final translated access.
+
+
+
+
             lambda case, label: _is_sv39_case(case) and str(label.get("expected_stage") or "") == "pte_permission",
         )
     if mutant_id == "M10":
         return (
             "sum_disabled_supervisor_user_page_data_cases_vs_other_sv39_controls",
             lambda case, label: _is_sum_sensitive_supervisor_data_case(case, label),
-            # SUM-handling drift can also perturb successful-completion sv39 cases that
-            # still reuse the translated permission/TLB path. Restrict controls to other
-            # pte-permission denials and exclude the activation shape explicitly.
+
+
+
             lambda case, label: _is_m10_nonactivating_control(case, label),
         )
     if mutant_id == "M11":
         return (
             "ad_update_trigger_cases_vs_other_sv39_controls",
             lambda case, label: _is_sv39_case(case) and _is_ad_fault_trigger_case(case, label),
-            # A/D handling drift can also perturb successful-completion sv39 cases and any
-            # path that still requires an A/D update. Keep controls on deny/fetch shapes
-            # whose reference execution does not need A/D side effects.
+
+
+
             lambda case, label: _is_m11_nonactivating_control(case, label),
         )
     if mutant_id == "M12":
@@ -296,8 +296,8 @@ def _is_permission_sensitive_boundary_offset(case: Mapping[str, Any], *, expecte
     probe_offset = str(case.get("probe_offset") or "")
     if expected_allowed:
         return probe_offset in {"inside", "last_byte"}
-    # `upper_bound` denials are boundary/no-match effects rather than permission-bit denials,
-    # so M01/M02/M03 should not count them as activation cases.
+
+
     return probe_offset in {"inside", "last_byte"}
 
 

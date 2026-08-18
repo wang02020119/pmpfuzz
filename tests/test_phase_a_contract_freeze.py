@@ -1,7 +1,3 @@
-"""Phase A: freeze experiment contract before Phase B.
-
-Targeted RED tests that verify the frozen evaluation contract.
-"""
 from __future__ import annotations
 
 import unittest

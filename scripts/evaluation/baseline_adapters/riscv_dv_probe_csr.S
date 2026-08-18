@@ -5,8 +5,8 @@ _start:
     csrw mtvec, t0
     csrw medeleg, zero
     csrw mideleg, zero
-    li s0, 0          # probe index
-    li s1, 0          # missing mask
+    li s0, 0
+    li s1, 0
     csrr t2, 0x747
     addi s0, s0, 1
     csrr t2, 0x3a0

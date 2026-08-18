@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""Run one C910 closedloop-56 round end to end.
-
-Stages are opt-in (safe default: generate + materialize only):
-    --generate      run c910_guided_generate.py for this round (round 0 breadth,
-                    rounds >= 1 guided) into rounds/round-000N;
-    --build-remote  scp the generated manifest C + security_chain_probe.c to
-                    dubhe, build OpenSBI, fetch the sidecar;
-    --upload        upload the sidecar to /boot over the serial link;
-    --run           execute the sidecar on the board (serial script);
-    --analyze       write_dynamic_run + classify + append convergence.
-
-After --run the board is stuck (probe leaves SoC state): power-cycle it, then
---analyze.
-"""
 from __future__ import annotations
 
 import argparse
@@ -25,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import run_c910_m2_campaign as m2  # noqa: E402
+import run_c910_m2_campaign as m2
 
 DEFAULT_ROOT = REPO_ROOT / "artifacts" / "hw-v2-m2" / "c910" / "closedloop-56"
 DEFAULT_SEED_POOL = DEFAULT_ROOT / "aggregation" / "seed-pool.json"

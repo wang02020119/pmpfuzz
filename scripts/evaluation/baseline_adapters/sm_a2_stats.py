@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
-"""Standard-metrics A2: exact Mann-Whitney U / Vargha-Delaney A12 / IQR per comparison.
-
-Pure-python implementation (no scipy on the box). Exact permutation p-value for
-n1,n2 <= 20; normal approximation with continuity correction otherwise.
-A12 = U_a / (n1*n2)  (equivalently the centered form (2U - n1*n2)/(n1*n2) = 2*A12 - 1).
-U_a = R_a - n1*(n1+1)/2 with midranks for ties.
-"""
 import json
 import math
 from itertools import combinations
 from statistics import median
 
 def ranks_with_ties(vals):
-    """midranks for a list of numbers"""
     order = sorted(range(len(vals)), key=lambda i: vals[i])
     out = [0.0] * len(vals)
     i = 0
@@ -34,7 +26,6 @@ def mwu(a, b):
     return Ua, Ub
 
 def exact_p_two_tailed(a, b, Ua_obs):
-    """Exact two-tailed p via enumeration of C(n1+n2, n1) partitions."""
     n1, n2 = len(a), len(b)
     if min(n1, n2) > 20:
         return None
@@ -51,7 +42,7 @@ def exact_p_two_tailed(a, b, Ua_obs):
             ge += 1
         if Ua <= Ua_obs:
             le += 1
-    # two-tailed: sum of both tails, cap at 1
+
     p = min(1.0, 2 * min(le, ge) / total)
     return p
 
@@ -105,29 +96,29 @@ const_note = ("constant seed-wise values: zero within-group variance; "
               "significance is trivial by construction")
 
 results = []
-# --- computable: riscv-dv series (seed-wise values are the per-DUT constants) ---
-# riscv-dv-SV rocket (R5/R7): 30/144 every seed; Cascade rocket (ms 8.3): 9 every seed
+
+
 results.append(compare(
     "riscv-dv-SV rocket", [30, 30, 30],
     "Cascade rocket", [9, 9, 9],
     "bins", "riscv-dv R5/R7 summaries; manuscript 8.3", const_note))
-# riscv-dv-SV rocket vs cva6 (both 30/144 every seed)
+
 results.append(compare(
     "riscv-dv-SV rocket", [30, 30, 30],
     "riscv-dv-SV cva6", [30, 30, 30],
     "bins", "riscv-dv R5/R7 summaries", const_note + "; identical distributions"))
-# riscv-dv-SV rocket vs boom (35/144 every seed)
+
 results.append(compare(
     "riscv-dv-SV rocket", [30, 30, 30],
     "riscv-dv-SV boom", [35, 35, 35],
     "bins", "riscv-dv R5/R7 summaries", const_note))
-# riscv-dv SV pipeline (R5) vs splicer-only (R4): 30 vs 6 bins
+
 results.append(compare(
     "riscv-dv-SV (R5)", [30, 30, 30],
     "riscv-dv splicer-only (R4)", [6, 6, 6],
     "bins", "riscv-dv R4/R5 summaries", const_note))
 
-# --- recorded-only (manuscript statistics; seed-wise vectors not located) ---
+
 results.append(recorded(
     "PMPFuzz vs Cascade final BAPC bins (8.3)",
     {"PMPFuzz": {"rocket": 122, "boom": 123, "cva6": 131},
@@ -155,7 +146,7 @@ results.append(recorded(
     {}, "coverage pct", "manuscript section 8.7; see hardware_stats.json",
     "located local hardware artifacts contain only pilot runs with identical driver/seed/config (no guided-vs-random instrumentation); manuscript values quoted as recorded statistics"))
 
-# --- located but excluded (inconsistent with manuscript; contract consistency rule) ---
+
 results.append(excluded(
     "PMPFuzz boom-clean final bins (located dir)",
     {"median": 47.76923076923077},

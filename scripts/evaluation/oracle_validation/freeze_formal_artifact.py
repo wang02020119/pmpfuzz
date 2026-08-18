@@ -148,7 +148,7 @@ def freeze_formal_artifact(
         binary_path = _maybe_path((dut_binary_paths or {}).get(dut))
         source_dir = _maybe_path((dut_source_roots or {}).get(dut))
         capability = dict(
-            capabilities_by_dut.get(dut)  # type: ignore[union-attr]
+            capabilities_by_dut.get(dut)
             if capabilities_by_dut and dut in capabilities_by_dut
             else capability_for_dut(
                 dut,

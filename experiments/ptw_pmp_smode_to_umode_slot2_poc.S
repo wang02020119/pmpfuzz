@@ -73,7 +73,7 @@ stack_top:
 
     .org 0x4000
 s_entry:
-    # Low virtual address space: S continuation at VA 0, U payload at VA 0x2000.
+
     li t0, 0x80010000
     li t1, 0x20004401
     sd t1, 0(t0)
@@ -102,7 +102,7 @@ u_entry:
 
     .org 0x6000
 s_cont_lowva:
-    # Now running at VA 0. Replace root slot 2 with the denied PTW pointer.
+
     li t0, 0x80010010
     li t1, 0x20004c01
     sd t1, 0(t0)

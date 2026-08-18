@@ -1,47 +1,4 @@
 #!/usr/bin/env python3
-"""RISCV-DV baseline adapter (mirrors cascade.py; scores riscv-dv programs with the
-same BAPC pipeline; only where the program comes from changes).
-
-Contract per campaign dir (aligned with cascade.py / aggregate_results.py):
-  metrics/campaign_metadata.json
-  metrics/coverage_timeline.jsonl   (one row per case, _bapc_timeline_line schema)
-  events.json                       (per-case engineering records)
-  coverage/coverage.json            (bapc universe snapshot)
-  universe/bapc_*.json              (v4 universe for this dut/seed)
-Per-case sidecars in elfs/: <stem>.snapshot.json, <stem>.bapc.json.
-
-Rules (docs/riscv-dv-baseline.md):
-  D4: only trap-attributed denies are scored (completions ineligible; sv39 traps
-      ineligible); access size = 4 by default, no instruction decode
-      (size_source=default).
-  Scoring core = pmpfuzz.bapc.summarize_bapc_target_operation with the same v4
-  universe as cascade. The authoritative RTL observation channel is the SimTSI
-  "exit code = N" line (N = tohost>>1); the "(tohost = N)" line is recorded as a
-  cross-check. The runtime snapshot is extracted from the DUT commit trace (C0
-  lines) as CSR readback evidence of the handler instruction sequence.
-  trap/nonpass/mismatch cases are recorded as opaque engineering states only.
-
-R3 (docs/riscv-dv-baseline-r3-addendum.md): when elfs/*.graft.json sidecars
-are present, per-case graft evidence is extracted (rocket: C0 commit trace;
-cva6: trace_hart_00.dasm collected per case from an isolated sim cwd; boom:
-static sidecar) and the supplementary metrics/pmp_programming_stats.json is
-written. BAPC scoring is unchanged.
-
-R4 (docs/riscv-dv-baseline-r4-addendum.md): when elfs/*.probe.json sidecars
-are present, completions are attributed to the designated epilogue probe
-load (completion -> allow side via summarize_bapc_target_operation with the
-probe context); trap cases keep the legacy trap-attribution path. The probe
-is measurement infrastructure only; pmpfuzz/bapc.py is unchanged.
-
-R6 (docs/riscv-dv-baseline-r6-rescore.md): --static-pmp-src enables the
-static PMP-state deriver (deductive-from-generated-stream context evidence)
-for DUTs without a CSR readback channel. Trap observations (mcause=1 =>
-mtval == mepc) get their address recovered by inverting the 17-bit tohost
-fingerprint over the code region (tag cross-check); when recovery is
-ambiguous the address-dependent mode-decision family is omitted and
-annotated. Completions use the static state for the probe context. No DUT
-reruns; pmpfuzz/bapc.py is unchanged.
-"""
 
 from __future__ import annotations
 
@@ -49,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -71,7 +29,7 @@ from pmpfuzz.bapc import (
 
 try:
     from riscv_dv_static_pmp import derive_static_pmp, recover_trap_address
-except ImportError:  # module lives next to this adapter; optional (R6)
+except ImportError:
     derive_static_pmp = None
     recover_trap_address = None
 from pmpfuzz.coverage_universe import classify_observed_bins, coverage_universe_filename
@@ -80,7 +38,7 @@ from pmpfuzz.diagnostics import decode_observation_payload
 
 SUPPORTED_DUTS = ("rocket-clean", "boom-clean", "cva6-clean")
 
-# CSR read sets verified with the Phase 2.3 capability probe (csr_probe.S).
+
 DUT_PARAMS = {
     "rocket-clean": {"pmpcfg_csrs": [0x3A0, 0x3A2], "pmpaddr_count": 16, "read_mseccfg": 0},
     "boom-clean": {"pmpcfg_csrs": [0x3A0, 0x3A2], "pmpaddr_count": 16, "read_mseccfg": 0},
@@ -110,8 +68,8 @@ SIM_BINARIES = {
     "cva6-clean": CHIPYARD_SIM_DIR / "simulator-chipyard.harness-CVA6Config",
 }
 
-# Rocket commit log writes "W[r %2d=...]": one space before 1-digit
-# register numbers, none before 2-digit ones (e.g. "W[r 0=" vs "W[r27=").
+
+
 _TRACE_RE = re.compile(
     r"C0:\s+\d+\s+\[[01]\]\s+pc=\[([0-9a-f]{16})\]\s+W\[r\s*(\d+)=([0-9a-f]{16})\]\[[01]\]"
 )
@@ -120,21 +78,13 @@ _EXIT_RE = re.compile(r"exit code =\s*(\d+)")
 _TOHOST_RE = re.compile(r"tohost =\s*(-?\d+)")
 _TIMEOUT_RE = re.compile(r"\(timeout\)")
 
-# R3 graft observation (docs/riscv-dv-baseline-r3-addendum.md section 4.2).
 _DASM_RE = re.compile(
     r"^\s*\d+\s+0x([0-9a-f]+)\s+M\s+\(0x([0-9a-f]+)\)\s+DASM\([0-9a-f]+\)"
 )
 _GRAFT_WINDOW_START = "rdv_graft_start"
 _GRAFT_WINDOW_END = "rdv_graft_end"
 
-# Reset-state OFF-entry readback patterns per DUT (v1 Phase 2.3 evidence;
-# recorded as-is, not interpreted):
-#   rocket-clean: v1 formal snapshots read back pmpcfg0=0x0706010405060302
-#                 and pmpcfg2=0x0 -> entries 0-7 bytes {02,03,06,05,04,06,01,07}
-#                 (7 distinct) plus entries 8-15 byte 0 (1 more) = 8 distinct.
-#   cva6-clean:   cva6 RTL pmp_csr_state probe (pilot tools/cva6_probe5.log):
-#                 every entry cfg=0x0 addr=0x0 -> 1 distinct OFF pattern.
-#   boom-clean:   no PMP readback channel on the frozen DUT binary -> unknown.
+
 RESET_OFF_PATTERNS = {
     "rocket-clean": {
         "count": 8,
@@ -159,7 +109,7 @@ RESET_OFF_PATTERNS = {
     },
 }
 
-# csrr instruction words executed by the spliced handler (fixed sequence).
+
 _CSR_WORDS = {
     "mcause": 0x342023F3,
     "mtval": 0x34302E73,
@@ -212,7 +162,6 @@ def _file_sha256(path):
 
 
 def _symbol_window(elf_path, start_sym, end_sym):
-    """VMA window [start, end) of two exported labels, or None."""
     try:
         out = subprocess.run(
             ["riscv64-unknown-elf-nm", "-a", str(elf_path)],
@@ -241,7 +190,6 @@ def _symbol_window(elf_path, start_sym, end_sym):
 
 
 def _window_inst_words(elf_path, window):
-    """objdump a VMA window -> [(addr, inst_word)] in order, or None."""
     if window is None:
         return None
     try:
@@ -272,22 +220,18 @@ def _window_inst_words(elf_path, window):
 
 
 def _graft_window(elf_path):
-    """VMA window [start, end) of the graft labels, or None."""
     return _symbol_window(elf_path, _GRAFT_WINDOW_START, _GRAFT_WINDOW_END)
 
 
 def _graft_inst_words(elf_path):
-    """objdump the graft window -> [(addr, inst_word)] in order, or None."""
     return _window_inst_words(elf_path, _graft_window(elf_path))
 
 
 def _probe_window(elf_path):
-    """VMA window [start, end) of the R4 probe labels, or None."""
     return _symbol_window(elf_path, "rdv_probe_start", "rdv_probe_end")
 
 
 def _symbol_address(elf_path, symbol):
-    """VMA of a symbol in the ELF, or None."""
     try:
         out = subprocess.run(
             ["riscv64-unknown-elf-nm", "-a", str(elf_path)],
@@ -338,7 +282,6 @@ def _dasm_items(dasm_path):
 
 
 def _match_words_in_trace(words, items):
-    """Match the graft instruction words in trace order; return matched list."""
     if not words:
         return None
     idx = 0
@@ -353,7 +296,6 @@ def _match_words_in_trace(words, items):
 
 
 def extract_graft_evidence(log_text, elf_path, dut, graft_path, dasm_path=None):
-    """Per-case graft evidence (R3). None when the case has no graft sidecar."""
     if graft_path is None or not Path(graft_path).exists():
         return None
     try:
@@ -382,7 +324,6 @@ def extract_graft_evidence(log_text, elf_path, dut, graft_path, dasm_path=None):
 
 
 def _off_patterns(snapshot):
-    """Distinct OFF-entry (r,w,x,l) patterns from a final snapshot."""
     patterns = set()
     pmpcfg = [int(v, 16) for v in snapshot["final_snapshot"]["pmpcfg"]]
     for entry_index in range(16):
@@ -394,7 +335,6 @@ def _off_patterns(snapshot):
 
 
 def _programmed_patterns(snapshot):
-    """[(mode, r, w, x, l)] for non-OFF entries from a final snapshot."""
     patterns = []
     pmpcfg = [int(v, 16) for v in snapshot["final_snapshot"]["pmpcfg"]]
     for entry_index in range(16):
@@ -410,12 +350,6 @@ def _programmed_patterns(snapshot):
 
 
 def build_pmp_programming_stats(dut, case_rows):
-    """Aggregate the supplementary PMP-programming stat (independent of the
-    BAPC scoring).
-
-    R3/R4 (graft) and R5 (SV-generator programs program PMP themselves, no
-    graft) share the same snapshot-derived counts; R5 additionally reports
-    locked-entry stats (locked_entries / locked_ratio)."""
     if not case_rows:
         return None
     grafted = any(r.get("graft_evidence") is not None for r in case_rows)
@@ -520,12 +454,6 @@ def _handler_symbol(elf_path):
 
 
 def extract_snapshot(log_text, elf_path, dut):
-    """Extract the runtime CSR snapshot from the DUT commit trace (C0 lines).
-
-    Only instructions inside the handler address window are considered, and only
-    the fixed csrr sequence emitted by the splicer is decoded. Nothing else in
-    the instruction stream is read or interpreted.
-    """
     params = DUT_PARAMS[dut]
     handler_addr = _handler_symbol(elf_path)
     if handler_addr is None:
@@ -598,7 +526,6 @@ def extract_channels(log_text):
 
 
 def classify_case(log_text, returncode):
-    """Classify a case from its log (opaque engineering classification)."""
     exit_val, tohost_val, timed_out = extract_channels(log_text)
     infra = None
     obs = None
@@ -680,7 +607,6 @@ _PRIV_MAP = {0: "u", 1: "s", 3: "m"}
 
 
 def build_context(snapshot):
-    """Build the bapc context from the runtime snapshot (CSR readback evidence)."""
     final = snapshot["final_snapshot"]
     trap = snapshot["trap_records"][0]
     satp = int(final["satp"], 16)
@@ -726,12 +652,6 @@ def build_context(snapshot):
 
 
 def build_static_context(static_state, mcause, address, access, context_evidence):
-    """R6: BAPC context built from the statically derived PMP state (deductive).
-
-    The derived state is the deterministic post-setup state of the generated
-    program (the random stream contains no PMP CSR writes and the SV program's
-    own trap handlers are unreachable under the spliced runtime).
-    """
     entries = static_state.get("entries") or []
     return {
         "translation": "bare",
@@ -750,13 +670,6 @@ def build_static_context(static_state, mcause, address, access, context_evidence
 
 def score_case(snapshot, classified, bapc_core_version=BAPC_CORE_VERSION_V4,
                static_state=None, static_address=None, static_evidence=None):
-    """Score one case. Returns (bapc_result, eligibility_reason).
-
-    R6: when no runtime snapshot exists but a static state was derived, trap
-    observations are scored against the deductive context; the address is the
-    recovered mtval (mcause=1 fingerprint inversion) or, when unrecoverable,
-    the address-dependent mode-decision family is omitted and annotated.
-    """
     if classified.get("infra") is not None or not classified.get("observation_valid"):
         reason = "infra-failure-%s" % (classified.get("failure_class") or "unknown")
         return (
@@ -1034,7 +947,6 @@ def campaign_metadata(
 
 
 def extract_probe_operation(log_text, elf_path, dut, probe_path, dasm_path=None, snapshot=None):
-    """Resolve the R4 designated probe op + execution evidence; None if absent."""
     if probe_path is None or not Path(probe_path).exists():
         return None
     try:
@@ -1093,11 +1005,6 @@ def extract_probe_operation(log_text, elf_path, dut, probe_path, dasm_path=None,
 
 
 def build_probe_context(snapshot, probe_op, graft_path, dut, static_state=None):
-    """BAPC context for the designated probe (completion -> allow side).
-
-    R6: with --static-pmp-src, DUTs without a readback channel use the
-    statically derived 16-entry state instead of the reset-state fallback.
-    """
     pmpcfg = [0] * 8
     pmpaddr = [0] * 16
     snap_final = None
@@ -1110,7 +1017,7 @@ def build_probe_context(snapshot, probe_op, graft_path, dut, static_state=None):
         pmpcfg = [int(v, 16) for v in static_state["pmpcfg"]]
         pmpaddr = [int(v, 16) for v in static_state["pmpaddr"]]
     else:
-        # deductive: expected post-graft state from the graft sidecar
+
         graft = None
         if graft_path is not None and Path(graft_path).exists():
             try:
@@ -1170,7 +1077,6 @@ def build_probe_context(snapshot, probe_op, graft_path, dut, static_state=None):
 
 def score_probe_completion(snapshot, probe_op, graft_path, dut, static_state=None,
                           bapc_core_version=BAPC_CORE_VERSION_V4):
-    """Score a completion via the designated probe (R4). Returns (result, reason)."""
     if probe_op is None or probe_op.get("physical_address") is None:
         return (
             {
@@ -1200,11 +1106,6 @@ def score_probe_completion(snapshot, probe_op, graft_path, dut, static_state=Non
 def score_case_with_probe(snapshot, classified, probe_op, graft_path, dut, probe_mode,
                           static_state=None, static_address=None, static_evidence=None,
                           bapc_core_version=BAPC_CORE_VERSION_V4):
-    """R4 scoring branch: designated-probe completion vs legacy paths.
-
-    R6: static_state/static_address thread the deductive context into both
-    branches for DUTs without a CSR readback channel.
-    """
     if (
         probe_mode
         and classified.get("status") == "observed"
@@ -1224,7 +1125,6 @@ def score_case_with_probe(snapshot, classified, probe_op, graft_path, dut, probe
 
 
 def _campaign_manifest_relpaths(campaign_dir, artifact_root, graft_mode):
-    """Key campaign outputs to hash into manifests/artifact-sha256.txt."""
     camp_rel = campaign_dir.resolve().relative_to(artifact_root.resolve())
     rels = [
         str(camp_rel / "events.json"),
@@ -1240,15 +1140,6 @@ def _campaign_manifest_relpaths(campaign_dir, artifact_root, graft_mode):
 
 
 def _run_one_sim(dut, elf, log_path, simlen, timeout_seconds, dut_binary=None):
-    """Run one DUT simulation (chipyard command mirrored from cascade.py).
-
-    B1: dut_binary overrides SIM_BINARIES[dut] for mutant DUT campaigns
-    (scoring pipeline unchanged; provenance recorded in campaign_metadata).
-
-    R3: each sim runs in an isolated per-case cwd so the DUT's own
-    trace_hart_00.dasm (CVA6) is captured per case as logs/<stem>.dasm.
-    Rocket/BOOM produce no dasm file; their log output is unchanged.
-    """
     start = time.monotonic()
     run_dir = log_path.parent / (log_path.stem + ".d")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1470,9 +1361,9 @@ def score_campaign(
             )
             and any(int(v, 16) != 0 for v in (static_state.get("pmpcfg") or []))
         ):
-            # R6b: the readback channel missed the handler's CSR reads for this
-            # case; fall back to the statically derived state (cross-validated
-            # against complete readbacks at 100%).
+
+
+
             readback_incomplete = True
             static_evidence = "deductive-from-generated-stream (readback-incomplete)"
             snapshot = None
@@ -1741,10 +1632,10 @@ def score_campaign(
         ensure_ascii=True,
     ) + "\n"
     (coverage_dir / "coverage.json").write_text(coverage_payload, encoding="ascii")
-    # provenance manifests at the artifact root (mirrors cascade's manifests/)
-    # Layout: <experiment-root>/<dut>/seed-<n> -> the experiment root is
-    # campaign_dir.parents[1]. Prefer it explicitly: a walk-up can find
-    # unrelated higher-level manifests directories.
+
+
+
+
     artifact_root = campaign_dir.parents[1] if len(campaign_dir.parents) > 1 else campaign_dir
     manifests_dir = artifact_root / "manifests"
     manifests_dir.mkdir(parents=True, exist_ok=True)
@@ -1753,7 +1644,7 @@ def score_campaign(
         env_path.write_text(
             json.dumps(
                 {
-                    "host": "dubhe-workstation",
+                    "host": platform.node(),
                     "python": "3.14.4",
                     "venv": str(RISCV_DV_VENV),
                     "venv_python": "3.11.15",

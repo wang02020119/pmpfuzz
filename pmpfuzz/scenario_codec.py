@@ -1,16 +1,3 @@
-"""ScenarioSpec codec: strict fail-closed serialization — final.
-
-All protocol values are validated with typed helpers:
-- _read_bool – only JSON true/false; explicit null is rejected
-- _read_int  – only JSON integer; rejects float/str/bool
-- _read_optional_int – integer or null (for int|None fields)
-- _read_str / _read_optional_str – only JSON string
-- _read_str_tuple / _read_int_tuple – typed arrays
-- _validate_json_value – recursive JSON constraint
-
-Missing fields may use documented defaults.  Illegal types or values
-always raise ValueError/TypeError — no silent coercion.
-"""
 
 from __future__ import annotations
 
@@ -42,9 +29,6 @@ _JSON_DUMPS_KWARGS = {
 }
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Public API
-# ═════════════════════════════════════════════════════════════════════════════
 
 def scenario_to_spec(scenario: object) -> dict[str, object]:
     from pmpfuzz.scenario import PmpScenario
@@ -144,9 +128,6 @@ def scenario_hash(spec: dict[str, object]) -> str:
     return hashlib.sha256(canonical_scenario_bytes(spec)).hexdigest()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Schema validation
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _validate_spec(spec: object) -> dict[str, object]:
     if not isinstance(spec, dict):
@@ -165,9 +146,6 @@ def _validate_spec(spec: object) -> dict[str, object]:
     return spec
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Typed read helpers
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _read_bool(
     mapping: dict[str, object],
@@ -183,7 +161,7 @@ def _read_bool(
         if default is not _MISSING:
             if type(default) is not bool:
                 raise TypeError(f"internal default for {qualified} must be bool")
-            return default  # type: ignore[return-value]
+            return default
         raise ValueError(f"missing required field: {qualified}")
 
     if type(value) is not bool:
@@ -191,7 +169,7 @@ def _read_bool(
             f"{qualified} must be a JSON boolean, "
             f"got {value!r} ({type(value).__name__})")
 
-    return value  # type: ignore[return-value]
+    return value
 
 
 def _read_int(
@@ -218,7 +196,7 @@ def _read_int(
             f"{qualified} must be a JSON integer, "
             f"got {value!r} ({type(value).__name__})")
 
-    result: int = value  # type: ignore[assignment]
+    result: int = value
     if positive and result <= 0:
         raise ValueError(f"{qualified} must be positive, got {result}")
     if minimum is not None and result < minimum:
@@ -241,7 +219,7 @@ def _read_optional_int(
         raise ValueError(
             f"{qualified} must be an integer or null, "
             f"got {value!r} ({type(value).__name__})")
-    result: int = value  # type: ignore[assignment]
+    result: int = value
     if minimum is not None and result < minimum:
         raise ValueError(f"{qualified} must be >= {minimum}, got {result}")
     return result
@@ -270,7 +248,7 @@ def _read_str(
             f"{qualified} must be a JSON string, "
             f"got {value!r} ({type(value).__name__})")
 
-    result: str = value  # type: ignore[assignment]
+    result: str = value
     if not allow_empty and not result:
         raise ValueError(f"{qualified} must not be empty")
     return result
@@ -290,7 +268,7 @@ def _read_optional_str(
         raise ValueError(
             f"{qualified} must be a string or null, "
             f"got {value!r} ({type(value).__name__})")
-    return value  # type: ignore[return-value]
+    return value
 
 
 def _read_str_tuple(
@@ -364,9 +342,6 @@ def _validate_json_value(value: object, *, path: str) -> object:
         f"{path} contains unsupported value {value!r} ({type(value).__name__})")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Enum helpers
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _require_enum(
     enum_cls: type[Enum],
@@ -393,9 +368,6 @@ def _require_ad_update(value: object) -> object:
     return _require_enum(AdUpdateMode, value, default="svade", field_name="ad_update_mode")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Deserialization
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _deser_pmp_entry(idx: int, d: object) -> object:
     if not isinstance(d, dict):
@@ -463,9 +435,6 @@ def _deser_sv39(d: dict[str, object] | None) -> object | None:
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Serialization
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _serialize_dataclass(obj: object, out: dict[str, object]) -> None:
     if not dataclasses.is_dataclass(obj):
@@ -508,9 +477,6 @@ def _serialize_value(val: object) -> object:
         f"cannot serialize unsupported type {type(val).__name__}: {val!r}")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Deterministic helpers
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _sort_spec(d: dict[str, object]) -> dict[str, object]:
     result: dict[str, object] = {}

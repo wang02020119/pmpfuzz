@@ -1,16 +1,3 @@
-"""M-2 pre-registered scheduling for the C910 hardware campaign.
-
-Implements the hardware-experiment v2 protocol's M-2 experiment: three frozen
-rounds on the C910, comparing **predicted-coverage-guided** selection against a
-pre-registered **random** replay at equal budget.  The coverage universe is the
-BAPC-core v4 non-PMP projection (56 shared bins).
-
-Every selection is pre-registered: fixed seed, candidate pool (the frozen
-256-case catalog), per-case predicted bins, selection rationale, and the
-predicted covered-bin input used to freeze the next guided manifest.  Nothing
-here touches a board; the emitted manifests are executed by the board adapter
-when hardware is available.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -25,23 +12,17 @@ from .v4_nonpmp_projection import (
     map_target_operation,
 )
 
-# A per-round budget well below the 64-record catalog keeps round 0 from
-# saturating the shared-56 space, so predicted-coverage-guided selection can be
-# compared against a seeded random replay at equal budget.  With both conditions
-# restricted to mapped shared-56 candidates, the frozen prediction trajectories
-# are guided 25/25/25 and random 18/22/22.
+
+
+
+
+
 M2_BUDGET_PER_ROUND = 16
 M2_NUM_ROUNDS = 3
 M2_UNIVERSE = "v4-nonpmp-56"
 
 
 def predict_shared56_bins(case: dict[str, Any]) -> dict[str, Any]:
-    """Predict the shared-56 bins a catalog case would cover.
-
-    The outcome is predicted from the architectural oracle (and falls back to
-    the harness expectation when the oracle cannot decide).  Returns the
-    ``map_target_operation`` result so unsupported cases are explicitly marked.
-    """
     access = str(case.get("access") or "").strip().lower()
     translation = str(case.get("translation") or "").strip().lower()
     oracle = architectural_oracle_allow(case)
@@ -100,17 +81,9 @@ def select_guided(
     seed: int,
     budget: int,
 ) -> list[tuple[str, dict[str, Any]]]:
-    """Greedily select catalog cases maximizing newly-predicted shared-56 bins.
-
-    Always fills the budget: once no case predicts a new bin, the remaining
-    slots fall back to the highest-gain available cases (real observations may
-    differ from the static prediction).  Cases whose ``uart_record`` duplicates
-    a selected case are skipped because a round manifest requires unique
-    records.
-    """
     rng = random.Random(seed)
     candidates = _mapped_selection_candidates(catalog, used_fingerprints=used_fingerprints)
-    rng.shuffle(candidates)  # deterministic tiebreak order for a fixed seed
+    rng.shuffle(candidates)
 
     covered = set(covered_bins)
     used_records: set[str] = set()
@@ -146,10 +119,6 @@ def select_random(
     budget: int,
     covered_bins: set[str] | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
-    """Seeded uniform selection over the same mapped pool as guided.
-
-    ``covered_bins`` is used only for provenance, not for choosing cases.
-    """
     rng = random.Random(seed)
     used_records: set[str] = set()
     selected: list[tuple[str, dict[str, Any]]] = []
@@ -183,7 +152,6 @@ def build_m2_round(
     seed: int,
     budget: int = M2_BUDGET_PER_ROUND,
 ) -> dict[str, Any]:
-    """Build one pre-registered M-2 round manifest with full provenance."""
     if mode == "guided":
         selections = select_guided(
             catalog, covered_bins=covered_bins, used_fingerprints=used_fingerprints,
@@ -233,7 +201,6 @@ def build_m2_round(
 
 
 def aggregate_shared56(classifications: list[dict[str, Any]]) -> dict[str, Any]:
-    """Aggregate per-case classifications into a shared-56 coverage report."""
     covered: set[str] = set()
     mapped = 0
     unsupported = 0

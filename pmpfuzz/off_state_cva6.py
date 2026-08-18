@@ -1179,9 +1179,9 @@ def _extract_trace_bytes(
     saw_trace_probe = False
     for event in parse_probe_events(log_text):
         fields = dict((event or {}).get("fields") or {})
-        # CVA6 whitebox transport is carried by vaddr-tagged probe lines. Ignore
-        # torn or unrelated probe text without the required field and fail closed
-        # unless a single complete sentinel-delimited frame is reconstructed.
+
+
+
         vaddr_text = fields.get("vaddr")
         if not vaddr_text:
             continue

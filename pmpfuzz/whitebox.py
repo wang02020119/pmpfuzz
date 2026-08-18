@@ -588,22 +588,11 @@ def _dedupe_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
-# ---------------------------------------------------------------------------
-# Phase C1: Per-result extraction (single case, incremental)
-# ---------------------------------------------------------------------------
-
-
 def extract_whitebox_signals_for_result(
     case: dict[str, Any],
     result: dict[str, Any],
     artifact_root: Path,
 ) -> list[dict[str, Any]]:
-    """Extract whitebox signals for a SINGLE completed result.
-
-    Unlike extract_security_whitebox_signals which scans the entire
-    run directory, this function only processes artifacts belonging to the
-    given case and result.
-    """
     import hashlib
 
     case_name = case.get("name") or result.get("name", "unknown")
@@ -627,11 +616,6 @@ def whitebox_event_ids_for_result(
     result: dict[str, Any],
     artifact_root: Path,
 ) -> set[str]:
-    """Return stable whitebox event IDs for a single result.
-
-    Each event ID is a sha256 hash of the signal's identifying fields.
-    Uses only the result's own artifacts, not the entire campaign.
-    """
     import hashlib
 
     signals = extract_whitebox_signals_for_result(case, result, artifact_root)

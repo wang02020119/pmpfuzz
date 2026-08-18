@@ -273,7 +273,6 @@ class CapabilityModelTest(unittest.TestCase):
         self.assertFalse(spike["supported_capabilities"]["smepmp_rlb"])
         self.assertEqual(oracle_applicability_for_case(case, spike), "unsupported")
 
-    # ---- New tests for execution-qualified coverage (RED phase additions) ----
 
     def test_capability_schema_v3_includes_isa(self):
         cap = capability_for_dut("spike", isa="rv64gc", available=True)
@@ -316,13 +315,13 @@ class CapabilityModelTest(unittest.TestCase):
             )
             write_json(run_dir / "cases" / case["name"] / "case.json", case)
             write_json(run_dir / "results" / case["name"] / "result.json", result)
-            # No dut_capabilities.json written
+
 
             from pmpfuzz.coverage import coverage_from_run
             cov = coverage_from_run(run_dir)
 
         exec_cov = cov["execution_coverage"]
-        # Without capability file, all entries should be unavailable
+
         self.assertIn("by_dut", exec_cov)
         for dut_name, entry in exec_cov["by_dut"].items():
             self.assertFalse(entry.get("available", True),
@@ -331,7 +330,6 @@ class CapabilityModelTest(unittest.TestCase):
 
 
 class CapabilityFingerprintTest(unittest.TestCase):
-    """Fix 7: fingerprint is stable for coverage-relevant fields only."""
 
     def test_fingerprint_ignores_path_and_notes(self):
         from pmpfuzz.semantic_coverage import _capability_fingerprint

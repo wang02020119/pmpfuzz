@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Cascade campaign generator with optional HPM instrumentation.
-
-Executed inside the official Cascade Python environment after sourcing
-``/cascade-meta/env.sh``. The module stays import-safe outside the container:
-all Cascade-specific imports remain deferred until ``generate_campaign``.
-"""
 
 from __future__ import annotations
 
@@ -125,14 +119,6 @@ def validate_args(args: argparse.Namespace) -> None:
 
 
 def _call_with_spikespeed_lock(calibrate_fn: Callable[[], object]) -> object:
-    """Serialize Cascade Spike speed calibration across concurrent campaigns.
-
-    Cascade's shared ``common.spike.calibrate_spikespeed()`` implementation
-    uses fixed temporary paths under ``/cascade-data``. Parallel calibrations
-    for different DUTs can race on those paths and fail with spurious
-    ``FileNotFoundError`` during cleanup. Guard the calibration with a shared
-    process lock so formal waves can launch multiple Cascade campaigns safely.
-    """
 
     try:
         import fcntl

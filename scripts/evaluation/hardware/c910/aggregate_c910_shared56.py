@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Aggregate one executed C910 closedloop-56 round into shared-56 coverage.
-
-Reuses the M-3 pipeline: ``write_dynamic_run`` (UART + manifest v3 -> cases/
-results) then ``classify_scenario`` + ``aggregate_shared56`` (mapped/unsupported/
-violations) into ``run/coverage/shared56.json``.
-"""
 from __future__ import annotations
 
 import argparse

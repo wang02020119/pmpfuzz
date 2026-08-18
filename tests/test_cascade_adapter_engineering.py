@@ -1,4 +1,3 @@
-"""Engineering-only contract tests for the Cascade evaluation adapter."""
 
 from __future__ import annotations
 

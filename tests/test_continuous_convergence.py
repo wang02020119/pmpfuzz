@@ -970,7 +970,7 @@ class ContinuousConvergenceTest(unittest.TestCase):
                 discarded_pending_count=len(pending_hashes),
                 **stop_fields,
             )
-            # Simulate a crash before checkpoint/campaign_closed.
+
             truncated_events = [
                 json.loads(line)
                 for line in schedule_path.read_text(encoding="ascii").splitlines()

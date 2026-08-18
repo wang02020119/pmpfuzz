@@ -214,14 +214,6 @@ def _run_indexed_work_with_budget(
     time_fn=time.monotonic,
     on_complete=None,
 ):
-    """Execute *indexed_work* with a thread pool until the time budget is exhausted.
-
-    *on_complete*, if provided, is called in the main thread immediately after a
-    future resolves and result is appended.  Signature::
-
-        on_complete(index, scenario, CampaignResult, completion_seq,
-                    campaign_elapsed_seconds)
-    """
     results = []
     work_iter = iter(indexed_work)
     pending = {}
@@ -296,7 +288,7 @@ def run_campaign(config: RunnerConfig, *, on_complete=None) -> list[CampaignResu
             "bapc_core_version": config.bapc_core_version,
         },
     )
-    # Create capability with actual binary path and ISA
+
     if config.dut == "spike":
         dut_capability = capability_for_dut(
             config.dut,

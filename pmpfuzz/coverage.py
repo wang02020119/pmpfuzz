@@ -50,7 +50,7 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
     for result_path in sorted((run_dir / "results").glob("*/result.json")):
         results.append(read_json(result_path))
 
-    # ---- manifest coverage (unchanged logic, preserved) --------------------
+
     coverage: dict[str, Any] = {
         "schema_version": 5,
         "legacy_top_level_basis": "generated_manifest",
@@ -118,7 +118,7 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         _bump(coverage["statuses"], result.get("status"))
         _bump(coverage["failure_classes"], result.get("failure_class"))
 
-    # ---- manifest coverage gap (unchanged) ----------------------------------
+
     target = _target_for_cases(cases)
     gap = _manifest_gap(run_dir, cases, target)
     combo_gap = _manifest_combo_gap(run_dir, cases, target)
@@ -151,7 +151,7 @@ def coverage_from_run(run_dir: Path) -> dict[str, Any]:
         }
     )
 
-    # ---- execution-qualified coverage ---------------------------------------
+
     exec_coverage = _build_execution_coverage(run_dir, cases)
     coverage["execution_coverage"] = exec_coverage
 
@@ -233,18 +233,11 @@ def _manifest_predicate_gap(run_dir: Path, cases: list[dict[str, Any]], target: 
     }
 
 
-# ---------------------------------------------------------------------------
-# execution-qualified coverage
-# ---------------------------------------------------------------------------
-
-
 def _build_execution_coverage(run_dir: Path, cases: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build the execution_coverage block (schema v5)."""
     capability_map = load_capability_map(run_dir)
     target = _target_for_cases(cases)
 
     if capability_map is None:
-        # No capability file → all DUTs unavailable
         return {
             "schema_version": 1,
             "coverage_model": "execution-qualified-capability-scoped-v1",
@@ -259,7 +252,6 @@ def _build_execution_coverage(run_dir: Path, cases: list[dict[str, Any]]) -> dic
             by_dut[dut_name] = _unavailable_entry("dut_unavailable")
             continue
 
-        # Enumerate capability-scoped target candidates once (shared logic)
         targets = compute_coverage_targets(
             target=target, capability=capability,
             include_experimental=False, seed=20260628,
@@ -269,7 +261,6 @@ def _build_execution_coverage(run_dir: Path, cases: list[dict[str, Any]]) -> dic
         target_trip = targets["security_triples"]["target_bins"]
         target_pred = targets["predicates"]["target_bins"]
 
-        # Use unified evidence collector (single source of truth)
         evidence = collect_execution_evidence([run_dir], dut=dut_name)
         summary = evidence.summary
         eligible_cases = evidence.eligible_cases
@@ -366,14 +357,7 @@ def write_coverage(run_dir: Path) -> Path:
     return out
 
 
-# ---------------------------------------------------------------------------
-# Shared coverage target construction — single source of truth for
-# denominator logic used by both execution-coverage and timeline.
-# ---------------------------------------------------------------------------
-
-
 def _capability_fingerprint_from_map(capability: dict[str, Any]) -> str:
-    """Return a stable fingerprint string for a capability dict."""
     from .semantic_coverage import _capability_fingerprint
     return _capability_fingerprint(capability)
 
@@ -385,12 +369,6 @@ def compute_coverage_targets(
     include_experimental: bool = False,
     seed: int = 20260628,
 ) -> dict[str, Any]:
-    """Compute the four coverage target bin sets for a given DUT capability.
-
-    Returns a dict with keys ``semantic``, ``pairwise``, ``security_triples``,
-    ``predicates``, each containing the bin-set metadata as returned by
-    :func:`_make_coverage_section`.
-    """
     candidates = _target_candidates(
         target=target,
         include_experimental=include_experimental,

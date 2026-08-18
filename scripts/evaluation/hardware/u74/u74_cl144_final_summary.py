@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""Write the closedloop-144 final-summary.json (EXPERIMENT_PROTOCOL.md §5, §8).
-
-Reads the guided campaign's aggregation (round summaries + convergence.json)
-and any random-control roots, then emits the protocol's convergence fields and
-the paper-mapping numbers.  Convergence fields come only from real observed
-bins.
-
-Usage:
-
-    PYTHONPATH=. python scripts/evaluation/hardware/u74/u74_cl144_final_summary.py \
-        --root <...>/closedloop-144 \
-        --universe <...>/u74-supported-v4-144.json \
-        [--random-root <...>/random/run-seed-0101]... \
-        --out <...>/aggregation/final-summary.json
-"""
 from __future__ import annotations
 
 import argparse
@@ -50,7 +35,7 @@ def compute_final(root: Path, universe: dict[str, Any]) -> dict[str, Any]:
     summaries = cs["summaries"]
     reachable = set(C.reachable_bins(universe))
 
-    # last-novelty tracking across accepted rounds
+
     last_novelty_round = None
     last_novelty_round_index = None
     last_novelty_eligible = 0
@@ -79,7 +64,7 @@ def compute_final(root: Path, universe: dict[str, Any]) -> dict[str, Any]:
     covered_count = len(final_covered & set(universe.get("bin_ids") or []))
     reachable_covered = len(final_covered & reachable)
 
-    # stop reason
+
     budget_hit = max_round_index + 1 >= 10
     if zero_novelty_streak >= 2 and not budget_hit:
         stop_reason = "coverage_converged"

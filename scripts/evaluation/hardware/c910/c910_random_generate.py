@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""Unguided random generation for the C910 closedloop-56 campaign.
-
-Same machinery as the guided generator but without guidance: no directed
-construction, parents chosen uniformly (not by coverage value), mutation
-operators chosen uniformly.  Round 0 (breadth seed) is shared with guided so
-the two conditions start from the same base.
-
-Usage mirrors ``c910_guided_generate.py``.
-"""
 from __future__ import annotations
 
 import argparse

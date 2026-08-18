@@ -1,24 +1,4 @@
 #!/usr/bin/env python3
-"""Validate a campaign timeline for data integrity.
-
-Checks are gated by the ``run_class`` field in ``campaign_metadata.json``:
-
-* **strict** (readiness / pilot / formal / baseline-pilot / baseline-formal):
-  all checks are errors — missing provenance manifests, missing SHAs, and any
-  timeline corruption fails validation.
-
-* **development-smoke**:
-  global provenance (environment.json, git-shas.txt, artifact-sha256.txt,
-  DUT SHAs) is optional, but timeline / case / result consistency is still
-  enforced as errors.
-
-* **legacy** (metadata present but ``run_class`` absent):
-  provenance warnings are downgraded to ``warning`` severity for backward
-  compatibility; timeline integrity is still ``error``.
-
-* **no metadata at all**:
-  ``metadata_exists`` is always an error — every campaign must carry metadata.
-"""
 
 from __future__ import annotations
 
@@ -32,8 +12,6 @@ from pathlib import Path
 from pathlib import Path as _Path
 from typing import Any, Mapping
 
-# Ensure repository-local imports work when the validator is executed directly
-# from a runtime override tree.
 _source_root_override = os.environ.get("PMPFUZZ_SOURCE_ROOT")
 _script_root = (
     _Path(_source_root_override).resolve()
@@ -64,9 +42,6 @@ except ImportError:
         "source_tree_sha256": "allowed_source_tree_sha256s",
     }
 
-    # Older clean PMPFuzz checkouts used for formal provenance may not export
-    # the helper yet; keep validator refresh compatible without mutating that
-    # source tree.
     def allowed_bapc_formal_field_values(
         payload: Mapping[str, Any] | None,
         field: str,
@@ -84,9 +59,6 @@ except ImportError:
                 values.extend(str(item) for item in raw if str(item))
         return tuple(dict.fromkeys(values))
 
-# ── run-class gating ─────────────────────────────────────────────────────────
-
-# run_class values that require strict (fail-closed) validation.
 _STRICT_RUN_CLASSES = {
     "readiness",
     "pilot",
@@ -119,7 +91,6 @@ def _required_coverage_modes_for_metadata(metadata: dict[str, Any] | None) -> tu
 
 
 def _load_metadata(metadata_path: Path) -> dict[str, Any] | None:
-    """Return parsed metadata dict, or None if file is missing / unreadable."""
     if not metadata_path.exists():
         return None
     try:
@@ -179,9 +150,6 @@ def _validation_input_bindings(
 
 
 def _resolve_artifact_root(campaign_dir: Path) -> Path | None:
-    """Walk up from *campaign_dir* to find the directory that contains
-    ``manifests/`` (the artifact root).  This replaces the old hard-coded
-    ``parent.parent.parent.parent`` heuristic."""
     p = campaign_dir.resolve()
     for _ in range(12):
         if (p / "manifests").is_dir():
@@ -193,12 +161,6 @@ def _resolve_artifact_root(campaign_dir: Path) -> Path | None:
 
 
 def _is_cross_campaign_artifact_root(campaign_dir: Path, artifact_root: Path) -> bool:
-    """Return True when *artifact_root* spans sibling campaigns.
-
-    Formal matrix runs store per-DUT manifests above ``campaigns/`` so a
-    campaign-local timeline validation should not re-hash every sibling
-    campaign artifact before the whole DUT root is stable.
-    """
     campaign_resolved = campaign_dir.resolve()
     artifact_resolved = artifact_root.resolve()
     if campaign_resolved == artifact_resolved:
@@ -416,15 +378,7 @@ def _check_bapc_formal_contract(
     )
 
 
-# ── internal helpers ─────────────────────────────────────────────────────────
-
-
 def _check_child_timelines(campaign_dir: Path, add_check) -> None:
-    """Recursively validate every ``rounds/round_*/metrics/coverage_timeline.jsonl``.
-
-    *Missing* or *corrupted* child timelines are always ``error`` severity
-    regardless of run_class.
-    """
     rounds_dir = campaign_dir / "rounds"
     if not rounds_dir.is_dir():
         return
@@ -444,7 +398,6 @@ def _check_child_timelines(campaign_dir: Path, add_check) -> None:
             )
             continue
 
-        # Validate the child timeline is parseable JSONL.
         try:
             raw = rd_tl.read_text(encoding="ascii").strip()
         except Exception as exc:
@@ -483,25 +436,18 @@ def _check_child_timelines(campaign_dir: Path, add_check) -> None:
 
 
 def _check_orphans_and_duplicates(campaign_dir: Path, lines: list[dict], add_check) -> None:
-    """Verify 1:1 correspondence between timeline entries and on-disk case/result dirs.
-
-    * Orphan cases/results (on disk but not in timeline) → error.
-    * Duplicate result files for a single case → error.
-    """
     cases_dir = campaign_dir / "cases"
     results_dir = campaign_dir / "results"
 
     if not cases_dir.is_dir() and not results_dir.is_dir():
         return
 
-    # Case IDs from timeline (non-baseline rows: completion_seq > 0).
     tl_case_ids: set[str] = set()
     for line in lines:
         cid = line.get("case_id")
         if cid and (line.get("completion_seq") or 0) > 0:
             tl_case_ids.add(cid)
 
-    # --- orphan cases ---
     if cases_dir.is_dir():
         disk_case_ids: set[str] = set()
         for d in cases_dir.iterdir():
@@ -517,7 +463,6 @@ def _check_orphans_and_duplicates(campaign_dir: Path, lines: list[dict], add_che
                 severity="error",
             )
 
-    # --- orphan results & duplicate results ---
     if results_dir.is_dir():
         disk_result_ids: set[str] = set()
         dup_count = 0
@@ -525,7 +470,6 @@ def _check_orphans_and_duplicates(campaign_dir: Path, lines: list[dict], add_che
             if not d.is_dir():
                 continue
             disk_result_ids.add(d.name)
-            # Count result*.json files; > 1 is a duplicate.
             result_files = sorted(d.glob("result*.json"))
             if len(result_files) > 1:
                 dup_count += 1
@@ -550,14 +494,9 @@ def _check_orphans_and_duplicates(campaign_dir: Path, lines: list[dict], add_che
 
 def _check_metadata_identity(metadata: dict[str, Any] | None,
                               lines: list[dict], add_check) -> None:
-    """Verify that metadata identity fields match the campaign timeline.
-
-    Checks campaign_id, dut, seed, and method (if present).
-    """
     if metadata is None:
         return
 
-    # Campaign-level identity from timeline (first non-baseline row, or baseline).
     tl_campaign_id: str | None = None
     tl_dut: str | None = None
     tl_seed: int | None = None
@@ -606,23 +545,9 @@ def _is_regenerated_validation_contract_entry(rel_path: str) -> bool:
 
 
 def _check_artifact_sha_manifest(artifact_root: Path, add_check) -> None:
-    """Parse ``manifests/artifact-sha256.txt`` and verify every entry.
-
-    Each entry is ``<sha256>  <relative_path>`` (two spaces).
-
-    Boundary checks (fail-closed):
-
-    * Manifest must contain at least one valid, non-self-referencing file entry.
-    * ``rel_path`` must be relative — absolute paths are rejected.
-    * The resolved target must stay inside *artifact_root* (no ``../`` escape).
-    * The entry must not reference the manifest itself.
-    * The target must exist and be a regular file (not a directory).
-    * The same normalised target must not appear more than once.
-    * The expected hash must be exactly 64 hexadecimal digits.
-    """
     manifest_path = artifact_root / "manifests" / "artifact-sha256.txt"
     if not manifest_path.exists():
-        return  # handled by the manifest-existence check
+        return
 
     try:
         raw = manifest_path.read_text(encoding="ascii").strip()
@@ -635,7 +560,6 @@ def _check_artifact_sha_manifest(artifact_root: Path, add_check) -> None:
                   "manifest is empty", severity="error")
         return
 
-    # Collect non-empty lines; reject whitespace-only manifests.
     non_empty = [ln for ln in (ln.strip() for ln in raw.split("\n")) if ln]
     if not non_empty:
         add_check("artifact_sha_manifest_nonempty", False,
@@ -657,7 +581,7 @@ def _check_artifact_sha_manifest(artifact_root: Path, add_check) -> None:
     has_structural_error = False
 
     for line in non_empty:
-        parts = line.split("  ", 1)  # two spaces between hash and path
+        parts = line.split("  ", 1)
         if len(parts) != 2:
             add_check("artifact_sha_manifest_parse", False,
                       f"malformed line: {line[:80]}", severity="error")
@@ -666,21 +590,18 @@ def _check_artifact_sha_manifest(artifact_root: Path, add_check) -> None:
 
         expected_hash, rel_path = parts
 
-        # ── hash must be exactly 64 hex digits ─────────────────────────
         if not _HEX64.match(expected_hash):
             add_check("artifact_sha_manifest_parse", False,
                       "hash is not 64 hex digits", severity="error")
             has_structural_error = True
             continue
 
-        # ── rel_path must be non-empty ─────────────────────────────────
         if not rel_path:
             add_check("artifact_sha_manifest_entry_empty_path", False,
                       "empty path", severity="error")
             has_structural_error = True
             continue
 
-        # ── rel_path must be relative (no absolute paths) ──────────────
         path_obj = Path(rel_path)
         if path_obj.is_absolute():
             add_check("artifact_sha_manifest_entry_absolute", False,
@@ -688,7 +609,6 @@ def _check_artifact_sha_manifest(artifact_root: Path, add_check) -> None:
             has_structural_error = True
             continue
 
-        # ── resolve and verify containment within artifact root ───────
         candidate = (artifact_root / rel_path).resolve()
         try:
             candidate.relative_to(root_resolved)
@@ -698,7 +618,6 @@ def _check_artifact_sha_manifest(artifact_root: Path, add_check) -> None:
             has_structural_error = True
             continue
 
-        # ── reject self-reference (manifest must not hash itself) ──────
         if candidate == manifest_resolved:
             add_check("artifact_sha_manifest_entry_self_ref", False,
                       "entry references the manifest itself", severity="error")
@@ -709,7 +628,6 @@ def _check_artifact_sha_manifest(artifact_root: Path, add_check) -> None:
             skipped_volatile_logs.append(rel_path)
             continue
 
-        # ── target must exist and be a regular file ────────────────────
         if not candidate.exists():
             missing_files.append(rel_path)
             continue
@@ -719,7 +637,6 @@ def _check_artifact_sha_manifest(artifact_root: Path, add_check) -> None:
             has_structural_error = True
             continue
 
-        # ── detect duplicate normalised targets ───────────────────────
         if candidate in seen:
             add_check("artifact_sha_manifest_entry_duplicate", False,
                       "duplicate normalised target", severity="error")
@@ -727,7 +644,6 @@ def _check_artifact_sha_manifest(artifact_root: Path, add_check) -> None:
             continue
         seen.add(candidate)
 
-        # ── verify SHA-256 hash ────────────────────────────────────────
         try:
             actual_hash = hashlib.sha256(candidate.read_bytes()).hexdigest()
         except Exception as exc:
@@ -748,7 +664,6 @@ def _check_artifact_sha_manifest(artifact_root: Path, add_check) -> None:
         else:
             valid_entry_count += 1
 
-    # ── report accumulated results ─────────────────────────────────────
     if missing_files:
         add_check("artifact_sha_manifest_files_exist", False,
                   f"{len(missing_files)} missing: {missing_files[:5]}",
@@ -781,7 +696,6 @@ def _check_artifact_sha_manifest(artifact_root: Path, add_check) -> None:
         add_check("artifact_sha_manifest_integrity", True, detail)
 
 
-# ── main validation entry point ──────────────────────────────────────────────
 
 
 def _is_continuous_campaign(metadata: dict[str, Any] | None) -> bool:
@@ -1048,11 +962,6 @@ def validate_timeline(
     *,
     defer_cross_campaign_artifact_manifest: bool = False,
 ) -> dict[str, Any]:
-    """Run all validation checks and return a report.
-
-    Returns a dict with ``valid`` (bool), ``error_count``, ``warning_count``,
-    and a ``checks`` list of per-check results.
-    """
     timeline_path = campaign_dir / "metrics" / "coverage_timeline.jsonl"
     metadata_path = campaign_dir / "metrics" / "campaign_metadata.json"
     coverage_path = campaign_dir / "coverage" / "coverage.json"
@@ -1081,7 +990,6 @@ def validate_timeline(
             else:
                 report["warning_count"] += 1
 
-    # ── determine validation mode ────────────────────────────────────────
     metadata: dict[str, Any] | None = _load_metadata(metadata_path)
     artifact_root = _resolve_artifact_root(campaign_dir)
     experiment_contract = _load_experiment_contract(artifact_root)
@@ -1093,15 +1001,12 @@ def validate_timeline(
         is_strict = True
     is_dev_smoke = run_class == "development-smoke"
     is_continuous = _is_continuous_campaign(metadata)
-    # is_legacy: metadata present but run_class absent → legacy warn-on-provenance
 
     def _provenance_severity() -> str:
-        """Return the severity for global-provenance checks (manifests, SHAs)."""
         if is_strict:
             return "error"
         return "warning"
 
-    # ── 1. Metadata must exist (error for all modes) ─────────────────────
     if metadata is None:
         add_check("metadata_exists", False, "missing campaign_metadata.json",
                   severity="error")
@@ -1110,7 +1015,6 @@ def validate_timeline(
         if run_class:
             add_check("run_class_known", is_known_run_class, run_class, severity="error")
 
-    # ── 2. JSONL exists and every line parseable ─────────────────────────
     if not timeline_path.exists():
         add_check("timeline_exists", False, str(timeline_path))
         report["valid"] = False
@@ -1143,7 +1047,6 @@ def validate_timeline(
         schedule_state = _load_schedule_v4_state(campaign_dir, metadata, add_check)
         schedule_stop_reasons = _load_schedule_v4_stop_reasons(campaign_dir, metadata)
 
-    # ── 3. campaign_id consistent ───────────────────────────────────────
     campaign_ids = {line.get("campaign_id") for line in lines if line.get("campaign_id")}
     if len(campaign_ids) == 0:
         add_check("campaign_id_present", False, "no campaign_id found")
@@ -1152,9 +1055,6 @@ def validate_timeline(
     else:
         add_check("campaign_id_unique", True)
 
-    # ── 4. completion_seq continuous from 0 ──────────────────────────────
-    # Requirement 11: exactly one baseline row (seq=0, case_id=None) is
-    # valid; real completion sequences must be 1..N continuous.
     seqs = [line.get("completion_seq") for line in lines
             if line.get("completion_seq") is not None]
     if seqs:
@@ -1165,7 +1065,6 @@ def validate_timeline(
             add_check("completion_seq_continuous", False,
                       f"expected {expected[:5]}..., got {seqs[:5]}...")
 
-    # ── 5. elapsed_wall_seconds monotonically non-decreasing ─────────────
     times = [line.get("elapsed_wall_seconds") for line in lines
              if line.get("elapsed_wall_seconds") is not None]
     if times:
@@ -1175,7 +1074,6 @@ def validate_timeline(
         else:
             add_check("wall_seconds_monotonic", False, "found decreasing wall time")
 
-    # ── 6. Coverage rates monotonically non-decreasing ───────────────────
     for key in ["semantic_rate", "pairwise_rate", "security_triples_rate",
                 "predicates_rate", "hpm_rate", "bapc_rate"]:
         rates = [line.get(key) for line in lines[1:]
@@ -1189,7 +1087,6 @@ def validate_timeline(
                 add_check(f"{key}_monotonic", False,
                           "rate decreased at some point")
 
-    # ── 7. Denominator constant ─────────────────────────────────────────
     for key in ["semantic_target", "pairwise_target", "security_triples_target",
                 "predicates_target", "hpm_target", "bapc_target"]:
         targets = [line.get(key) for line in lines if line.get(key) is not None]
@@ -1200,7 +1097,6 @@ def validate_timeline(
             else:
                 add_check(f"{key}_constant", False, f"varies: {unique}")
 
-    # ── 8. Rate = covered / target ──────────────────────────────────────
     for prefix in ["semantic", "pairwise", "security_triples", "predicates", "hpm", "bapc"]:
         for line in lines[1:]:
             covered = line.get(f"{prefix}_covered")
@@ -1219,7 +1115,6 @@ def validate_timeline(
         else:
             add_check(f"{prefix}_rate_consistent", True)
 
-    # ── 9. Final timeline matches coverage.json ──────────────────────────
     cov: dict[str, Any] | None = None
     coverage_sections: dict[str, dict[str, Any]] | None = None
     coverage_severity = "error" if is_continuous else "warning"
@@ -1289,13 +1184,10 @@ def validate_timeline(
         else:
             add_check("coverage_modes_complete", True)
 
-    # ── 10. Case/result existence on disk ───────────────────────────────
     _check_case_result_integrity(campaign_dir, lines, add_check)
 
-    # ── 11. Orphan & duplicate detection ────────────────────────────────
     _check_orphans_and_duplicates(campaign_dir, lines, add_check)
 
-    # ── 12. Metadata identity vs timeline ───────────────────────────────
     _check_metadata_identity(metadata, lines, add_check)
     metadata_stop_reason_raw = str((metadata or {}).get("stop_reason") or "").strip()
     normalized_metadata_stop_reason = normalize_stop_reason(metadata_stop_reason_raw)
@@ -1341,7 +1233,6 @@ def validate_timeline(
             severity="error",
         )
 
-    # ── 13. SHA / capability completeness (strict → error) ───────────────
     if metadata is not None:
         source_sha = metadata.get("source_sha", "")
         if source_sha:
@@ -1414,7 +1305,6 @@ def validate_timeline(
             add_check("capability_fingerprint_present", False, "empty or missing capability_fingerprint",
                       severity=_provenance_severity())
 
-    # ── 14. Whitebox events monotonic ───────────────────────────────────
     wb_events = [line.get("whitebox_distinct_events", 0) or 0
                  for line in lines if line.get("completion_seq", 0) > 0]
     if wb_events and any(
@@ -1423,10 +1313,8 @@ def validate_timeline(
     elif wb_events:
         add_check("whitebox_events_monotonic", True)
 
-    # ── 15. Child round timelines (always error) ────────────────────────
     _check_child_timelines(campaign_dir, add_check)
 
-    # ── 16. Provenance manifests ────────────────────────────────────────
     artifact_root = _resolve_artifact_root(campaign_dir)
     if artifact_root is not None:
         manifests_dir = artifact_root / "manifests"
@@ -1438,7 +1326,6 @@ def validate_timeline(
                           f"not found in {manifests_dir}",
                           severity=_provenance_severity())
 
-        # ── 17. artifact-sha256.txt ─────────────────────────────────────
         if formal_bapc_context:
             add_check(
                 "manifest_experiment_contract.json",
@@ -1465,12 +1352,10 @@ def validate_timeline(
                       f"not found: {sha_manifest}",
                       severity=_provenance_severity())
     else:
-        # Cannot resolve artifact root — warn or error depending on mode.
         add_check("artifact_root_resolved", False,
                   "cannot resolve artifact root from campaign path",
                   severity=_provenance_severity())
 
-    # ── Final validity ──────────────────────────────────────────────────
     if is_continuous and metadata is not None:
         _check_continuous_universe_artifacts(
             campaign_dir,
@@ -1516,12 +1401,10 @@ def _schema6_coverage_sections(cov: dict[str, object]) -> dict[str, dict[str, ob
     }
 
 
-# ── retained: D4 case/result integrity helper ────────────────────────────────
 
 
 def _check_case_result_integrity(campaign_dir: Path, lines: list[dict],
                                   add_check) -> None:
-    """Check that timeline case_ids have corresponding case.json and result.json."""
     cases_dir = campaign_dir / "cases"
     results_dir = campaign_dir / "results"
 
@@ -1557,7 +1440,6 @@ def _check_case_result_integrity(campaign_dir: Path, lines: list[dict],
                   f"all {len(tl_case_ids)} results present")
 
 
-# ── CLI ──────────────────────────────────────────────────────────────────────
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1587,14 +1469,12 @@ def main(argv: list[str] | None = None) -> int:
         defer_cross_campaign_artifact_manifest=args.defer_cross_campaign_artifact_manifest,
     )
 
-    # Write validation result
     val_path = campaign_dir / "validation.json"
     val_path.write_text(
         json.dumps(report, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
         encoding="ascii",
     )
 
-    # Print summary
     print(f"campaign={campaign_dir}")
     print(f"valid={report['valid']} errors={report['error_count']} "
           f"warnings={report['warning_count']}")

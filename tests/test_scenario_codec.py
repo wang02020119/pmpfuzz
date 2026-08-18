@@ -1,9 +1,3 @@
-"""Tests: strict scenario codec — all type helpers, round-trip, validation.
-
-Covers: hash (7), round-trip (5), schema version (8), booleans (5),
-integers (10), strings (2), tuples (5), enum (3), serialization (1),
-structural (6), JSON validation (1).
-"""
 
 import json, math, unittest
 from pathlib import Path
@@ -17,9 +11,9 @@ _SPEC_V1 = {"schema_version": 1, "entries": [],
             "probe": {"physical_address": 0, "size": 4, "offset_name": "x"}}
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Hash (7 tests)
-# ═════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestHash(unittest.TestCase):
     def test_deterministic(self):
@@ -64,9 +58,9 @@ class TestHash(unittest.TestCase):
             canonical_scenario_bytes({"profile": "t", "val": float("nan")})
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Round-trip (5 tests)
-# ═════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestRoundTrip(unittest.TestCase):
     def test_minimal(self):
@@ -151,9 +145,9 @@ class TestRoundTrip(unittest.TestCase):
                          scenario_hash(scenario_to_spec(mk("b"))))
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Schema version (8 tests)
-# ═════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestSchema(unittest.TestCase):
     def _reject(self, sv):
@@ -180,9 +174,9 @@ class TestSchema(unittest.TestCase):
                 scenario_from_spec(bad)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Booleans (5 tests)
-# ═════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestBooleans(unittest.TestCase):
     def test_mprv_null_rejected(self):
@@ -216,9 +210,9 @@ class TestBooleans(unittest.TestCase):
                 scenario_from_spec({**_SPEC_V1, "mprv": bad})
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Integers (10 tests)
-# ═════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestIntegers(unittest.TestCase):
     def test_probe_size_str_rejected(self):
@@ -285,9 +279,9 @@ class TestIntegers(unittest.TestCase):
                           "virtual_address": "123"}})
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Strings (2 tests)
-# ═════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestStrings(unittest.TestCase):
     def test_name_dict_rejected(self):
@@ -301,9 +295,9 @@ class TestStrings(unittest.TestCase):
             scenario_from_spec({**_SPEC_V1, "profile": []})
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Tuples (5 tests)
-# ═════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestTuples(unittest.TestCase):
     def test_coverage_tags_str_rejected(self):
@@ -338,9 +332,9 @@ class TestTuples(unittest.TestCase):
                           "walk_addresses": [1, "2"]}})
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Enum (3 tests)
-# ═════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestEnum(unittest.TestCase):
     def test_invalid_translation(self):
@@ -372,9 +366,9 @@ class TestEnum(unittest.TestCase):
         self.assertEqual(recon.entries[0].address_mode, AddressMode.OFF)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Serialization (1 test)
-# ═════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestSerialization(unittest.TestCase):
     def test_non_pmp_scenario_rejected(self):
@@ -384,9 +378,9 @@ class TestSerialization(unittest.TestCase):
                 scenario_to_spec(bad)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Structural validation (6 tests)
-# ═════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestStructural(unittest.TestCase):
     def test_entries_not_list(self):

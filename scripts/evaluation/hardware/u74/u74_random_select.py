@@ -1,24 +1,4 @@
 #!/usr/bin/env python3
-"""Random-control selection for the U74 closedloop-144 experiment.
-
-PROTOCOL §6: the same frozen candidate corpus, same round size, and same
-board/validation/aggregation rules as the guided campaign, but the schedule is
-sampled *uniformly without replacement* instead of by coverage marginal gain.
-Each random campaign uses a distinct seed; at least three seeds are planned
-(two minimum pilot).
-
-Writes the same artifacts as ``u74_guided_select.py`` so the rest of the
-pipeline (board runner, aggregation, convergence) is bit-for-bit shared.
-
-Usage:
-
-    PYTHONPATH=. python scripts/evaluation/hardware/u74/u74_random_select.py \
-        --corpus <...>/corpus/corpus.json \
-        --universe <...>/u74-supported-v4-144.json \
-        --round-index 0 --budget 96 --seed 101 \
-        --campaign-id closedloop-144-random-0101 \
-        --out-dir <...>/random/run-seed-0101/rounds/round-0000
-"""
 from __future__ import annotations
 
 import argparse
@@ -56,7 +36,7 @@ def select_random(
         (
             cand,
             {
-                "marginal_gain": None,  # random sampling does not score coverage
+                "marginal_gain": None,
                 "predicted_bins": sorted(cand.get("predicted_reachable_bins") or []),
                 "predicted_new_bins": [],
                 "config_classes": [list(c) for c in cand.get("config_classes") or []],

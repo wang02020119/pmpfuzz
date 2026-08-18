@@ -1,11 +1,3 @@
-"""Unit tests for the R4 designated probe (docs/riscv-dv-baseline-r4-addendum.md).
-
-(a) probe 存在且是唯一指定操作；除 graft 外无新增 PMP 写
-(b) 合成 completion+probe -> allow 侧 bin（与 v4 mapper 实测输出一致）
-(c) trap-先于-completion -> 探针作废、走原路径
-(d) pmpfuzz/bapc.py 零 diff（git 断言）
-(e) 无 --designated-probe 时输出与 R3 逐位一致（回归）
-"""
 
 from __future__ import annotations
 
@@ -44,8 +36,8 @@ HAS_R3_SPLICER_HISTORY = _git_spec_exists(
     f"{R3_SPLICER_SHA}:scripts/evaluation/baseline_adapters/riscv_dv_splice.py"
 )
 
-# pygen-like fixture: one init: label, one terminal ecall after test_done,
-# and a user_stack_start data symbol for the probe address.
+
+
 FIXTURE_S = """.globl _start
 .section .text
 _start:
@@ -74,8 +66,8 @@ user_stack_start:
     .skip 32
 """
 
-# v4 mapper output for the probe context (verified on server 2026-08-14):
-# exactly 6 bins per the R4 pre-registration (section 2).
+
+
 EXPECTED_BINS = [
     "family=config|pmp_mode=napot|permission_rwx=111|locked=false",
     "family=config|pmp_mode=off|permission_rwx=000|locked=false",
@@ -188,16 +180,16 @@ class TestRiscvDvProbe(unittest.TestCase):
             self.assertIsNotNone(window, "rdv_probe_start/end must be present")
             words = riscv_dv._window_inst_words(elf, window)
             self.assertIsNotNone(words)
-            # last probe instruction must be an ld (opcode 0x03, funct3=3)
+
             last = words[-1][1]
             self.assertEqual(last & 0x7F, 0x03, "probe must end with a load")
             self.assertEqual((last >> 12) & 0x7, 3, "ld funct3=3")
-            # no CSR writes inside the probe window
+
             for _, w in words:
                 self.assertNotEqual(w & 0x7F, 0x73, "probe must not write CSRs")
-            # whole ELF: exactly the two graft PMP CSR writes, no more
-            # (handler csrr reads have funct3=2 and must not count; writes are
-            # csrrw funct3=1 / csrrwi funct3=5)
+
+
+
             all_words = _objdump_words(elf)
             pmp_writes = [
                 w for w in all_words
@@ -206,13 +198,13 @@ class TestRiscvDvProbe(unittest.TestCase):
                 and ((w >> 20) in (0x3A0, 0x3B0))
             ]
             self.assertEqual(len(pmp_writes), 2, "exactly two PMP CSR writes (graft only)")
-            # probe address symbol resolution (fixture defines user_stack_start)
+
             import json
             sidecar = json.loads(probe_sidecar.read_text(encoding="utf-8"))
             self.assertEqual(sidecar["probe_symbol"], "user_stack_start")
             self.assertFalse(sidecar["fallback_slot"])
             self.assertIn("no protection semantics", sidecar["provenance"])
-            # probe symbol must be 8B aligned in the ELF
+
             addr = riscv_dv._symbol_address(elf, "user_stack_start")
             self.assertIsNotNone(addr)
             self.assertEqual(addr % 8, 0, "probe address must be 8B aligned")
@@ -232,7 +224,7 @@ class TestRiscvDvProbe(unittest.TestCase):
         bins = bapc["observed_bins"]
         self.assertEqual(len(bins), 6, "expected exactly 6 allow-side bins")
         self.assertEqual(set(bins), set(EXPECTED_BINS))
-        # family breakdown per pre-registration (section 2)
+
         import collections
         families = collections.Counter(str(b).split("|")[0] for b in bins)
         self.assertEqual(families["family=config"], 2)
@@ -260,7 +252,7 @@ class TestRiscvDvProbe(unittest.TestCase):
         )
         self.assertEqual(branch_reason, legacy_reason, "trap keeps the legacy path")
         self.assertEqual(branch.get("eligible"), legacy.get("eligible"))
-        # completion without a resolved probe is ineligible (probe voided/missing)
+
         completion = dict(classified)
         completion["observed_event"] = "completion"
         voided, voided_reason = riscv_dv.score_case_with_probe(

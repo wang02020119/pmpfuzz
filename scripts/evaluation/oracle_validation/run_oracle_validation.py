@@ -29,7 +29,7 @@ ORACLE_VALIDATION_PROTOCOL_ID = "oracle-validation-v1"
 
 
 def _requires_whitebox_artifacts(*, dut: str, materialize_only: bool) -> bool:
-    # Section 7.6 clean-DUT evidence relies on Chisel printf probes being visible.
+
     return not materialize_only and dut != "spike"
 
 

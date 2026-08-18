@@ -147,7 +147,7 @@ def render_markdown_report(run_dir: Path) -> str:
         ]
     )
 
-    # ---- Execution-Qualified Coverage ---------------------------------------
+
     exec_cov = coverage.get("execution_coverage") or {}
     lines.extend([
         "## Execution-Qualified Coverage",
@@ -190,7 +190,7 @@ def render_markdown_report(run_dir: Path) -> str:
                 f"{section.get('total_target_bins', 0)} ({rate_str})"
             )
         lines.append("")
-        # suggested schedule command
+
         target = coverage.get("target") or "core-stateful"
         lines.append(
             f"Suggested next schedule: `python3 -m pmpfuzz schedule --from-runs {run_dir} "
@@ -203,7 +203,7 @@ def render_markdown_report(run_dir: Path) -> str:
         lines.append("- No execution coverage data available")
         lines.append("")
 
-    # ---- Old manifest guidance (kept for reference) -------------------------
+
     lines.extend(
         [
             "## Manifest Coverage Gaps (reference)",

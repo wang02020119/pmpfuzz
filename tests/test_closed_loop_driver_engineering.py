@@ -1,9 +1,3 @@
-"""Engineering-only end-to-end guards for the closed-loop driver.
-
-These tests intentionally avoid interpreting any nonpass result.  They verify
-process orchestration, result accounting, timing inputs, feedback eligibility,
-and schedule traceability.
-"""
 
 from __future__ import annotations
 
@@ -160,7 +154,6 @@ class TestRoundExecution(unittest.TestCase):
         self.assertTrue(state._round_results[0]["ingest_success"])
 
     def test_run_returncode_one_is_not_infrastructure_failure_when_ingest_is_complete(self):
-        """The run CLI uses rc=1 for opaque nonpass results; complete artifacts remain usable."""
         pool = [_candidate(0)]
         state = driver.CampaignState("campaign", "random", "spike", 1, "semantic", pool, 999.0)
         args = Namespace(seed=1)

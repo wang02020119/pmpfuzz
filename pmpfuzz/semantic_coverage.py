@@ -516,7 +516,6 @@ def contract_predicates_for_scenario(scenario: PmpScenario) -> list[str]:
 
 
 def _capability_case_for_scenario(scenario: PmpScenario) -> dict[str, Any]:
-    """Build a minimal case-like dict that oracle_applicability_for_case can read."""
     ad_mode = getattr(scenario, 'ad_update_mode', None)
     case: dict[str, Any] = {
         "profile": scenario.profile,
@@ -534,14 +533,8 @@ def _capability_case_for_scenario(scenario: PmpScenario) -> dict[str, Any]:
     return case
 
 
-# ---------------------------------------------------------------------------
-# ExecutionCoverageContext — single source of truth for execution coverage
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class ExecutionCoverageContext:
-    """Bundles DUT, capability, and run directories for execution coverage."""
 
     dut: str
     capability: dict[str, Any]
@@ -550,7 +543,6 @@ class ExecutionCoverageContext:
 
 
 def _capability_fingerprint(capability: dict[str, Any] | None) -> str:
-    """Stable fingerprint for a capability dict using coverage projection."""
     if capability is None:
         return "none"
     projection = capability_coverage_projection(capability)
@@ -563,22 +555,13 @@ def resolve_execution_coverage_context(
     *,
     dut: str | None,
 ) -> ExecutionCoverageContext:
-    """Resolve and validate the execution coverage context across run_dirs.
-
-    Rules:
-    - Every run_dir must have a dut_capabilities.json.
-    - When *dut* is explicit, every capability map must contain it.
-    - When *dut* is None, auto-infer ONLY when every run has exactly one DUT
-      with the same name.
-    - All runs must share the same capability fingerprint for the selected DUT.
-    """
     run_dirs = tuple(run_dirs)
     if not run_dirs:
         raise ValueError("at least one run_dir is required")
 
-    requested_dut = dut  # preserve original: None means "auto-infer"
+    requested_dut = dut
     resolved_dut: str | None = None
-    fingerprints: dict[str, str] = {}  # dut_name -> fingerprint
+    fingerprints: dict[str, str] = {}
     capability_by_run: dict[Path, dict[str, Any]] = {}
 
     for rd in run_dirs:
@@ -591,7 +574,7 @@ def resolve_execution_coverage_context(
         capability_by_run[rd] = cap_map
 
         if requested_dut is not None:
-            # Explicit DUT: every map must contain it
+
             if requested_dut not in cap_map:
                 raise ValueError(
                     f"run directory {rd} has no capability entry for DUT "
@@ -600,7 +583,7 @@ def resolve_execution_coverage_context(
             fp = _capability_fingerprint(cap_map[requested_dut])
             fingerprints[requested_dut] = fp
         else:
-            # Auto-infer: every run must have exactly one DUT with same name
+
             dut_names = sorted(cap_map.keys())
             if len(dut_names) == 0:
                 raise ValueError(
@@ -622,12 +605,12 @@ def resolve_execution_coverage_context(
             fp = _capability_fingerprint(cap_map[inferred])
             fingerprints[inferred] = fp
 
-    # --- finalize DUT name --------------------------------------------------
+
     if requested_dut is not None:
         resolved_dut = requested_dut
     assert resolved_dut is not None
 
-    # --- validate fingerprint consistency across runs -----------------------
+
     first_fp = fingerprints[resolved_dut]
     for rd in run_dirs:
         cap_map = capability_by_run[rd]
@@ -672,11 +655,6 @@ def _gap_coverage_rate(
     *,
     coverage_basis: str,
 ) -> float | None:
-    """Return coverage rate consistent with the coverage basis.
-
-    Execution mode: zero denominator → None (no applicable targets).
-    Manifest mode: zero denominator → 1.0 (legacy compatibility).
-    """
     if total:
         return round(covered / total, 6)
     if coverage_basis == "execution":
@@ -689,12 +667,6 @@ def _observed_execution_bins(
     dut: str | None,
     bin_fn,
 ) -> set[str]:
-    """Return bins from execution-qualified results for *dut* (or all DUTs).
-
-    Uses qualify_result_for_coverage as the single source of truth so that
-    coverage gap, build_schedule, and coverage.py all share the same
-    eligibility rules.
-    """
     case_map = load_case_map(run_dir)
     results_by_case = load_results(run_dir)
     observed: set[str] = set()
@@ -723,7 +695,7 @@ def coverage_gap_from_runs(
     capability: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     run_dirs = tuple(Path(item) for item in run_dirs)
-    # --- execution mode: resolve context (fail closed) ----------------------
+
     resolved_dut: str | None = dut
     resolved_capability: dict[str, Any] | None = capability
     if coverage_basis == "execution":
@@ -789,7 +761,7 @@ def combination_gap_from_runs(
     if coverage_mode not in {"pairwise", "security-triples"}:
         raise ValueError("combination coverage gap requires pairwise or security-triples mode")
 
-    # --- execution mode: resolve context (fail closed) ----------------------
+
     resolved_dut: str | None = dut
     resolved_capability: dict[str, Any] | None = capability
     if coverage_basis == "execution":
@@ -856,7 +828,7 @@ def predicate_gap_from_runs(
     capability: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     run_dirs = tuple(Path(item) for item in run_dirs)
-    # --- execution mode: resolve context (fail closed) ----------------------
+
     resolved_dut: str | None = dut
     resolved_capability: dict[str, Any] | None = capability
     if coverage_basis == "execution":
@@ -920,7 +892,7 @@ def build_schedule(
         raise ValueError(f"unsupported coverage mode: {coverage_mode}")
     run_dirs = tuple(Path(item) for item in run_dirs)
 
-    # -- resolve DUT and capability -------------------------------------------
+
     ctx: ExecutionCoverageContext | None = None
     if coverage_basis == "execution":
         ctx = resolve_execution_coverage_context(run_dirs, dut=dut)
@@ -992,7 +964,7 @@ def build_schedule(
         missing -= best_gain
         selected.append(_schedule_entry(best, best_gain, seed, coverage_mode=coverage_mode))
 
-    # -- qualification summary -----------------------------------------------
+
     qualification = {"eligible_results": 0, "excluded_results": 0,
                      "excluded_by_reason": {}}
     if coverage_basis == "execution" and resolved_dut:
@@ -1061,7 +1033,7 @@ def write_schedule(
 ) -> Path:
     out_dir = Path(out_dir)
     run_dirs = tuple(Path(item) for item in run_dirs)
-    # Resolve capability for gap computation
+
     ctx: ExecutionCoverageContext | None = None
     resolved_dut = dut
     capability = None
@@ -1110,7 +1082,6 @@ def _resolve_dut(
     capability_map: dict[str, Any],
     run_dirs: list[Path],
 ) -> str:
-    """Resolve DUT name: explicit > auto-infer from single-DUT > error."""
     if dut is not None:
         return dut
     dut_names = list(capability_map.keys())
@@ -1125,7 +1096,6 @@ def _resolve_dut(
 
 
 def _resolve_capability_map(run_dirs: list[Path]) -> dict[str, Any] | None:
-    """Load capability map from the first run_dir that has one."""
     for run_dir in run_dirs:
         cap_map = load_capability_map(run_dir)
         if cap_map:
@@ -1255,7 +1225,7 @@ def _target_candidates(*, target: str, include_experimental: bool, seed: int,
         generator = ScenarioGenerator(seed=seed, include_smepmp=profile.startswith("smepmp"), profile=profile)
         for index, scenario in enumerate(generator.generate_batch(count)):
             capability_case = _capability_case_for_scenario(scenario)
-            # Filter by capability if provided
+
             if capability is not None:
                 if oracle_applicability_for_case(capability_case, capability) != "valid":
                     continue

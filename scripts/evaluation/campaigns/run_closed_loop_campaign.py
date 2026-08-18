@@ -1,28 +1,9 @@
 #!/usr/bin/env python3
-"""Closed-loop fuzzing campaign driver — fixed multi-round accumulation.
-
-Architecture (Phase B4):
-  Single driver process maintains CampaignState across all rounds.
-  Each round calls pmpfuzz run via subprocess with --schedule.
-  Driver accumulates coverage, completion_seq, and timeline in-process.
-  Wall-clock includes scheduling and coverage computation time.
-
-Variants (Phase B3):
-  random    — seeded shuffle of full candidate pool, without replacement
-  guided    — coverage-gap schedule from execution-qualified coverage
-  bb        — blackbox coverage feedback (no whitebox events for scheduling)
-  bb-wb     — up to 16 whitebox + blackbox to fill round_size (16+16 rule)
-
-Candidate pool (Phase B2):
-  Built once at campaign start, saved as metrics/candidate_pool.json.
-  executed_candidates.jsonl tracks which candidates have been run.
-"""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path as _Path
-# Ensure pmpfuzz package is importable when script is run directly
 _script_dir = _Path(__file__).resolve().parents[3]
 if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
@@ -989,13 +970,7 @@ def _atomic_write_text(path: Path, text: str, *, encoding: str = "ascii") -> Non
                 pass
         raise
 
-# ---------------------------------------------------------------------------
-# CampaignState — single source of truth across all rounds
-# ---------------------------------------------------------------------------
-
-
 class CampaignState:
-    """In-memory campaign state that survives across rounds (Phase B4)."""
 
     VALID_VARIANTS = ALL_VARIANTS
 
@@ -1019,18 +994,15 @@ class CampaignState:
         self.coverage_mode = coverage_mode
         self.start_time = start_time
 
-        # Candidate pool
         self._candidate_pool: list[dict[str, Any]] = list(candidate_pool)
         self._executed_ids: set[str] = set()
 
-        # Accumulated state
         self._completion_seq: int = 0
         self._completed_cases: int = 0
         self._eligible_cases: int = 0
         self._round_idx: int = 0
         self._elapsed_wall_offset: float = 0.0
 
-        # Coverage sets (accumulated across all rounds)
         self._covered_semantic: set[str] = set()
         self._covered_pairwise: set[str] = set()
         self._covered_triples: set[str] = set()
@@ -1040,7 +1012,6 @@ class CampaignState:
         self._covered_bapc: set[str] = set()
         self._eligible_bapc_cases: int = 0
 
-        # Target bin counts (Fix 1) — computed once from candidate pool
         if coverage_universes is not None:
             from pmpfuzz.bapc import infer_bapc_core_version
             from pmpfuzz.coverage_universe import validate_coverage_universe
@@ -1086,22 +1057,17 @@ class CampaignState:
         self._target_hpm: int = len(self._target_hpm_bins)
         self._target_bapc: int = len(self._target_bapc_bins)
 
-        # Whitebox events
         self._whitebox_event_ids: set[str] = set()
 
-        # Timeline lines + persistence (Fix 8)
         self._timeline_lines: list[dict] = []
         self._timeline_path: Path | None = None
 
-        # Round failure tracking
         self._round_results: list[dict] = []
         self._any_round_failed: bool = False
         self._stop_reason: str | None = None
         self._convergence = ContinuousConvergenceTracker()
         self._unique_scenario_count: int = 0
         self._pending_count: int = 0
-
-    # -- properties ----------------------------------------------------------
 
     @property
     def completion_seq(self) -> int:
@@ -1298,8 +1264,6 @@ class CampaignState:
     def convergence_mode_snapshot(self) -> dict[str, dict[str, Any]]:
         return self._convergence.mode_snapshot()
 
-    # -- candidate pool -----------------------------------------------------
-
     def unexecuted_candidates(self) -> list[dict[str, Any]]:
         return [c for c in self._candidate_pool if c["candidate_id"] not in self._executed_ids]
 
@@ -1307,8 +1271,6 @@ class CampaignState:
         if candidate_id in self._executed_ids:
             raise ValueError(f"duplicate execution: {candidate_id}")
         self._executed_ids.add(candidate_id)
-
-    # -- round tracking ------------------------------------------------------
 
     def advance_round(self) -> None:
         self._round_idx += 1
@@ -1318,8 +1280,6 @@ class CampaignState:
         if not success:
             self._any_round_failed = True
 
-    # -- case completion ----------------------------------------------------
-
     def record_case(self, candidate_id, case_id, profile, status, failure_class,
                     eligible, qualification_reason, elapsed_wall, case_elapsed,
                     new_semantic, new_pairwise, new_triples, new_predicates, new_whitebox,
@@ -1327,17 +1287,11 @@ class CampaignState:
                     new_bapc=0, bapc_eligible=False, case_bapc=None, bapc_snapshot=None,
                     case_semantic=None, case_pairwise=None, case_triples=None, case_predicates=None,
                     security_events=None):
-        """Fix 2+8: Update coverage from bin sets, write line, persist incrementally.
-
-        If case_* bin sets are provided, they are accumulated before writing
-        the timeline line (only if eligible).
-        """
         self.mark_executed(candidate_id)
         self._completion_seq += 1
         self._completed_cases += 1
         if eligible:
             self._eligible_cases += 1
-            # Actually apply coverage changes to covered sets
             if case_semantic is not None:
                 self._covered_semantic.update(case_semantic)
             if case_pairwise is not None:
@@ -1376,7 +1330,6 @@ class CampaignState:
         return line
 
     def _make_timeline_line(self, **kwargs) -> dict[str, Any]:
-        """Fix 1: Include real cumulative covered/target/rate values."""
         sem_cov = len(self._covered_semantic)
         pair_cov = len(self._covered_pairwise)
         trip_cov = len(self._covered_triples)
@@ -1437,8 +1390,6 @@ class CampaignState:
             "security_events": kwargs.get("security_events") or [],
         }
 
-    # -- coverage accumulation (Fix 2: only update for eligible) ------------
-
     def update_coverage_sets(
         self,
         semantic: set[str],
@@ -1447,7 +1398,6 @@ class CampaignState:
         predicates: set[str],
         eligible: bool,
     ) -> tuple[int, int, int, int]:
-        """Fix 2: Only update coverage if eligible. Returns new bin counts."""
         if not eligible:
             return 0, 0, 0, 0
         semantic = semantic & self._target_semantic_bins
@@ -1529,10 +1479,7 @@ class CampaignState:
         )
         self._timeline_lines.append(line)
 
-    # -- timeline persistence (Fix 8: incremental) ---------------------------
-
     def set_timeline_path(self, path: Path) -> None:
-        """Set the output path and write the baseline (idempotent)."""
         self._timeline_path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists() or path.stat().st_size == 0:
@@ -1542,7 +1489,6 @@ class CampaignState:
             )
 
     def _persist_line(self, line: dict) -> None:
-        """Fix 8: Append one line and flush immediately."""
         if self._timeline_path is None:
             return
         with open(self._timeline_path, "a", encoding="ascii") as fh:
@@ -1550,7 +1496,6 @@ class CampaignState:
             fh.flush()
 
     def write_timeline(self, path: Path) -> None:
-        """Write accumulated timeline to JSONL file (full rewrite)."""
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="ascii") as fh:
             fh.write(json.dumps(self._make_baseline_line(), ensure_ascii=True, sort_keys=True) + "\n")
@@ -1559,7 +1504,6 @@ class CampaignState:
             fh.flush()
 
     def _make_baseline_line(self) -> dict:
-        """Baseline with real target counts (Fix: denominator constant)."""
         return {
             "schema_version": 1,
             "campaign_id": self.campaign_id,
@@ -1612,21 +1556,12 @@ class CampaignState:
         }
 
 
-# ---------------------------------------------------------------------------
-# Candidate pool builder (Phase B2)
-# ---------------------------------------------------------------------------
-
-
 def build_candidate_pool(
     target: str = "core-stateful",
     include_experimental: bool = False,
     seed: int = 20260628,
     capability: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build the fixed candidate pool for a campaign.
-
-    Each candidate has a stable candidate_id (sha256 of profile+seed+index).
-    """
     from pmpfuzz.scenario import ScenarioGenerator
     from pmpfuzz.scenario_codec import scenario_hash, scenario_to_spec
     from pmpfuzz.semantic_coverage import _target_candidates
@@ -1665,15 +1600,9 @@ def build_candidate_pool(
 
 
 def _make_candidate_id(profile: str, index: int, seed: int) -> str:
-    """Stable candidate ID from profile, index, and seed."""
     return hashlib.sha256(
         f"{profile}:{seed}:{index}".encode("ascii")
     ).hexdigest()[:16]
-
-
-# ---------------------------------------------------------------------------
-# Variant selection (Phase B3)
-# ---------------------------------------------------------------------------
 
 
 def select_next_candidates(
@@ -1682,10 +1611,6 @@ def select_next_candidates(
     run_dirs: list[Path],
     seed: int,
 ) -> list[dict[str, Any]]:
-    """Select the next batch of candidates based on variant.
-
-    Returns a list of candidate dicts (from the pool) to execute.
-    """
     unexec = state.unexecuted_candidates()
     if not unexec:
         return []
@@ -1700,7 +1625,7 @@ def select_next_candidates(
     elif state.variant == "guided":
         return _select_guided(state, unexec, round_size, run_dirs, seed)
     elif state.variant == "bb":
-        return _select_guided(state, unexec, round_size, run_dirs, seed)  # BB = coverage-guided only
+        return _select_guided(state, unexec, round_size, run_dirs, seed)
     elif state.variant == "bb-wb":
         return _select_bb_wb(state, unexec, round_size, run_dirs, seed)
     return []
@@ -1709,7 +1634,6 @@ def select_next_candidates(
 def _select_random(
     unexec: list[dict[str, Any]], count: int, shuffle_seed: int
 ) -> list[dict[str, Any]]:
-    """Seeded shuffle without replacement (Phase B3 random)."""
     shuffled = list(unexec)
     rng = rng_mod.Random(shuffle_seed)
     rng.shuffle(shuffled)
@@ -1719,7 +1643,6 @@ def _select_random(
 def _selection_record(
     candidate: dict[str, Any], source: str, estimated_new_bins: int
 ) -> dict[str, Any]:
-    """Return a schedule-local copy with an auditable selection reason."""
     return {
         **candidate,
         "selection_source": source,
@@ -1728,7 +1651,6 @@ def _selection_record(
 
 
 def _schedule_entry(candidate: dict[str, Any], seed: int) -> dict[str, Any]:
-    """Serialize a candidate without losing its selection provenance."""
     entry = {
         "candidate_id": candidate["candidate_id"],
         "profile": candidate["profile"],
@@ -1773,7 +1695,6 @@ def _select_guided(
     run_dirs: list[Path],
     seed: int,
 ) -> list[dict[str, Any]]:
-    """P0-1 FIX: DUT-qualified coverage-gap greedy + seeded fallback."""
     dut = state.dut
     missing: set[str] = set()
     bin_key = "semantic_bins"
@@ -1793,7 +1714,6 @@ def _select_guided(
             missing = _coverage_gap_combo(run_dirs, state.coverage_mode, dut, target_bins)
             bin_key = "pairwise_bins" if state.coverage_mode == "pairwise" else "security_triple_bins"
 
-    # Greedy phase
     selected: list[dict[str, Any]] = []
     available = list(unexec)
 
@@ -1807,7 +1727,6 @@ def _select_guided(
                 best = c
                 best_gain = gain
             elif len(gain) == len(best_gain) and gain and best is not None:
-                # Stable tie-breaking: lower candidate_id wins
                 if c["candidate_id"] < best["candidate_id"]:
                     best = c
                     best_gain = gain
@@ -1817,7 +1736,6 @@ def _select_guided(
         available.remove(best)
         selected.append(_selection_record(best, "blackbox", len(best_gain)))
 
-    # P0-1 FIX: Fill remaining slots with seeded fallback
     if len(selected) < count:
         fallback_ids = {c["candidate_id"] for c in selected}
         fallback_pool = [c for c in unexec if c["candidate_id"] not in fallback_ids]
@@ -1834,11 +1752,6 @@ def _select_bb_wb(
     run_dirs: list[Path],
     seed: int,
 ) -> list[dict[str, Any]]:
-    """P0-4 FIX: 16+16 rule with DUT-qualified whitebox + blackbox + fallback.
-
-    Tracks per-round metadata: whitebox_count, blackbox_count, fallback_count,
-    deduplicated_count, already_executed_excluded_count, final_selected_count.
-    """
     whitebox_selected, wb_profile_counts, wb_warnings = _whitebox_schedule(
         unexec, run_dirs, max_wb=16
     )
@@ -1869,7 +1782,6 @@ def _select_bb_wb(
         fallback_count = len(extra)
         deduped.extend(_selection_record(c, "fallback", 0) for c in extra)
 
-    # P0-4: Log round metadata
     print(f"  [bb-wb] wb={len(whitebox_selected)} bb={len(blackbox_selected)} "
           f"fallback={fallback_count} final={len(deduped)}")
 
@@ -1882,11 +1794,6 @@ def _select_bb_wb(
 def _whitebox_schedule(
     unexec: list[dict[str, Any]], run_dirs: list[Path], max_wb: int
 ) -> tuple[list[dict[str, Any]], dict[str, int], list[str]]:
-    """P0-4 FIX: Select up to max_wb candidates from profiles with eligible whitebox events.
-
-    Only qual.eligible results contribute to feedback. Returns:
-      (selected_candidates, profile_event_counts, warning_messages)
-    """
     from pmpfuzz.whitebox import extract_whitebox_signals_for_result
     from pmpfuzz.coverage_qualification import load_case_map, load_results, qualify_result_for_coverage
 
@@ -1907,7 +1814,6 @@ def _whitebox_schedule(
             if case is None:
                 continue
             for result in result_list:
-                # P0-4: Only eligible results contribute
                 qual = qualify_result_for_coverage(case, result)
                 if not qual.eligible:
                     skipped_ineligible += 1
@@ -1946,7 +1852,6 @@ def _coverage_gap_semantic(
     dut: str,
     target_bins: set[str] | frozenset[str] | None = None,
 ) -> set[str]:
-    """P0-1 FIX: Compute missing semantic bins using real DUT name."""
     from pmpfuzz.semantic_coverage import semantic_bins_for_case, target_semantic_bins
     from pmpfuzz.coverage_qualification import collect_execution_evidence
 
@@ -1965,7 +1870,6 @@ def _coverage_gap_predicates(
     dut: str,
     target_bins: set[str] | frozenset[str] | None = None,
 ) -> set[str]:
-    """P0-1 FIX: Compute missing predicate bins using real DUT name."""
     from pmpfuzz.semantic_coverage import contract_predicates_for_case, target_contract_predicates
     from pmpfuzz.coverage_qualification import collect_execution_evidence
 
@@ -1985,7 +1889,6 @@ def _coverage_gap_combo(
     dut: str,
     target_bins: set[str] | frozenset[str] | None = None,
 ) -> set[str]:
-    """P0-1 FIX: Compute missing combo bins using real DUT name."""
     from pmpfuzz.semantic_coverage import combo_bins_for_case, target_combo_bins
     from pmpfuzz.coverage_qualification import collect_execution_evidence
 
@@ -1999,13 +1902,7 @@ def _coverage_gap_combo(
     return set(target_bins) - observed
 
 
-# ---------------------------------------------------------------------------
-# Main driver
-# ---------------------------------------------------------------------------
-
-
 def run_closed_loop(args: argparse.Namespace) -> int:
-    """Execute a closed-loop campaign with single CampaignState (Phase B4)."""
     _resolve_requested_bapc_core_version(args)
     _apply_experiment_protocol_defaults(args)
     if args.variant in CONTINUOUS_VARIANTS:
@@ -2026,11 +1923,9 @@ def run_closed_loop(args: argparse.Namespace) -> int:
     metrics_dir = campaign_dir / "metrics"
     metrics_dir.mkdir()
 
-    # Record start
     start_utc = datetime.now(timezone.utc).isoformat()
     start_wall = time.monotonic()
 
-    # Build candidate pool (Phase B2)
     print(f"[{datetime.now(timezone.utc).isoformat()}] Building candidate pool...")
     from pmpfuzz.capabilities import capability_for_dut
     from pmpfuzz.bapc import BAPC_SCHEMA_VERSION
@@ -2045,7 +1940,6 @@ def run_closed_loop(args: argparse.Namespace) -> int:
     pool_path.write_text(json.dumps(pool, indent=2, ensure_ascii=True), encoding="ascii")
     print(f"  Pool: {len(pool)} candidates")
 
-    # Create campaign state (Phase B4)
     campaign_id = args.campaign_id or f"{args.experiment_id}__{args.dut}__{args.variant}__{args.coverage_mode}__seed-{args.seed:04d}"
     state = CampaignState(
         campaign_id=campaign_id,
@@ -2060,7 +1954,6 @@ def run_closed_loop(args: argparse.Namespace) -> int:
     if args.coverage_mode == "bapc" and not state.target_bapc_bins:
         raise ValueError("BAPC coverage mode resolved to an empty target universe")
 
-    # Write metadata
     meta = {
         "schema_version": "1.0",
         "experiment_id": args.experiment_id,
@@ -2107,13 +2000,10 @@ def run_closed_loop(args: argparse.Namespace) -> int:
         encoding="ascii",
     )
 
-    # Build base command and environment
     base_cmd, base_env = _build_base_cmd(args)
 
-    # Fix 8: Set timeline path for incremental persistence
     state.set_timeline_path(metrics_dir / "coverage_timeline.jsonl")
 
-    # --- Bootstrap (Fix 3: map to candidate pool) ---
     print(f"[{datetime.now(timezone.utc).isoformat()}] Bootstrap (size={args.bootstrap_size})")
     bootstrap_dir = rounds_dir / "round_0000"
     bootstrap_limit = None
@@ -2127,14 +2017,13 @@ def run_closed_loop(args: argparse.Namespace) -> int:
                          env=base_env,
                          round_start_offset=round_start_offset)
     if not success:
-        print("ERROR: bootstrap failed — terminating campaign")
+        print("ERROR: bootstrap failed; terminating campaign")
         _finalize(state, campaign_dir, metrics_dir, meta, start_wall)
         return 1
     state.advance_round()
 
     completed_round_dirs = [bootstrap_dir]
 
-    # --- Main loop ---
     max_rounds = getattr(args, "max_rounds", None)
     while True:
         if max_completed_cases not in {None, ""} and state.completed_cases >= int(max_completed_cases):
@@ -2159,7 +2048,6 @@ def run_closed_loop(args: argparse.Namespace) -> int:
 
         round_dir = rounds_dir / f"round_{state.round_idx:04d}"
 
-        # Select candidates
         schedule_start = time.monotonic()
         requested_round_size = int(args.round_size)
         if max_completed_cases not in {None, ""}:
@@ -2177,17 +2065,15 @@ def run_closed_loop(args: argparse.Namespace) -> int:
             print("  No candidates to execute (pool exhausted)")
             break
 
-        # Fix 4: schedule seed = args.seed (same as candidate pool generation seed)
         schedule_path = metrics_dir / f"schedule_round_{state.round_idx:04d}.json"
         schedule_data = {
             "schema_version": 1,
-            "seed": args.seed,  # Fix 4: consistent with candidate pool
+            "seed": args.seed,
             "selection_summary": _selection_summary(candidates),
             "entries": [_schedule_entry(c, args.seed) for c in candidates],
         }
         schedule_path.write_text(json.dumps(schedule_data, indent=2, ensure_ascii=True), encoding="ascii")
 
-        # Execute round with whitebox enabled
         round_start_offset = time.monotonic() - start_wall
         success = _run_round(base_cmd, round_dir, args, state,
                              schedule_path=schedule_path, expected_candidates=candidates,
@@ -2200,14 +2086,12 @@ def run_closed_loop(args: argparse.Namespace) -> int:
         completed_round_dirs.append(round_dir)
         state.advance_round()
 
-    # --- Finalize ---
     _finalize(state, campaign_dir, metrics_dir, meta, start_wall)
     _finalize_artifact_root(args, artifact_root)
     return 0 if not state.any_round_failed else 1
 
 
 def run_continuous_closed_loop(args: argparse.Namespace) -> int:
-    """Execute a continuous closed-loop campaign with mutation/corpus state."""
     from pmpfuzz.capabilities import capability_for_dut
     from pmpfuzz.continuous import ScenarioStream
     from pmpfuzz.continuous_campaign import ContinuousQueueManager, candidate_record_from_dict
@@ -3101,12 +2985,10 @@ def _select_bootstrap_candidates(
     *,
     limit: int | None = None,
 ) -> list[dict]:
-    """Fix 3: Select bootstrap cases from the candidate pool."""
     unexec = state.unexecuted_candidates()
     bootstrap_size = int(args.bootstrap_size)
     if limit is not None:
         bootstrap_size = min(bootstrap_size, max(0, int(limit)))
-    # Bootstrap uses the first N unexecuted from the pool (in pool order)
     return unexec[:bootstrap_size]
 
 
@@ -3123,14 +3005,9 @@ def _run_round(
     round_start_offset: float = 0.0,
     on_case_ingested: Any | None = None,
 ) -> bool:
-    """Execute one round via subprocess, then ingest results.
-
-    Fix 9: Check subprocess return code and round result integrity.
-    """
     is_bootstrap = bootstrap_candidates is not None
     candidates = bootstrap_candidates or expected_candidates or []
 
-    # Fix 3: Write schedule that maps to candidate pool
     if is_bootstrap:
         schedule_path = round_dir.parent / "schedule_bootstrap.json"
         schedule_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3148,12 +3025,9 @@ def _run_round(
                    "--variant", state.variant]
     round_cmd += ["--schedule", str(schedule_path), "--seed", str(args.seed)]
 
-    # P0-3: Separate process_success from ingest_success
     proc = subprocess.run(round_cmd, check=False, env=env)
-    # The PMPFuzz CLI uses exit status 1 when one or more cases produce the
-    # opaque ``nonpass`` outcome.  That is a completed engineering run, not a
-    # launcher/infrastructure failure.  Artifact reconciliation below remains
-    # authoritative for deciding whether the round is usable.
+
+
     process_success = proc.returncode in (0, 1)
     ingest_success = _ingest_round_results(state, round_dir, candidates,
                                             enable_whitebox=enable_whitebox,
@@ -3182,11 +3056,6 @@ def _ingest_round_results(
     round_start_offset: float = 0.0,
     on_case_ingested: Any | None = None,
 ) -> bool:
-    """P0-2 FIX: Read round timeline for real completion order and wall time.
-
-    Each case's global wall time = round_start_offset + round_timeline_wall.
-    This preserves real completion order and avoids batch-jump artifacts.
-    """
     from pmpfuzz.coverage_qualification import load_case_map, load_results, qualify_result_for_coverage
     from pmpfuzz.semantic_coverage import (
         combo_bins_for_case, contract_predicates_for_case, semantic_bins_for_case,
@@ -3197,7 +3066,6 @@ def _ingest_round_results(
     cand_by_name: dict[str, str] = {c.get("name", ""): c["candidate_id"] for c in expected_candidates}
     candidate_by_name: dict[str, dict[str, Any]] = {c.get("name", ""): c for c in expected_candidates}
 
-    # The child timeline is the only authoritative source for completion order.
     round_tl_path = round_dir / "metrics" / "coverage_timeline.jsonl"
     tl_order: list[dict] = []
     if not round_tl_path.exists():
@@ -3248,7 +3116,6 @@ def _ingest_round_results(
 
     validated_records: list[dict[str, Any]] = []
 
-    # P0-2: Process in timeline order (real completion order)
     for tl_entry in tl_order:
         case_name = tl_entry.get("case_id", "")
         if not case_name:
@@ -3288,7 +3155,6 @@ def _ingest_round_results(
         qual = qualify_result_for_coverage(case, result)
         status = result.get("status", "unknown")
 
-        # P0-2: Global wall time = round offset + round-relative completion time
         case_elapsed = result.get("elapsed_seconds", 0)
         completion_monotonic = tl_entry.get("completion_monotonic_seconds")
         if completion_monotonic is not None:
@@ -3297,7 +3163,6 @@ def _ingest_round_results(
             round_wall = tl_entry.get("elapsed_wall_seconds", 0) or 0
             elapsed_wall = round_start_offset + float(round_wall)
 
-        # Compute coverage contribution
         case_sem = set(semantic_bins_for_case(case)) & state.target_semantic_bins
         case_pair = {b for b in combo_bins_for_case(case) if b.startswith("combo2:")} & state.target_pairwise_bins
         case_trip = {b for b in combo_bins_for_case(case) if b.startswith("combo3:")} & state.target_triples_bins
@@ -3473,7 +3338,6 @@ def _finalize(
     meta: dict,
     start_wall: float,
 ) -> None:
-    """Write final campaign outputs."""
     end_utc = datetime.now(timezone.utc).isoformat()
     elapsed_wall_seconds = _current_elapsed_wall_seconds(state, start_wall)
     meta["end_utc"] = end_utc
@@ -3499,13 +3363,11 @@ def _finalize(
         encoding="ascii",
     )
 
-    # Write campaign-level timeline
     tl_path = metrics_dir / "coverage_timeline.jsonl"
     state.write_timeline(tl_path)
 
     _write_security_event_timeseries(metrics_dir, state, meta)
 
-    # Write executed_candidates.jsonl
     exec_path = metrics_dir / "executed_candidates.jsonl"
     with exec_path.open("w", encoding="ascii") as fh:
         for cid in sorted(state.executed_ids):
@@ -3522,11 +3384,6 @@ def _finalize(
     print(f"  Wall time: {elapsed_wall_seconds:.0f}s")
     print(f"  Any round failed: {state.any_round_failed}")
     print(f"  Stop reason: {state.stop_reason}")
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _write_campaign_coverage(campaign_dir: Path, state: CampaignState) -> None:
@@ -3628,7 +3485,6 @@ def _write_campaign_coverage(campaign_dir: Path, state: CampaignState) -> None:
 
 
 def _build_base_cmd(args: argparse.Namespace) -> tuple[list[str], dict]:
-    """Return (command_list, env_dict) with PYTHONPATH set."""
     env = os.environ.copy()
     project_root = str(Path(__file__).resolve().parents[3])
     existing = env.get("PYTHONPATH", "")
@@ -3727,8 +3583,6 @@ def _write_commands_log(metrics_dir: Path) -> None:
     log_path = metrics_dir / "commands.log"
     if not log_path.exists():
         log_path.write_text(
-            f"# PMPFuzz closed-loop campaign commands\n"
-            f"# Recorded at {datetime.now(timezone.utc).isoformat()}\n"
             f"command: {' '.join(sys.argv)}\n",
             encoding="ascii",
         )

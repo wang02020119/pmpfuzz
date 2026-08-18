@@ -1,10 +1,3 @@
-"""Unit tests for the R3 graft (docs/riscv-dv-baseline-r3-addendum.md).
-
-(a) graft 后 ELF 含恰好两条 pmp CSR 写且值正确
-(b) 快照非 OFF 条目=1、模式=(napot,RWX,unlocked)
-(c) pmpfuzz/bapc.py 未被修改
-(d) 无 graft 时行为与 v1 逐位一致
-"""
 
 from __future__ import annotations
 
@@ -43,7 +36,7 @@ HAS_V1_SPLICER_HISTORY = _git_spec_exists(
     f"{V1_SPLICER_SHA}:scripts/evaluation/baseline_adapters/riscv_dv_splice.py"
 )
 
-# pygen-like fixture: exactly one init: label plus a completion ecall.
+
 FIXTURE_S = """.globl _start
 .section .text
 _start:
@@ -98,7 +91,6 @@ def _compile(s_path, elf_path):
 
 
 def _li_value(lui, addiw):
-    """Reconstruct the li target from the two words the assembler emits."""
     lui_imm = (lui >> 12) & 0xFFFFF
     imm = (((addiw >> 12) & 0x1) << 5) | ((addiw >> 2) & 0x1F)
     if imm & 0x20:
@@ -159,15 +151,15 @@ class TestRiscvDvGraft(unittest.TestCase):
             )
             csr_words = [w for _, w in words if (w & 0x7F) == 0x73]
             self.assertEqual(len(csr_words), 2, "exactly two PMP CSR writes")
-            # csrwi pmpcfg0, 0x1f -> immediate must be 0x1f
+
             csrwi = [w for w in csr_words if (w >> 20) == 0x3A0]
             self.assertEqual(len(csrwi), 1)
             self.assertEqual((csrwi[0] >> 15) & 0x1F, 0x1F)
-            # csrw pmpaddr0, x27 -> rs1 must be x27
+
             csrw = [w for w in csr_words if (w >> 20) == 0x3B0]
             self.assertEqual(len(csrw), 1)
             self.assertEqual((csrw[0] >> 15) & 0x1F, 27)
-            # li x27, 0x1fffffff -> reconstructed value must match
+
             self.assertEqual(_li_value(words[0][1], words[1][1]), 0x1FFFFFFF)
 
     def test_grafted_snapshot_programmed_entries(self):

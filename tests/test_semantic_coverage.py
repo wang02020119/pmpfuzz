@@ -197,7 +197,6 @@ class SemanticCoverageTest(unittest.TestCase):
             )
         )
 
-    # ---- New tests for execution-qualified coverage (RED phase additions) ----
 
     def test_schedule_with_coverage_basis_execution_records_dut_and_basis(self):
         with tempfile.TemporaryDirectory() as tmp:

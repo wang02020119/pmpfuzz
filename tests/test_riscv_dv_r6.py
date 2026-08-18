@@ -1,4 +1,3 @@
-"""R6 static PMP deriver + trap-address fingerprint recovery unit tests."""
 import json
 import os
 import shutil
@@ -10,8 +9,8 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "scripts" / "evaluation" / "baseline_adapters"))
-import riscv_dv  # noqa: E402
-import riscv_dv_static_pmp as st  # noqa: E402
+import riscv_dv
+import riscv_dv_static_pmp as st
 
 _CC = os.environ.get("RISCV_GCC", "riscv64-unknown-elf-gcc")
 _RDV_ROOT = riscv_dv.RISCV_DV_ROOT
@@ -115,7 +114,7 @@ class TestStaticPmpDeriver(unittest.TestCase):
         state = st.derive_static_pmp(str(asm), str(self.elf))
         main_addr = st._symbol_address(self.elf, "main")
         self.assertEqual(state["entries"][0]["address_mode"], "tor")
-        # 0x94 = L=1,a=NA4,x=1,w=0,r=0; 0x8f = L=1,TOR,RWX; 0x17 = NA4,w+r
+
         e1 = state["entries"][1]
         self.assertEqual((e1["address_mode"], e1["read"], e1["write"], e1["execute"], e1["locked"]),
                          ("na4", False, False, True, True))

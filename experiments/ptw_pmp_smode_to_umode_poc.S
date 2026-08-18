@@ -12,7 +12,7 @@ _start:
     csrw satp, zero
     sfence.vma
 
-    # S/U may access the harness memory except the denied PTW page.
+
     li t0, 0x20004dff
     csrw pmpaddr0, t0
     li t0, 0x20003fff
@@ -74,7 +74,7 @@ stack_top:
 
     .org 0x4000
 s_entry:
-    # Build the U-mode code mapping and the malicious PTW pointer in S-mode.
+
     la t0, sv39_root_user
     li t1, 0x20004401
     sd t1, 0(t0)

@@ -1,31 +1,4 @@
 #!/usr/bin/env python3
-"""Coverage-guided GENERATION for the U74 closedloop-144 campaign (protocol v2).
-
-Each round r >= 1:
-
-1. Load the cumulative *real* observed coverage from the prior summary;
-2. compute the missing reachable bins against the fixed 144-bin universe;
-3. GENERATE 96 new scenarios:
-   a. directed construction -- for every missing bin, build a scenario whose
-      predicted bins contain it (PMP config classes, stimulus / privilege /
-      mode-decision combinations);
-   b. parent mutation fill -- mutate high-coverage seed-pool parents with a
-      deterministic operator set for the remaining budget;
-4. write the schedule + generation-log and hand off to the board runner.
-
-Unlike the v1 selection design, nothing here is picked from a frozen corpus:
-every round produces brand-new scenario hashes targeted at the observed gaps.
-
-Usage:
-
-    PYTHONPATH=. python scripts/evaluation/hardware/u74/u74_guided_generate.py \
-        --seed-pool .../aggregation/seed-pool.json \
-        --universe .../u74-supported-v4-144.json \
-        --round-index 1 --budget 96 --seed 4 \
-        --prior-summary .../aggregation/round-0000-summary.json \
-        --executed-hashes .../aggregation/round-0000-summary.json \
-        --out-dir .../rounds/round-0001
-"""
 from __future__ import annotations
 
 import argparse
@@ -54,18 +27,12 @@ _MODES = {"na4", "napot", "tor"}
 _RWX_BITS = ("read", "write", "execute")
 
 
-# ---------------------------------------------------------------------------
-# bin parsing
-# ---------------------------------------------------------------------------
 
 def parse_bin(bin_id: str) -> dict[str, str]:
     parts = dict(part.split("=", 1) for part in str(bin_id).split("|"))
     return parts
 
 
-# ---------------------------------------------------------------------------
-# scenario construction helpers
-# ---------------------------------------------------------------------------
 
 def _entry_rwx(entry: PmpEntry) -> str:
     return f"{int(entry.read)}{int(entry.write)}{int(entry.execute)}"
@@ -125,7 +92,7 @@ def _config_class_entries(mode: str, rwx: str, locked: bool, base: int) -> list[
                      read=read, write=write, execute=execute, locked=locked)
         ]
     if mode == "tor":
-        # TOR needs a lower-bound entry at index-1.
+
         prev = PmpEntry(index=0, address_mode=AddressMode.NA4, pmpaddr=base >> 2,
                         read=False, write=False, execute=False, locked=False)
         tor = PmpEntry(index=1, address_mode=AddressMode.TOR, pmpaddr=(base + 0x1000) >> 2,
@@ -140,23 +107,14 @@ def _outcome_allows(access: Access, rwx: str) -> bool:
 
 def _probe_address(mode: str, base: int) -> int:
     if mode == "na4":
-        return base  # NA4 covers exactly [base, base+4)
-    return base + 0x100  # NAPOT/TOR windows
+        return base
+    return base + 0x100
 
 
 def _deny_rwx(access: str) -> str:
-    """rwx that denies the given access while keeping the entry installed.
-
-    A fully-zero rwx entry is installed as OFF on the U74 harness (deny
-    degrades to allow); giving the entry *other* permissions keeps it a real
-    PMP entry that denies only the targeted access.
-    """
     return {"load": "010", "store": "100", "fetch": "110"}[access]
 
 
-# ---------------------------------------------------------------------------
-# per-bin constructors
-# ---------------------------------------------------------------------------
 
 def construct_config(bin_id: str, *, base: int) -> PmpScenario | None:
     f = parse_bin(bin_id)
@@ -165,7 +123,6 @@ def construct_config(bin_id: str, *, base: int) -> PmpScenario | None:
     locked = f.get("locked") == "true"
     if mode not in _MODES or rwx not in {"000", "001", "010", "011", "100", "101", "110", "111"}:
         return None
-    # pick an access the rwx can either allow or deny; load/store are safest on the board
     access = Access.LOAD if int(rwx[0]) or not any(int(b) for b in rwx) else Access.STORE
     entries = _config_class_entries(mode, rwx, locked, base)
     probe_address = _probe_address(mode, base)
@@ -184,7 +141,7 @@ def construct_stimulus(bin_id: str, *, base: int) -> PmpScenario | None:
     if priv not in _PRIV_VALUES or eff not in _PRIV_VALUES or acc not in _ACCESS_VALUES:
         return None
     if trans == "sv39" and acc == "fetch":
-        return None  # sv39 fetch is firmware-unstable
+        return None
     privilege = _PRIV_BY_VALUE[priv]
     effective = _PRIV_BY_VALUE[eff]
     access = Access(acc)
@@ -215,8 +172,8 @@ def construct_privdec(bin_id: str, *, base: int) -> PmpScenario | None:
     access = Access(acc)
     effective = _PRIV_BY_VALUE[eff]
     rwx = _deny_rwx(acc) if deny else ("100" if acc == "load" else ("110" if acc == "store" else "101"))
-    # M-mode is not subject to PMP unless the matching entry is locked; a deny
-    # with effective_privilege=m therefore requires a locked entry.
+
+
     locked = bool(deny and effective == Privilege.M)
     entries = _config_class_entries("napot", rwx, locked, base)
     return _build_scenario(
@@ -236,7 +193,7 @@ def construct_modedec(bin_id: str, *, base: int) -> PmpScenario | None:
         return None
     access = Access(acc)
     if mode == "off":
-        # unmatched probe -> off mode; use a NAPOT entry far from the probe
+
         rwx = "000"
         entries = _config_class_entries("napot", rwx, False, base + 0x4000)
         return _build_scenario(
@@ -258,7 +215,7 @@ def construct_decision(bin_id: str, *, base: int) -> PmpScenario | None:
     if acc not in _ACCESS_VALUES:
         return None
     if str(cause) == "other":
-        return None  # cannot direct an unexpected trap cause
+        return None
     access = Access(acc)
     deny = True
     rwx = _deny_rwx(acc.value)
@@ -289,9 +246,6 @@ _CONSTRUCTORS = {
 }
 
 
-# ---------------------------------------------------------------------------
-# candidate assembly (case + lowering + prediction)
-# ---------------------------------------------------------------------------
 
 def _assemble(scenario: PmpScenario, *, seed: int, index: int, name: str, target: str, operator: str, parent_id: str) -> dict[str, Any] | None:
     if not frp._is_supported_formal_scenario(scenario):
@@ -299,11 +253,11 @@ def _assemble(scenario: PmpScenario, *, seed: int, index: int, name: str, target
     translation = "sv39" if scenario.sv39 is not None else "bare"
     access = str(scenario.probe.access.value)
     if translation == "sv39" and access == "fetch":
-        return None  # sv39 fetch is firmware-unstable (deadlocks the runner)
+        return None
     if any(e.address_mode == AddressMode.TOR for e in frp._non_harness_entries(scenario)):
-        # constructed TOR entries can leak the entry-1 pmpaddr (crash-reboot
-        # loop after the round on the U74 board); restrict generation to
-        # NA4/NAPOT which is proven stable.
+
+
+
         return None
     try:
         case, lowering = C.build_case_and_lowering(scenario, seed=seed, index=index, case_name=name)
@@ -353,9 +307,6 @@ def _assemble(scenario: PmpScenario, *, seed: int, index: int, name: str, target
     }
 
 
-# ---------------------------------------------------------------------------
-# main generation
-# ---------------------------------------------------------------------------
 
 def generate_round(
     *,
@@ -404,7 +355,6 @@ def generate_round(
             locked_picked += 1
         return True
 
-    # 1. directed construction for each missing bin
     for target in missing:
         family = str(target).split("|", 1)[0]
         ctor = _CONSTRUCTORS.get(family)
@@ -422,7 +372,6 @@ def generate_round(
         else:
             log["skipped_targets"].append({"bin": target, "reason": "construction-failed-or-duplicate"})
 
-    # 2. parent-mutation fill (coverage-weighted: parents predicting more missing bins first)
     def _parent_weight(p: dict[str, Any]) -> int:
         pred = set(p.get("predicted_reachable_bins") or [])
         return len(pred & set(missing))
@@ -480,9 +429,6 @@ def _fill_mutate(parent_scenario: PmpScenario, op: str, attempt: int, *, seed: i
         return None
 
 
-# ---------------------------------------------------------------------------
-# schedule / log / catalog emission (shared with the select scripts)
-# ---------------------------------------------------------------------------
 
 def emit_schedule(entries: list[dict[str, Any]], *, round_index: int, selection_source: str, seed: int, out_dir: Path, log: dict[str, Any], stats: dict[str, Any], corpus_hash: str, unsupported_bins: list[str]) -> None:
     from u74_guided_select import build_catalog_entries, build_schedule_entries
@@ -491,7 +437,6 @@ def emit_schedule(entries: list[dict[str, Any]], *, round_index: int, selection_
         [(c, {"marginal_gain": 0, "predicted_bins": c.get("predicted_bins") or [], "predicted_new_bins": [], "config_classes": c.get("config_classes") or []}) for c in entries],
         round_index=round_index, selection_source=selection_source,
     )
-    # attach generation provenance onto the schedule entries
     for entry, cand in zip(schedule_entries, entries):
         entry["operator"] = cand.get("operator")
         entry["parent_case_id"] = cand.get("parent_case_id") or ""

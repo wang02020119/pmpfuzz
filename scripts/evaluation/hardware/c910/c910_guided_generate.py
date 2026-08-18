@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-"""Coverage-guided GENERATION for the C910 closedloop-56 campaign (protocol v2).
-
-Round 0: breadth seed -- greedy predicted-coverage over the seed pool plus a
-directed construction for every reachable bin.
-
-Rounds r >= 1: for each real-missing reachable bin, construct a params tuple
-whose predicted bins contain it; fill the remaining budget with deterministic
-parent mutations (coverage-weighted).  Each generated case is a new
-scenario_hash executed by the probe's parameterized case-runner (manifest v3).
-
-Usage:
-    PYTHONPATH=. python scripts/evaluation/hardware/c910/c910_guided_generate.py \
-        --seed-pool .../aggregation/seed-pool.json \
-        --round-index 1 --budget 16 --seed 4 \
-        --prior-summary .../aggregation/round-0000-summary.json \
-        --out-dir .../rounds/round-0001
-"""
 from __future__ import annotations
 
 import argparse
@@ -44,9 +27,9 @@ from c910_cl56_common import (
 CAMPAIGN_ID = "hw-v2-m4-c910-closedloop-56"
 
 
-# ---------------------------------------------------------------------------
-# round-0 breadth
-# ---------------------------------------------------------------------------
+
+
+
 
 def _catalog_mapped_cases() -> list[dict[str, Any]]:
     from pmpfuzz.c910_nonpmp_dynamic import catalog_cases
@@ -88,7 +71,6 @@ def _select_greedy(
     seed: int,
     used_hashes: set[str],
 ) -> list[dict[str, Any]]:
-    """Deterministic greedy: maximize new predicted bins, unique records."""
     rng = Random(seed)
     candidates = [c for c in pool if c["scenario_hash"] not in used_hashes]
     rng.shuffle(candidates)
@@ -130,9 +112,9 @@ def breadth_round(*, pool: list[dict[str, Any]], budget: int, seed: int,
     return selected, {"stats": stats, "log": {}}
 
 
-# ---------------------------------------------------------------------------
-# guided generation rounds (r >= 1)
-# ---------------------------------------------------------------------------
+
+
+
 
 def guided_round(
     *,
@@ -143,13 +125,6 @@ def guided_round(
     used_hashes: set[str],
     max_tries_per_mutation: int = 6,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
-    """Guided round: (catalog_selected, generated, result).
-
-    For each missing reachable bin: directed construction first; if the bin is
-    outside the parameterized-runner vocabulary (e.g. fetch), fall back to a
-    catalog case that predicts it.  Remaining budget is filled by coverage-
-    weighted parent mutations.
-    """
     rng = Random(seed)
     generated: list[dict[str, Any]] = []
     catalog_selected: list[dict[str, Any]] = []
@@ -184,7 +159,7 @@ def guided_round(
 
     catalog_candidates = [c for c in seed_pool if c.get("source") == "catalog"]
 
-    # 1. directed construction (with catalog fallback) for each missing bin.
+
     for target in missing:
         if len(generated) + len(catalog_selected) >= budget:
             break
@@ -199,8 +174,8 @@ def guided_round(
             )
             operator = f"construct:{target.split('|')[0]}"
         if case is None:
-            # bin not in the parameterized vocabulary -> catalog fallback,
-            # skipping candidates whose hash/record is already executed.
+
+
             fallback = _pick_catalog_for_bin(catalog_candidates, target, seen, used_records)
             if fallback is not None:
                 case = fallback
@@ -214,7 +189,7 @@ def guided_round(
         else:
             log["skipped_targets"].append({"bin": target, "reason": "no-construction-and-no-catalog-fallback"})
 
-    # 2. parent-mutation fill (coverage-weighted by predicted new bins).
+
     def _parent_weight(p: dict[str, Any]) -> int:
         return len(set(p.get("predicted_bins") or []) & set(missing))
 
@@ -261,13 +236,6 @@ def _pick_catalog_for_bin(
     catalog_candidates: list[dict[str, Any]], target: str,
     used_hashes: set[str] | None = None, used_records: set[str] | None = None,
 ) -> dict[str, Any] | None:
-    """Pick a catalog case whose predicted bins contain ``target``.
-
-    Used as the fallback when a missing bin is outside the parameterized-runner
-    vocabulary (e.g. fetch stimulus).  Deterministic: first candidate in pool
-    order whose hash has not been executed and whose base record is not already
-    selected in this round (slot variants share the base record).
-    """
     used_h = set(used_hashes or ())
     used_r = set(used_records or ())
     for cand in catalog_candidates:
@@ -280,9 +248,9 @@ def _pick_catalog_for_bin(
     return None
 
 
-# ---------------------------------------------------------------------------
-# emission
-# ---------------------------------------------------------------------------
+
+
+
 
 def emit_round(
     *,

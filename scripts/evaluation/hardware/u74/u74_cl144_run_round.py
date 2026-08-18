@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-"""Drive one U74 closedloop-144 physical round end-to-end.
-
-Selection (breadth / guided / random) -> board execution -> real-observation
-aggregation -> convergence.json update.
-
-Usage:
-
-    PYTHONPATH=. python scripts/evaluation/hardware/u74/u74_cl144_run_round.py \
-        --round-index 0 --mode round0 --seed 4 --budget 96 \
-        --corpus <...>/corpus/corpus.json \
-        --universe <...>/u74-supported-v4-144.json \
-        --observation-profile <...>/frozen-v2/observation-profile.json \
-        --root <...>/closedloop-144 \
-        --prior-summary <...>/aggregation/round-0000-summary.json   # rounds >= 1
-
-Random control uses the same driver with ``--mode random`` and a distinct
-``--seed`` and ``--campaign-id`` (point ``--root`` at random/run-seed-NNNN).
-"""
 from __future__ import annotations
 
 import argparse
@@ -156,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.skip_select:
         if args.mode == "random" and args.round_index >= 1:
-            # v2 random control: unguided generation, same machinery
+
             sel_args = [str(GENERATE_RANDOM)]
             common = [
                 "--seed-pool", str(args.corpus), "--universe", str(args.universe),
@@ -173,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--out-dir", str(rdir),
             ]
         elif args.mode == "guided" and args.round_index >= 1:
-            # protocol v2: coverage-guided GENERATION for rounds >= 1
+
             sel_args = [str(GENERATE_GUIDED)]
             common = [
                 "--seed-pool", str(args.corpus), "--universe", str(args.universe),
@@ -222,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     summary = C.load_json(out_summary)
     update_convergence(root, summary)
 
-    # copy the generated round manifest back as the pre-execution artifact record
+
     gen_manifest = rdir / "manifests" / "u74-generated-round-manifest.json"
     if gen_manifest.exists():
         C.write_json(rdir / "generated_round_manifest.json", C.load_json(gen_manifest))

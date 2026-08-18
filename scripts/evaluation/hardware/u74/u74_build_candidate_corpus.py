@@ -1,36 +1,4 @@
 #!/usr/bin/env python3
-"""Build the frozen U74 candidate corpus for the closedloop-144 experiment.
-
-Pre-flight freeze §2.6 (EXPERIMENT_PROTOCOL.md) / Runbook §2:
-
-- Generates >= ``--target`` (default 1200) unique, lowering-valid scenarios
-  across the U74-supported generator profiles;
-- augments a deterministic slice with mutation operators -- chiefly
-  ``toggle-pmp-permissions`` which produces 010 / 011 permission combinations
-  the base generators rarely emit;
-- filters to scenarios the U74 lowering + board adapter support
-  (NA4/NAPOT/TOR x rwx x unlocked/locked; sv39 via the dedicated harness page);
-- predicts each candidate's BAPC v4/144 bins through the same
-  ``summarize_bapc_for_pmpfuzz_case`` path the board adapter uses for real
-  observations;
-- marks TOR/locked candidates ``firmware_ready=false`` (pre-registered
-  unsupported until the TOR/locked firmware lands) and records the structurally
-  unsupported bins of the fixed 144-bin universe;
-
-Writes:
-
-- ``corpus/corpus.json``        -- full candidate pool (>= 1000) with
-  scenario_spec, lowering, predicted bins, config classes;
-- ``corpus/corpus-hash.json``   -- provenance (universe sha, seed, profiles,
-  counts, candidate fingerprint).
-
-Usage (from repo root):
-
-    PYTHONPATH=. python scripts/evaluation/hardware/u74/u74_build_candidate_corpus.py \
-        --universe D:/c_s/wjs/riscv-pmp-fuzz/artifacts/hw-v2-m1/universes/u74-supported-v4-144.json \
-        --out-dir D:/c_s/wjs/riscv-pmp-fuzz/artifacts/hw-v2-m1/u74/closedloop-144/corpus \
-        --seed 4 --target 1200
-"""
 from __future__ import annotations
 
 import argparse
@@ -85,10 +53,10 @@ def _collect_candidate(
     locked_tor = C.scenario_locked_tor_flags(scenario)
     translation = "sv39" if scenario.sv39 is not None else "bare"
     access = str(scenario.probe.access.value)
-    # sv39 fetch is NOT stable on the current board firmware: a candidate that
-    # fetches through the sv39 mapping (final-pmp) deadlocks the runner
-    # (observed in the first closedloop-144 round-0 attempt).  It is excluded
-    # from board execution until the sv39 fetch path is fixed; bare fetch works.
+
+
+
+
     board_unstable = bool(translation == "sv39" and access == "fetch")
     return {
         "name": case_name,
@@ -124,7 +92,6 @@ def _collect_candidate(
 
 
 def _reachable_config_classes(reachable_set: set[str]) -> set[tuple[str, str, str]]:
-    """{(mode, rwx, locked)} reachable config classes from the universe."""
     classes = set()
     for bin_id in reachable_set:
         if not str(bin_id).startswith("family=config"):
@@ -146,12 +113,6 @@ def _enrich_missing_config_classes(
     time_budget: float,
     stats: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Chained-mutation pass that adds scenarios for missing reachable config classes.
-
-    ``toggle-pmp-permissions`` flips one bit at a time; chaining two mutations
-    can reach any 3-bit rwx from any parent, so this closes gaps like na4/011
-    that a single mutation rarely lands on.
-    """
     from pmpfuzz.scenario_codec import scenario_from_spec
 
     started = time.time()
@@ -225,12 +186,6 @@ def _enrich_missing_config_classes(
 
 
 def _mutation_plans() -> list[list[str]]:
-    """Bounded deterministic operator chains used by enrichment.
-
-    Reaches any (address_mode, rwx, locked) config class from any parent:
-    address-mode toggles move na4<->napot<->tor, set-pmp-locked pins the lock
-    bit, and chained permission toggles sweep the 8 rwx values.
-    """
     plans: list[list[str]] = []
     for locked_op in ("set-pmp-locked=1", "set-pmp-locked=0"):
         for mode_depth in (0, 1, 2):
@@ -247,7 +202,6 @@ def _mutation_plans() -> list[list[str]]:
 
 
 def _mutate_chain(base_spec: dict[str, Any], *, plan: list[str], attempt: int, seed: int):
-    """Apply an operator chain to a scenario spec."""
     from pmpfuzz.continuous import ScenarioStream
 
     stream = ScenarioStream(root_seed=seed, include_experimental=False)
@@ -305,8 +259,8 @@ def generate_corpus(*, universe: dict[str, Any], seed: int, target: int, time_bu
 
         _try_add(root, profile, generator_index, "root", "scenario-generator")
 
-        # Mutation augmentation: a deterministic slice of roots (every 4th)
-        # produces additional permission/access/address-mode variants.
+
+
         if root_seq % 4 == 0:
             parent_spec = scenario_to_spec(root)
             for op in C.CORPUS_MUTATION_OPERATORS:
@@ -323,10 +277,10 @@ def generate_corpus(*, universe: dict[str, Any], seed: int, target: int, time_bu
                     _try_add(mutated, profile, generator_index, op, "mutation")
         root_seq += 1
 
-    # Enrichment: close gaps in the reachable config-class space (e.g. na4/011)
-    # via chained toggle-pmp-permissions mutations so every reachable config
-    # class has at least one firmware-ready candidate (runbook §2 requirement:
-    # NA4/NAPOT permission combinations including 010 and 011).
+
+
+
+
     candidates = _enrich_missing_config_classes(
         candidates=candidates,
         seen_hashes=seen_hashes,

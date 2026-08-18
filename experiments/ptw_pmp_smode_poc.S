@@ -12,10 +12,10 @@ _start:
     csrw satp, zero
     sfence.vma
 
-    # PMP entry 0 denies the L1 page-table page to S/U.
+
     li t0, 0x20004dff
     csrw pmpaddr0, t0
-    # PMP entry 1 allows the rest of the local harness memory to S/U.
+
     li t0, 0x20003fff
     csrw pmpaddr1, t0
     li t0, 0x1f18
@@ -77,7 +77,7 @@ stack_top:
 
     .org 0x4000
 s_entry:
-    # S-mode controls the malicious root PTE and enables Sv39 itself.
+
     la t0, sv39_root_target
     li t1, 0x20004c01
     sd t1, 0(t0)

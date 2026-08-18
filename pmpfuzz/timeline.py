@@ -1,12 +1,3 @@
-"""Append-only timeline recorder for execution-qualified coverage over time.
-
-Each time a test case completes the recorder:
-1. Reads the just-written case.json and result.json
-2. Calls ``qualify_result_for_coverage()``
-3. Updates coverage sets only for eligible cases
-4. Appends one JSONL line to ``<run-dir>/metrics/coverage_timeline.jsonl``
-5. Flushes immediately to survive mid-campaign interrupts
-"""
 
 from __future__ import annotations
 
@@ -30,7 +21,6 @@ SCHEMA_VERSION = 1
 
 @dataclass
 class TimelineRecorder:
-    """Append-only recorder that writes one JSONL line per completed case."""
 
     run_dir: Path
     campaign_id: str
@@ -38,13 +28,13 @@ class TimelineRecorder:
     dut: str
     seed: int
 
-    # Target bin sets (populated once by caller)
+
     target_semantic: Set[str] = field(default_factory=set)
     target_pairwise: Set[str] = field(default_factory=set)
     target_security_triples: Set[str] = field(default_factory=set)
     target_predicates: Set[str] = field(default_factory=set)
 
-    # Internal state
+
     _completion_seq: int = 0
     _completed_cases: int = 0
     _eligible_cases: int = 0
@@ -55,13 +45,12 @@ class TimelineRecorder:
     _whitebox_distinct_events: int = 0
     _whitebox_event_ids: Set[str] = field(default_factory=set)
 
-    # Path caching
+
     _output_path: Path | None = None
     _metadata_path: Path | None = None
     _baseline_written: bool = False
 
     def __post_init__(self) -> None:
-        """Ensure metrics directory exists.  Baseline is written lazily."""
         metrics_dir = self.run_dir / "metrics"
         metrics_dir.mkdir(parents=True, exist_ok=True)
         self._output_path = metrics_dir / "coverage_timeline.jsonl"
@@ -76,7 +65,6 @@ class TimelineRecorder:
         return self._output_path
 
     def _write_baseline(self) -> None:
-        """Write the t=0 baseline row (completion_seq=0, no case completed yet)."""
         self._append_line(self._make_line(
             completion_seq=0,
             case_id=None,
@@ -103,15 +91,6 @@ class TimelineRecorder:
         whitebox_new_events: int = 0,
         completion_monotonic_seconds: float | None = None,
     ) -> None:
-        """Record the completion of one case to the timeline.
-
-        Args:
-            case: The case dict (from case.json).
-            result: The result dict (from result.json).
-            elapsed_wall_seconds: Campaign wall-clock time at completion.
-            case_elapsed_seconds: Per-case elapsed time.
-            whitebox_new_events: Number of newly observed whitebox events.
-        """
         if not self._baseline_written:
             self._write_baseline()
             self._baseline_written = True
@@ -133,7 +112,7 @@ class TimelineRecorder:
 
         if coverage_eligible:
             self._eligible_cases += 1
-            # Compute case bins and intersect with targets
+
             case_sem = set(semantic_bins_for_case(case)) & self.target_semantic
             case_pair = {b for b in combo_bins_for_case(case, coverage_mode="pairwise")
                          if b.startswith("combo2:")} & self.target_pairwise
@@ -188,7 +167,6 @@ class TimelineRecorder:
         new_predicate: int,
         new_whitebox: int,
     ) -> dict[str, Any]:
-        """Build a single timeline line dict."""
         sem_total = len(self.target_semantic)
         pair_total = len(self.target_pairwise)
         trip_total = len(self.target_security_triples)
@@ -238,7 +216,6 @@ class TimelineRecorder:
         }
 
     def _append_line(self, obj: dict[str, Any]) -> None:
-        """Append a JSON line and flush immediately."""
         assert self._output_path is not None
         line = json.dumps(obj, ensure_ascii=True, sort_keys=True) + "\n"
         with open(self._output_path, "a", encoding="ascii") as fh:
@@ -262,7 +239,6 @@ class TimelineRecorder:
         coverage_mode: str | None = None,
         extra: dict[str, Any] | None = None,
     ) -> None:
-        """Write campaign_metadata.json alongside the timeline."""
         assert self._metadata_path is not None
         meta: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
@@ -291,14 +267,12 @@ class TimelineRecorder:
         )
 
     def record_whitebox_events(self, event_ids: set[str]) -> int:
-        """Record new whitebox event IDs. Returns count of newly observed events."""
         new = event_ids - self._whitebox_event_ids
         self._whitebox_event_ids.update(event_ids)
         self._whitebox_distinct_events = len(self._whitebox_event_ids)
         return len(new)
 
     def coverage_state(self) -> dict[str, Any]:
-        """Return current cumulative coverage state (for final validation)."""
         sem_total = len(self.target_semantic)
         pair_total = len(self.target_pairwise)
         trip_total = len(self.target_security_triples)
@@ -333,20 +307,6 @@ def timeline_on_complete_factory(
     *,
     enable_whitebox: bool = False,
 ) -> Any:
-    """Return an ``on_complete`` callback suitable for :func:`runner.run_campaign`.
-
-    The returned callback reads case.json and result.json from the standard
-    directory layout and records a timeline event.
-
-    If *enable_whitebox* is True, per-result whitebox event IDs are extracted
-    and the ``new_whitebox_events`` count is populated (Phase C2).
-
-    Usage::
-
-        recorder = TimelineRecorder(...)
-        on_complete = timeline_on_complete_factory(recorder, enable_whitebox=True)
-        run_campaign(config, on_complete=on_complete)
-    """
     def _on_complete(index, scenario, result, completion_seq, campaign_elapsed):
         out_dir = recorder.run_dir
         case_path = out_dir / "cases" / result.name / "case.json"
@@ -360,7 +320,7 @@ def timeline_on_complete_factory(
         if result_path.exists():
             result_dict = json.loads(result_path.read_text(encoding="ascii"))
         else:
-            # Fallback: build minimal result dict from CampaignResult
+
             result_dict = {
                 "name": result.name,
                 "status": result.status,
@@ -375,7 +335,6 @@ def timeline_on_complete_factory(
                 "dut": recorder.dut,
             }
 
-        # Phase C2: Incremental whitebox extraction
         new_whitebox = 0
         if enable_whitebox:
             try:
@@ -383,7 +342,7 @@ def timeline_on_complete_factory(
                 event_ids = whitebox_event_ids_for_result(case, result_dict, out_dir)
                 new_whitebox = recorder.record_whitebox_events(event_ids)
             except Exception:
-                pass  # whitebox extraction failure should not break timeline
+                pass
 
         recorder.record(
             case=case,

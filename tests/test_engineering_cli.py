@@ -215,7 +215,6 @@ class EngineeringCliTest(unittest.TestCase):
 
 
     def test_schedule_cli_defaults_to_execution_coverage_basis(self):
-        """Schedule CLI defaults to --coverage-basis execution."""
         from pmpfuzz.__main__ import build_parser
         parser = build_parser()
         args = parser.parse_args([

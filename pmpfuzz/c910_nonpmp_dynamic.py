@@ -30,8 +30,8 @@ GENERATED_MANIFEST_SCHEMA_VERSION = 3
 DEFAULT_TIMEBASE_HZ = 3_000_000
 CATALOG_SLOT_COUNT = 4
 
-# runner_code: 0 = phase-handled catalog case (probe phase function emits it);
-# 1..2 = parameterized case-runner executes from manifest params.
+
+
 GENERATED_RUNNER_CODES = {
     "sv39_access": 1,
     "mprv_bare": 2,
@@ -46,7 +46,7 @@ GENERATED_RUNNER_TO_PARSER = {
     "real_mode": "real-mode",
     "fetch_basic": "fetch-test",
 }
-# Access/privilege numeric encodings shared with the probe's case-runner.
+
 _ACCESS_CODE = {"load": 0, "store": 1, "fetch": 2}
 _PRIV_CODE = {"m": 0, "s": 1, "u": 2}
 _TRANS_CODE = {"bare": 0, "sv39": 1}
@@ -208,12 +208,6 @@ def build_generated_case(
     name: str | None = None,
     seed: int = BOOTSTRAP_SEED,
 ) -> dict[str, Any]:
-    """Build a v3 generated case from a scenario-parameter tuple.
-
-    The case mirrors the catalog case shape so ``predict_shared56_bins`` and
-    ``classify_scenario`` work unchanged.  The probe executes it through the
-    parameterized case-runner (``runner_code``), not a phase function.
-    """
     runner_kind = str(params.get("runner_kind") or "sv39_access")
     privilege = str(params.get("privilege") or "m").lower()
     effective = str(params.get("effective_privilege") or privilege).lower()
@@ -345,15 +339,6 @@ def build_dynamic_manifest(
     capability: dict[str, Any] | None = None,
     generated_cases: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build a round manifest.
-
-    Without ``generated_cases`` the manifest is schema v2 (catalog-only, executed
-    by phase functions).  With ``generated_cases`` (list of cases built by
-    ``build_generated_case``) the manifest is schema v3: generated entries carry
-    the full ``params`` tuple + embedded ``case`` and are executed by the probe's
-    parameterized case-runner (``runner_code``).  Base record names must be
-    unique across all entries.
-    """
     capability = capability or bootstrap_capability()
     catalog = {case["name"]: case for case in catalog_cases(capability=capability)}
     missing = [name for name in case_names if name not in catalog]
@@ -935,12 +920,6 @@ def _stable_hash(payload: dict[str, Any]) -> str:
 
 
 def _params_c_initializer(entry: dict[str, Any]) -> str:
-    """Render a manifest entry's params as a C struct initializer.
-
-    Catalog (v2) entries have no params -> all-zero struct (runner_code 0 =
-    phase-handled).  Generated (v3) entries carry the numeric-coded tuple that
-    the probe's parameterized case-runner reads.
-    """
     params = dict(entry.get("params") or {})
     code = int(params.get("runner_code") or 0)
     if code == 0:

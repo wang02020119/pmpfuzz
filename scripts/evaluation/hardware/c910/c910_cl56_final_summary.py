@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""Aggregate the C910 closedloop-56 campaign and apply the convergence rule.
-
-Usage per round (after the board run + ``aggregate_c910_shared56.py``):
-
-    python scripts/evaluation/hardware/c910/c910_cl56_final_summary.py \
-        --root artifacts/hw-v2-m2/c910/closedloop-56 --round-index 1
-
-Writes ``aggregation/round-000N-summary.json``, appends the round row to
-``aggregation/convergence.json``, and reports whether the convergence rule
-(two consecutive accepted guided rounds with zero new bins) has triggered.
-"""
 from __future__ import annotations
 
 import argparse
@@ -19,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
-from c910_cl56_common import REACHABLE_BINS  # noqa: E402
+from c910_cl56_common import REACHABLE_BINS
 
 
 def _read(path: Path) -> dict:
@@ -85,7 +74,7 @@ def _convergence_state(root: Path) -> dict:
 def update_convergence(*, root: Path, summary: dict) -> dict:
     conv = _convergence_state(root)
     prev_rounds = list(conv.get("rounds") or [])
-    # If this round was already recorded, drop the stale row and re-derive.
+
     prev_rounds = [r for r in prev_rounds if r.get("round_id") != summary["round_id"]]
     rows = prev_rounds + [summary]
 

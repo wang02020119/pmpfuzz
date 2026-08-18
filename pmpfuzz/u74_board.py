@@ -21,10 +21,10 @@ DEFAULT_U74_CATALOG_PATH = Path(
 
 U74_OBSERVATION_PROFILE_ID = "u74-uart-v1"
 U74_SUPPORTED_BAPC_RULE_VERSION = "u74-bapc-supported-v1"
-# The U74 board campaign targets BAPC-core v4.  The scenario summarizer
-# defaults to v2, so every U74 lowered-case result must be stamped v4
-# explicitly; otherwise the archived result.json files carry bapc_core_version
-# "v2" even though the bin set and universe are the formal v4 144-bin set.
+
+
+
+
 U74_BAPC_CORE_VERSION = "v4"
 ENGINEERING_SMOKE_VALIDATOR_PROFILE = "engineering-smoke-v1"
 FORMAL_U74_BATCHED_VALIDATOR_PROFILE = "formal-u74-batched-v1"
@@ -60,10 +60,10 @@ RUNNER_RE = re.compile(r"^\[pmpfuzz\]\s+runner\s+(?P<event>begin|end)\b(?P<tail>
 MANIFEST_RE = re.compile(r"^\[pmpfuzz\]\s+manifest\b(?P<tail>.*)$")
 KV_RE = re.compile(r"(?P<key>[A-Za-z0-9_.-]+)=(?P<value>\S+)")
 
-# Batch group markers: names gated in the board runner that expand to many
-# per-sub-case records at execution time. They are present in the generated
-# manifest (so the firmware runs the group) but do not themselves produce a
-# per-case UART record, so they are excluded from case-set reconciliation.
+
+
+
+
 U74_BATCH_GROUP_MARKERS = frozenset({"batch3-group", "batch4-group", "batch5-group"})
 
 
@@ -592,13 +592,13 @@ def scenario_case_result_dict(
         "observed_event": observed_event,
         "observed_mcause": observed_mcause,
     }
-    # Classify fail results so error_count==0 is not misread as "0 silicon
-    # violations": an observed denial/completion that contradicts the oracle's
-    # expected outcome is a real oracle/implementation-difference candidate,
-    # not a structural-pass marker.
-    # The board runner completes allowed fetches by executing an ecall stub,
-    # which traps with cause 8/9 (U/S ecall); that is a completion signal for a
-    # fetch probe, not a real trap observation.
+
+
+
+
+
+
+
     fetch_completion = (
         str(case.get("access") or "").strip().lower() == "fetch"
         and observed_mcause in (8, 9)
@@ -761,8 +761,8 @@ def validate_round_artifacts(
     case_map = load_case_map(round_dir)
     results_by_case = load_results(round_dir)
     raw_expected_names = [str(entry.get("name") or "") for entry in schedule_entries]
-    # Batch group markers enable firmware-side groups but do not produce their
-    # own per-case records, so they are excluded from case-set reconciliation.
+
+
     expected_names = [
         name for name in raw_expected_names if name and not is_u74_group_marker(name)
     ]
@@ -1159,8 +1159,8 @@ def synthesize_fake_uart_log(
     for scheduled in schedule_entries:
         case_name = str(scheduled.get("name") or "")
         if is_u74_group_marker(case_name):
-            # Batch group markers enable firmware-side groups; their expanded
-            # sub-case records are scheduled individually and emitted below.
+
+
             continue
         entry = dict(catalog_by_case.get(case_name) or {})
         if not entry:
@@ -1257,9 +1257,9 @@ def write_round_materialization(
     for scheduled in schedule_entries:
         case_name = str(scheduled.get("name") or "")
         if is_u74_group_marker(case_name):
-            # Batch group markers enable firmware-side groups; they expand to
-            # per-sub-case records at execution time and produce no case/result
-            # artifacts themselves.
+
+
+
             continue
         catalog_entry = dict(catalog_by_case.get(case_name) or {})
         scenario_native = _is_scenario_native_schedule_entry(scheduled)

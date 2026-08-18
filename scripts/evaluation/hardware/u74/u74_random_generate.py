@@ -1,27 +1,4 @@
 #!/usr/bin/env python3
-"""Unguided random-generation control for the U74 closedloop-144 campaign (v2).
-
-Same seed pool, same per-round volume (96), same generation machinery as the
-guided campaign -- but *no guidance*:
-
-- parents are chosen uniformly (not coverage-weighted);
-- mutation operators are chosen uniformly (not directed at missing bins);
-- no directed construction toward any bin.
-
-The only shared constraint is the firmware-stability filter (no sv39 fetch, no
-constructed TOR) so the board does not crash.  Every other property is a
-drop-in of `u74_guided_generate.py`, so guided-vs-random is a clean comparison
-of the guidance signal only.
-
-Usage:
-
-    PYTHONPATH=. python scripts/evaluation/hardware/u74/u74_random_generate.py \
-        --seed-pool .../corpus/corpus.json \
-        --universe .../u74-supported-v4-144.json \
-        --round-index 0 --budget 96 --seed 101 \
-        --prior-summary .../aggregation/round-0000-summary.json \
-        --out-dir .../random/run-seed-0101/rounds/round-0000
-"""
 from __future__ import annotations
 
 import argparse
@@ -61,7 +38,7 @@ def random_generate_round(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     import u74_guided_generate as G
 
-    G._REACHABLE = C.reachable_bins(universe)  # _assemble reads this module global
+    G._REACHABLE = C.reachable_bins(universe)
     parents = [p for p in seed_pool if not p.get("board_unstable") and p.get("scenario_spec")]
     rng = Random((int(seed) + int(round_index) * 104729) & 0x7FFFFFFF)
 

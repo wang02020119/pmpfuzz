@@ -225,8 +225,8 @@ def _profile_index_space(profile: str) -> int:
     count = int(PROFILE_TARGET_COUNTS.get(profile) or 0)
     if count > 0:
         return count
-    # Dedicated experiment profiles such as sv39-final-pmp are valid scenario
-    # generators even when they are not part of the semantic target-count map.
+
+
     return 256
 
 

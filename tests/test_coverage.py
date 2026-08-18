@@ -33,7 +33,7 @@ class CoverageTest(unittest.TestCase):
                     reason=None,
                 ),
             )
-            # Provide minimal capability file so execution coverage doesn't show unavailable
+
             write_json(
                 run_dir / "dut_capabilities.json",
                 {
@@ -59,7 +59,7 @@ class CoverageTest(unittest.TestCase):
         self.assertGreater(coverage["target_combo_bins"], coverage["covered_target_combo_bins"])
         self.assertEqual(coverage["statuses"]["pass"], 1)
         self.assertTrue(out_exists)
-        # execution_coverage should be present (schema v5)
+
         self.assertIn("execution_coverage", coverage)
         exec_cov = coverage["execution_coverage"]
         self.assertEqual(exec_cov["coverage_model"], "execution-qualified-capability-scoped-v1")
@@ -108,15 +108,13 @@ class CoverageTest(unittest.TestCase):
         self.assertGreater(coverage["covered_target_bins"], 0)
         self.assertLess(coverage["missing_target_bins"], coverage["target_bins"])
 
-    # ---- New tests for execution-qualified coverage (RED phase additions) ----
 
     def test_execution_fixture_with_case_result_and_capability_produces_eligible_results(self):
-        """Full fixture: case + result + run.json + dut_capabilities.json → eligible."""
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             scenario = ScenarioGenerator(seed=100, include_smepmp=False, profile="pmp-boundary").generate_batch(1)[0]
             case = scenario_to_case_dict(scenario, seed=100, index=0)
-            # Match phase to expected: if case expects completion, use "completed"
+
             expected_allowed = case["expected"]["allowed"]
             phase = "completed" if expected_allowed else "probe"
             result = result_to_dict(
@@ -155,7 +153,6 @@ class CoverageTest(unittest.TestCase):
         self.assertGreaterEqual(spike["qualification"]["eligible_results"], 1)
 
     def test_repro_metadata_includes_run_json_and_dut_capabilities(self):
-        """repro should eventually write run.json and dut_capabilities.json."""
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             scenario = ScenarioGenerator(seed=200, include_smepmp=False, profile="pmp-boundary").generate_batch(1)[0]
@@ -176,7 +173,7 @@ class CoverageTest(unittest.TestCase):
             )
             write_json(run_dir / "results" / case["name"] / "result.json", result)
 
-            # Simulate what repro should eventually write
+
             write_json(
                 run_dir / "run.json",
                 {
@@ -203,7 +200,6 @@ class CoverageTest(unittest.TestCase):
         self.assertEqual(caps["schema_version"], 3)
 
     def test_schedule_defaults_to_execution_with_explicit_manifest_available(self):
-        """schedule should default to execution, but --coverage-basis manifest keeps old behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "seed"
             out_exec = Path(tmp) / "schedule_exec"
@@ -215,13 +211,13 @@ class CoverageTest(unittest.TestCase):
                        {"schema_version": 3, "duts": {"spike": capability_for_dut("spike", available=True)}})
             write_json(run_dir / "run.json", {"mode": "test", "dut": "spike", "isa": "rv64gc"})
 
-            # execution (default)
+
             from pmpfuzz.semantic_coverage import build_schedule
             schedule_exec = build_schedule(
                 [run_dir], target=CORE_STATEFUL_TARGET, max_cases=4, seed=20260628,
                 coverage_basis="execution",
             )
-            # manifest (explicit)
+
             schedule_manifest = build_schedule(
                 [run_dir], target=CORE_STATEFUL_TARGET, max_cases=4, seed=20260628,
                 coverage_basis="manifest",
@@ -231,7 +227,6 @@ class CoverageTest(unittest.TestCase):
         self.assertEqual(schedule_manifest["coverage_basis"], "manifest")
 
     def test_spike_with_actual_isa_rv64gc_has_smepmp_unsupported(self):
-        """Spike with rv64gc ISA should not claim Smepmp support."""
         from pmpfuzz.capabilities import capability_for_dut
         cap = capability_for_dut("spike", isa="rv64gc", available=True)
         self.assertEqual(cap["isa"], "rv64gc")
@@ -239,7 +234,6 @@ class CoverageTest(unittest.TestCase):
                          "rv64gc Spike must not claim Smepmp support")
 
     def test_spike_with_actual_isa_rv64gc_smepmp_has_smepmp_supported(self):
-        """Spike with rv64gc_smepmp ISA should claim Smepmp support."""
         from pmpfuzz.capabilities import capability_for_dut
         cap = capability_for_dut("spike", isa="rv64gc_smepmp", available=True)
         self.assertEqual(cap["isa"], "rv64gc_smepmp")

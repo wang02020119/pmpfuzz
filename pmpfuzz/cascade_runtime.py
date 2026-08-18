@@ -842,7 +842,7 @@ def _parse_int(value: Any) -> int | None:
         return int(text, 0)
     except ValueError:
         if re.fullmatch(r"[0-9a-fA-F]+", text):
-            # Rocket and other RTL traces may emit zero-padded hex tokens without 0x.
+
             if any(ch in "abcdefABCDEF" for ch in text) or (text.startswith("0") and len(text) > 1):
                 try:
                     return int(text, 16)

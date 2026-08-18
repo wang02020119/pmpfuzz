@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Merge formal evaluation roots into a unified final summary."""
 
 from __future__ import annotations
 

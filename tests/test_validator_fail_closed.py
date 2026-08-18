@@ -1,13 +1,3 @@
-"""Phase B RED: fail-closed campaign validation tests.
-
-Each test builds a real temporary directory tree and calls ``validate_timeline()``
-(and ``main()`` for CLI exit-code tests).  Tests A–S correspond to the Phase B
-acceptance checklist.
-
-Current baseline (290b6ea) is expected to FAIL most of these because it treats
-many structural gaps as warnings rather than errors, and lacks artifact-hash,
-identity-consistency, and orphan/duplicate-result checks.
-"""
 
 from __future__ import annotations
 
@@ -30,13 +20,10 @@ from pmpfuzz.scenario import ScenarioGenerator
 from pmpfuzz.scenario_codec import scenario_hash, scenario_to_spec
 from scripts.evaluation.validation.validate_timeline import main, validate_timeline
 
-# ── helpers ──────────────────────────────────────────────────────────────────
-
-_CAMPAIGN_DIR_DEPTH = 6  # campaigns / experiment / dut / variant / mode / seed-NNNN
+_CAMPAIGN_DIR_DEPTH = 6
 
 
 def _artifact_root_from_campaign(campaign_dir: Path) -> Path:
-    """Walk up 6 levels to reach the artifact root."""
     p = campaign_dir
     for _ in range(_CAMPAIGN_DIR_DEPTH):
         p = p.parent
@@ -49,7 +36,6 @@ def _build_minimal_campaign(root: Path, *, campaign_id: str = "e1-rocket-random-
                             coverage_mode: str = "semantic",
                             experiment_id: str = "E1-COVERAGE-FEEDBACK",
                             ) -> Path:
-    """Return the campaign directory (created) under *root*."""
     campaign = (root / "campaigns" / experiment_id / dut / variant
                 / coverage_mode / f"seed-{seed:04d}")
     campaign.mkdir(parents=True)
@@ -62,13 +48,12 @@ def _write_timeline(campaign: Path, campaign_id: str, variant: str = "random",
                     completion_seqs: list[int] | None = None,
                     wall_times: list[float] | None = None,
                     ) -> Path:
-    """Write a valid coverage_timeline.jsonl with baseline row."""
     metrics = campaign / "metrics"
     metrics.mkdir(parents=True, exist_ok=True)
     if case_ids is None:
         case_ids = [f"case-{i:04d}" for i in range(1, 4)]
     if completion_seqs is None:
-        completion_seqs = list(range(len(case_ids) + 1))  # 0..N
+        completion_seqs = list(range(len(case_ids) + 1))
     if wall_times is None:
         wall_times = [i * 10.0 for i in range(len(case_ids) + 1)]
 
@@ -156,7 +141,6 @@ def _write_metadata(campaign: Path, campaign_id: str,
                     experiment_id: str = "E1-COVERAGE-FEEDBACK",
                     method: str = "pmpfuzz",
                     ) -> Path:
-    """Write campaign_metadata.json."""
     metrics = campaign / "metrics"
     metrics.mkdir(parents=True, exist_ok=True)
     meta = {
@@ -203,7 +187,6 @@ def _write_metadata(campaign: Path, campaign_id: str,
 
 
 def _write_case(campaign: Path, case_id: str) -> Path:
-    """Write a minimal case.json."""
     d = campaign / "cases" / case_id
     d.mkdir(parents=True, exist_ok=True)
     p = d / "case.json"
@@ -223,7 +206,6 @@ def _write_case(campaign: Path, case_id: str) -> Path:
 
 
 def _write_result(campaign: Path, case_id: str, status: str = "pass") -> Path:
-    """Write a minimal result.json."""
     d = campaign / "results" / case_id
     d.mkdir(parents=True, exist_ok=True)
     p = d / "result.json"
@@ -250,7 +232,6 @@ def _write_cases_and_results(campaign: Path, case_ids: list[str]) -> None:
 
 def _write_child_round(campaign: Path, round_name: str = "round_0000",
                        case_ids: list[str] | None = None) -> Path:
-    """Write a child round directory with its own timeline."""
     rd = campaign / "rounds" / round_name
     rd.mkdir(parents=True, exist_ok=True)
     if case_ids is None:
@@ -266,7 +247,6 @@ def _write_manifests(artifact_root: Path, *,
                      artifact_sha_files: list[tuple[str, str]] | None = None,
                      experiment_contract: dict[str, object] | None = None,
                      ) -> Path:
-    """Write manifest files under *artifact_root*/manifests/."""
     mdir = artifact_root / "manifests"
     mdir.mkdir(parents=True, exist_ok=True)
     if include_environment:
@@ -753,7 +733,6 @@ def _write_continuous_bapc_coverage_json(
 
 
 def _build_strict_fixture(root: Path) -> Path:
-    """Build a fully valid strict (pilot) campaign for test A."""
     campaign = _build_minimal_campaign(root)
     case_ids = [f"case-{i:04d}" for i in range(1, 4)]
     _write_timeline(campaign, "e1-rocket-random-0101", case_ids=case_ids)
@@ -762,8 +741,8 @@ def _build_strict_fixture(root: Path) -> Path:
     _write_child_round(campaign, "round_0000", [f"child-case-{i:04d}" for i in range(1, 3)])
     _write_child_round(campaign, "round_0001", [f"child-case-{i:04d}" for i in range(3, 5)])
     artifact_root = _artifact_root_from_campaign(campaign)
-    # Include at least one valid artifact entry — the new fail-closed validator
-    # rejects empty manifests.
+
+
     tl_path = campaign / "metrics" / "coverage_timeline.jsonl"
     tl_bytes = tl_path.read_bytes()
     tl_rel = ("campaigns/E1-COVERAGE-FEEDBACK/rocket-clean/random/semantic/"
@@ -773,11 +752,10 @@ def _build_strict_fixture(root: Path) -> Path:
     return campaign
 
 
-# ── tests ────────────────────────────────────────────────────────────────────
+
 
 
 class TestStrictValidFixture(unittest.TestCase):
-    """A: strict complete fixture must pass."""
 
     def test_strict_complete_fixture_is_valid(self):
         with TemporaryDirectory() as tmp:
@@ -790,7 +768,6 @@ class TestStrictValidFixture(unittest.TestCase):
 
 
 class TestStrictMissingMetadata(unittest.TestCase):
-    """B: strict campaign missing metadata → invalid."""
 
     def test_strict_missing_metadata_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -799,11 +776,11 @@ class TestStrictMissingMetadata(unittest.TestCase):
             case_ids = ["case-0001", "case-0002"]
             _write_timeline(campaign, "test-campaign", case_ids=case_ids)
             _write_cases_and_results(campaign, case_ids)
-            # NO metadata written
+
             report = validate_timeline(campaign)
-            # Without run_class in metadata, the validator must treat missing
-            # campaign_metadata.json as an error for strict behavior.
-            # Current code treats it as warning → RED.
+
+
+
             self.assertFalse(report["valid"],
                              "strict campaign missing metadata must be invalid")
             meta_check = [c for c in report["checks"] if c["name"] == "metadata_exists"]
@@ -813,21 +790,19 @@ class TestStrictMissingMetadata(unittest.TestCase):
 
 
 class TestStrictMissingTimeline(unittest.TestCase):
-    """C: strict campaign missing campaign-level timeline → invalid."""
 
     def test_strict_missing_timeline_is_invalid(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign = _build_minimal_campaign(root)
             _write_metadata(campaign, "test-campaign", run_class="pilot")
-            # NO timeline written
+
             report = validate_timeline(campaign)
             self.assertFalse(report["valid"],
                              "strict campaign missing timeline must be invalid")
 
 
 class TestStrictMissingChildTimeline(unittest.TestCase):
-    """D: strict campaign missing child round timeline → invalid."""
 
     def test_strict_missing_child_timeline_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -837,7 +812,7 @@ class TestStrictMissingChildTimeline(unittest.TestCase):
             _write_timeline(campaign, "test-campaign", case_ids=case_ids)
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_cases_and_results(campaign, case_ids)
-            # Create round dir WITHOUT timeline
+
             rd = campaign / "rounds" / "round_0000"
             rd.mkdir(parents=True)
             report = validate_timeline(campaign)
@@ -853,7 +828,6 @@ class TestStrictMissingChildTimeline(unittest.TestCase):
 
 
 class TestCorruptChildTimeline(unittest.TestCase):
-    """E: child timeline contains corrupted JSON → invalid."""
 
     def test_corrupt_child_timeline_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -863,7 +837,7 @@ class TestCorruptChildTimeline(unittest.TestCase):
             _write_timeline(campaign, "test-campaign", case_ids=case_ids)
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_cases_and_results(campaign, case_ids)
-            # Write corrupted child timeline
+
             rd = campaign / "rounds" / "round_0000"
             rd_metrics = rd / "metrics"
             rd_metrics.mkdir(parents=True)
@@ -875,7 +849,6 @@ class TestCorruptChildTimeline(unittest.TestCase):
 
 
 class TestCompletionSeqErrors(unittest.TestCase):
-    """F: completion_seq gaps, duplicates, or non-1-start → invalid."""
 
     def test_completion_seq_gap_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -883,7 +856,7 @@ class TestCompletionSeqErrors(unittest.TestCase):
             campaign = _build_minimal_campaign(root)
             case_ids = ["case-0001", "case-0002", "case-0003"]
             _write_timeline(campaign, "test-campaign", case_ids=case_ids,
-                            completion_seqs=[0, 1, 3, 4])  # gap: missing 2
+                            completion_seqs=[0, 1, 3, 4])
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_cases_and_results(campaign, case_ids)
             report = validate_timeline(campaign)
@@ -896,7 +869,7 @@ class TestCompletionSeqErrors(unittest.TestCase):
             campaign = _build_minimal_campaign(root)
             case_ids = ["case-0001", "case-0002", "case-0003"]
             _write_timeline(campaign, "test-campaign", case_ids=case_ids,
-                            completion_seqs=[0, 1, 1, 2])  # duplicate 1
+                            completion_seqs=[0, 1, 1, 2])
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_cases_and_results(campaign, case_ids)
             report = validate_timeline(campaign)
@@ -909,7 +882,7 @@ class TestCompletionSeqErrors(unittest.TestCase):
             campaign = _build_minimal_campaign(root)
             case_ids = ["case-0001", "case-0002"]
             _write_timeline(campaign, "test-campaign", case_ids=case_ids,
-                            completion_seqs=[1, 2, 3])  # no baseline 0
+                            completion_seqs=[1, 2, 3])
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_cases_and_results(campaign, case_ids)
             report = validate_timeline(campaign)
@@ -918,7 +891,6 @@ class TestCompletionSeqErrors(unittest.TestCase):
 
 
 class TestWallTimeRegression(unittest.TestCase):
-    """G: elapsed_wall_seconds regression → invalid."""
 
     def test_wall_time_regression_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -926,7 +898,7 @@ class TestWallTimeRegression(unittest.TestCase):
             campaign = _build_minimal_campaign(root)
             case_ids = ["case-0001", "case-0002", "case-0003"]
             _write_timeline(campaign, "test-campaign", case_ids=case_ids,
-                            wall_times=[0.0, 30.0, 10.0, 20.0])  # regression at seq 2
+                            wall_times=[0.0, 30.0, 10.0, 20.0])
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_cases_and_results(campaign, case_ids)
             report = validate_timeline(campaign)
@@ -935,7 +907,6 @@ class TestWallTimeRegression(unittest.TestCase):
 
 
 class TestMissingRawCase(unittest.TestCase):
-    """H: expected timeline case missing raw case.json → invalid."""
 
     def test_missing_raw_case_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -944,17 +915,16 @@ class TestMissingRawCase(unittest.TestCase):
             case_ids = ["case-0001", "case-0002"]
             _write_timeline(campaign, "test-campaign", case_ids=case_ids)
             _write_metadata(campaign, "test-campaign", run_class="pilot")
-            # Write results but skip one case
+
             _write_case(campaign, "case-0001")
             _write_result(campaign, "case-0001")
-            _write_result(campaign, "case-0002")  # result without case
+            _write_result(campaign, "case-0002")
             report = validate_timeline(campaign)
             self.assertFalse(report["valid"],
                              "missing raw case.json must be invalid")
 
 
 class TestMissingRawResult(unittest.TestCase):
-    """I: missing raw result.json → invalid."""
 
     def test_missing_raw_result_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -965,14 +935,13 @@ class TestMissingRawResult(unittest.TestCase):
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_case(campaign, "case-0001")
             _write_result(campaign, "case-0001")
-            _write_case(campaign, "case-0002")  # case without result
+            _write_case(campaign, "case-0002")
             report = validate_timeline(campaign)
             self.assertFalse(report["valid"],
                              "missing raw result.json must be invalid")
 
 
 class TestDuplicateResult(unittest.TestCase):
-    """J: same case has multiple results → invalid."""
 
     def test_duplicate_result_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -983,7 +952,7 @@ class TestDuplicateResult(unittest.TestCase):
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_case(campaign, "case-0001")
             _write_result(campaign, "case-0001")
-            # Write a second result for the same case
+
             d = campaign / "results" / "case-0001"
             (d / "result-2.json").write_text(json.dumps({
                 "name": "case-0001", "status": "fail",
@@ -997,7 +966,6 @@ class TestDuplicateResult(unittest.TestCase):
 
 
 class TestOrphanResultCase(unittest.TestCase):
-    """K: orphan result or case (on disk but not in timeline) → invalid."""
 
     def test_orphan_case_file_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1008,7 +976,7 @@ class TestOrphanResultCase(unittest.TestCase):
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_case(campaign, "case-0001")
             _write_result(campaign, "case-0001")
-            # Orphan case not in timeline
+
             _write_case(campaign, "orphan-case")
             _write_result(campaign, "orphan-case")
             report = validate_timeline(campaign)
@@ -1024,7 +992,7 @@ class TestOrphanResultCase(unittest.TestCase):
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_case(campaign, "case-0001")
             _write_result(campaign, "case-0001")
-            # Orphan result dir only (no matching case in timeline)
+
             d = campaign / "results" / "orphan-result"
             d.mkdir(parents=True)
             (d / "result.json").write_text(json.dumps({
@@ -1036,7 +1004,6 @@ class TestOrphanResultCase(unittest.TestCase):
 
 
 class TestMetadataIdentityMismatch(unittest.TestCase):
-    """L: metadata dut/seed/method/campaign_id inconsistent with timeline → invalid."""
 
     def test_metadata_campaign_id_mismatch_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1077,7 +1044,6 @@ class TestMetadataIdentityMismatch(unittest.TestCase):
 
 
 class TestStrictEnvironmentManifest(unittest.TestCase):
-    """M: strict campaign missing environment.json → invalid."""
 
     def test_strict_missing_environment_json_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1087,7 +1053,7 @@ class TestStrictEnvironmentManifest(unittest.TestCase):
             _write_timeline(campaign, "test-campaign", case_ids=case_ids)
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_cases_and_results(campaign, case_ids)
-            # Write manifests but without environment.json
+
             artifact_root = _artifact_root_from_campaign(campaign)
             _write_manifests(artifact_root, include_environment=False)
             report = validate_timeline(campaign)
@@ -1096,7 +1062,6 @@ class TestStrictEnvironmentManifest(unittest.TestCase):
 
 
 class TestStrictGitShasManifest(unittest.TestCase):
-    """N: strict campaign missing git-shas.txt → invalid."""
 
     def test_strict_missing_git_shas_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1114,7 +1079,6 @@ class TestStrictGitShasManifest(unittest.TestCase):
 
 
 class TestStrictMissingDutSha(unittest.TestCase):
-    """O: strict campaign missing DUT SHA / capability fingerprint / source SHA → invalid."""
 
     def test_strict_missing_source_sha_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1201,7 +1165,6 @@ class TestStrictMissingDutSha(unittest.TestCase):
 
 
 class TestStrictMissingArtifactShaManifest(unittest.TestCase):
-    """P: strict campaign missing artifact-sha256.txt → invalid."""
 
     def test_strict_missing_artifact_sha_manifest_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1219,7 +1182,6 @@ class TestStrictMissingArtifactShaManifest(unittest.TestCase):
 
 
 class TestArtifactHashManifestIntegrity(unittest.TestCase):
-    """Q: hash manifest missing files or SHA mismatch → invalid."""
 
     def test_artifact_sha_missing_file_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1230,7 +1192,7 @@ class TestArtifactHashManifestIntegrity(unittest.TestCase):
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_cases_and_results(campaign, case_ids)
             artifact_root = _artifact_root_from_campaign(campaign)
-            # Write artifact SHA manifest referencing a file that does NOT exist
+
             tl_rel = ("campaigns/E1-COVERAGE-FEEDBACK/rocket-clean/random/semantic/"
                       "seed-0101/metrics/coverage_timeline.jsonl")
             tl_content = (campaign / "metrics" / "coverage_timeline.jsonl").read_text(encoding="ascii")
@@ -1252,7 +1214,7 @@ class TestArtifactHashManifestIntegrity(unittest.TestCase):
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_cases_and_results(campaign, case_ids)
             artifact_root = _artifact_root_from_campaign(campaign)
-            # Write manifest with deliberately wrong hash
+
             tl_rel = ("campaigns/E1-COVERAGE-FEEDBACK/rocket-clean/random/semantic/"
                       "seed-0101/metrics/coverage_timeline.jsonl")
             wrong_hash = "0" * 64
@@ -1268,10 +1230,8 @@ class TestArtifactHashManifestIntegrity(unittest.TestCase):
 
 
 class TestDevelopmentSmokeRules(unittest.TestCase):
-    """R: development-smoke can miss global provenance but not raw case/result/timeline."""
 
     def test_dev_smoke_without_provenance_is_valid(self):
-        """development-smoke may be valid without environment.json/git-shas.txt."""
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign = _build_minimal_campaign(root)
@@ -1279,20 +1239,19 @@ class TestDevelopmentSmokeRules(unittest.TestCase):
             _write_timeline(campaign, "test-campaign", case_ids=case_ids)
             _write_metadata(campaign, "test-campaign", run_class="development-smoke")
             _write_cases_and_results(campaign, case_ids)
-            # No manifests at all — should be OK for dev smoke
+
             report = validate_timeline(campaign)
             self.assertTrue(report["valid"],
                             f"dev-smoke without manifests should be valid, got: {report['checks']}")
 
     def test_dev_smoke_missing_raw_case_still_invalid(self):
-        """development-smoke must still have raw cases matching timeline."""
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign = _build_minimal_campaign(root)
             case_ids = ["case-0001", "case-0002"]
             _write_timeline(campaign, "test-campaign", case_ids=case_ids)
             _write_metadata(campaign, "test-campaign", run_class="development-smoke")
-            # Only write one case, missing case-0002
+
             _write_case(campaign, "case-0001")
             _write_result(campaign, "case-0001")
             report = validate_timeline(campaign)
@@ -1300,19 +1259,17 @@ class TestDevelopmentSmokeRules(unittest.TestCase):
                              "dev-smoke missing raw case must still be invalid")
 
     def test_dev_smoke_missing_timeline_still_invalid(self):
-        """development-smoke must still have campaign timeline."""
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign = _build_minimal_campaign(root)
             _write_metadata(campaign, "test-campaign", run_class="development-smoke")
-            # No timeline
+
             report = validate_timeline(campaign)
             self.assertFalse(report["valid"],
                              "dev-smoke missing timeline must still be invalid")
 
 
 class TestCLIExitCodes(unittest.TestCase):
-    """S: CLI returns non-zero for invalid, zero for valid."""
 
     def test_cli_valid_returns_zero(self):
         with TemporaryDirectory() as tmp:
@@ -1325,17 +1282,15 @@ class TestCLIExitCodes(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign = _build_minimal_campaign(root)
-            # No timeline → invalid
+
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             rc = main(["--campaign", str(campaign)])
             self.assertNotEqual(rc, 0, "CLI must return non-zero for invalid campaign")
 
 
-# ── Phase B audit rework: artifact manifest boundary tests ──────────────────
 
 
 class TestArtifactManifestNonempty(unittest.TestCase):
-    """Audit A: empty artifact-sha256.txt → invalid (fail-closed)."""
 
     def test_empty_manifest_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1346,7 +1301,7 @@ class TestArtifactManifestNonempty(unittest.TestCase):
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_cases_and_results(campaign, case_ids)
             artifact_root = _artifact_root_from_campaign(campaign)
-            # Write needed manifests, artifact-sha256.txt is empty
+
             _write_manifests(artifact_root, include_artifact_sha=True,
                              artifact_sha_files=[])
             report = validate_timeline(campaign)
@@ -1362,7 +1317,6 @@ class TestArtifactManifestNonempty(unittest.TestCase):
             self.assertEqual(nonempty[0]["severity"], "error")
 
     def test_blank_only_manifest_is_invalid(self):
-        """Audit B: manifest with only blank/whitespace lines → invalid."""
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign = _build_minimal_campaign(root)
@@ -1373,7 +1327,7 @@ class TestArtifactManifestNonempty(unittest.TestCase):
             artifact_root = _artifact_root_from_campaign(campaign)
             _write_manifests(artifact_root, include_artifact_sha=True,
                              artifact_sha_files=[])
-            # Overwrite with blank-only content
+
             mf = artifact_root / "manifests" / "artifact-sha256.txt"
             mf.write_text("\n   \n\t\t\n\n", encoding="ascii")
             report = validate_timeline(campaign)
@@ -1387,7 +1341,6 @@ class TestArtifactManifestNonempty(unittest.TestCase):
 
 
 class TestArtifactManifestPathEscape(unittest.TestCase):
-    """Audit C: relative path escape via ../ → invalid even if hash correct."""
 
     def test_relative_path_escape_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1398,8 +1351,8 @@ class TestArtifactManifestPathEscape(unittest.TestCase):
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_cases_and_results(campaign, case_ids)
 
-            # Place manifests at a deeper level so artifact_root ≠ tmp
-            # and escapes can target files still within tmp.
+
+
             artifact_root = root / "campaigns" / "E1-COVERAGE-FEEDBACK"
             mdir = artifact_root / "manifests"
             mdir.mkdir(parents=True, exist_ok=True)
@@ -1408,7 +1361,7 @@ class TestArtifactManifestPathEscape(unittest.TestCase):
             (mdir / "git-shas.txt").write_text(
                 "abc  repo\n", encoding="ascii")
 
-            # Escape file at tmp level (parent of artifact_root)
+
             escape_file = root / "outside.txt"
             content = "escaped-via-dotdot"
             escape_file.write_text(content, encoding="ascii")
@@ -1431,8 +1384,6 @@ class TestArtifactManifestPathEscape(unittest.TestCase):
 
 
 class TestArtifactManifestMultiLevelEscape(unittest.TestCase):
-    """Audit D: multi-level path like campaigns/.../../../outside
-    that normalises outside artifact_root → invalid."""
 
     def test_multilevel_path_escape_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1451,16 +1402,16 @@ class TestArtifactManifestMultiLevelEscape(unittest.TestCase):
             (mdir / "git-shas.txt").write_text(
                 "abc  repo\n", encoding="ascii")
 
-            # File at tmp/campaigns/outside.txt — outside artifact_root
+
             escape_file = root / "campaigns" / "outside.txt"
             escape_file.parent.mkdir(parents=True, exist_ok=True)
             content = "escaped-via-multilevel"
             escape_file.write_text(content, encoding="ascii")
             h = hashlib.sha256(content.encode("ascii")).hexdigest()
 
-            # Goes down into campaigns/E1... then back up THREE levels
-            # so the normalised result lands at root/campaigns/outside.txt
-            # which is outside artifact_root (root/campaigns/E1...).
+
+
+
             rel = "campaigns/E1-COVERAGE-FEEDBACK/../../../outside.txt"
             (mdir / "artifact-sha256.txt").write_text(
                 f"{h}  {rel}\n", encoding="ascii")
@@ -1477,8 +1428,6 @@ class TestArtifactManifestMultiLevelEscape(unittest.TestCase):
 
 
 class TestArtifactManifestAbsolutePath(unittest.TestCase):
-    """Audit E: absolute path (cross-platform) pointing outside root
-    with correct hash → invalid."""
 
     def test_absolute_path_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1496,7 +1445,7 @@ class TestArtifactManifestAbsolutePath(unittest.TestCase):
             abs_file.write_text(content, encoding="ascii")
             h = hashlib.sha256(content.encode("ascii")).hexdigest()
 
-            # Use the platform's absolute path as the manifest entry
+
             abs_path_str = str(abs_file.resolve())
             mdir = artifact_root / "manifests"
             (mdir / "artifact-sha256.txt").write_text(
@@ -1515,7 +1464,6 @@ class TestArtifactManifestAbsolutePath(unittest.TestCase):
 
 
 class TestArtifactManifestSelfReference(unittest.TestCase):
-    """Audit F: manifest entry pointing to artifact-sha256.txt itself → invalid."""
 
     def test_self_reference_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1545,7 +1493,6 @@ class TestArtifactManifestSelfReference(unittest.TestCase):
 
 
 class TestArtifactManifestDirectoryTarget(unittest.TestCase):
-    """Audit G: manifest entry pointing to a directory → invalid."""
 
     def test_directory_target_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1558,7 +1505,7 @@ class TestArtifactManifestDirectoryTarget(unittest.TestCase):
             artifact_root = _artifact_root_from_campaign(campaign)
             _write_manifests(artifact_root, include_artifact_sha=False)
 
-            # Create a directory inside artifact_root to reference
+
             (artifact_root / "some_directory").mkdir(parents=True, exist_ok=True)
             mdir = artifact_root / "manifests"
             (mdir / "artifact-sha256.txt").write_text(
@@ -1576,7 +1523,6 @@ class TestArtifactManifestDirectoryTarget(unittest.TestCase):
 
 
 class TestArtifactManifestDuplicateEntry(unittest.TestCase):
-    """Audit H: same normalised target appears twice → invalid."""
 
     def test_duplicate_entry_is_invalid(self):
         with TemporaryDirectory() as tmp:
@@ -1589,7 +1535,7 @@ class TestArtifactManifestDuplicateEntry(unittest.TestCase):
             artifact_root = _artifact_root_from_campaign(campaign)
             _write_manifests(artifact_root, include_artifact_sha=False)
 
-            # Create a real file under artifact_root for the duplicate reference
+
             dup_file = artifact_root / "dup_target.txt"
             content = "duplicate entry test"
             dup_file.write_text(content, encoding="ascii")
@@ -1614,7 +1560,6 @@ class TestArtifactManifestDuplicateEntry(unittest.TestCase):
 
 
 class TestArtifactManifestValidEntry(unittest.TestCase):
-    """Audit I: normal root-relative file with correct hash → valid."""
 
     def test_valid_entry_passes(self):
         with TemporaryDirectory() as tmp:
@@ -1625,9 +1570,9 @@ class TestArtifactManifestValidEntry(unittest.TestCase):
             _write_metadata(campaign, "test-campaign", run_class="pilot")
             _write_cases_and_results(campaign, case_ids)
             artifact_root = _artifact_root_from_campaign(campaign)
-            # Compute hash from raw bytes so it matches what the validator
-            # reads via read_bytes() — text-mode newline translation would
-            # produce a different hash on Windows.
+
+
+
             tl_path = campaign / "metrics" / "coverage_timeline.jsonl"
             tl_bytes = tl_path.read_bytes()
             tl_hash = hashlib.sha256(tl_bytes).hexdigest()
@@ -1649,7 +1594,6 @@ class TestArtifactManifestValidEntry(unittest.TestCase):
 
 
 class TestArtifactManifestMutableAggregateEntries(unittest.TestCase):
-    """Mutable normalized aggregate CSVs should not invalidate a finished campaign."""
 
     def test_mutable_normalized_hash_drift_is_tolerated(self):
         with TemporaryDirectory() as tmp:
@@ -1705,7 +1649,6 @@ class TestArtifactManifestMutableAggregateEntries(unittest.TestCase):
 
 
 class TestArtifactManifestRegeneratedValidationEntries(unittest.TestCase):
-    """Regenerated validation reports should not invalidate campaign reuse."""
 
     def test_regenerated_validation_hash_drift_is_tolerated(self):
         with TemporaryDirectory() as tmp:

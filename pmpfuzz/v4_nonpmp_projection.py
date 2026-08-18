@@ -1,36 +1,12 @@
-"""BAPC-core v4 non-PMP projection mapper.
-
-The formal RTL evaluation uses the full BAPC-core v4 vocabulary of 144 bins
-(``family=config`` 64, ``family=stimulus`` 26, ``family=decision`` 12,
-``family=privilege-decision`` 18, ``family=mode-decision`` 24).  The ``config``
-and ``mode-decision`` families depend on PMP entries and PMP matching modes, so
-a target with no usable PMP (e.g. the C910) cannot be scored on them.
-
-This module defines the **non-PMP projection**
-
-    B_{v4}^{non-PMP} = B_stimulus union B_decision union B_privilege-decision,
-    |B_{v4}^{non-PMP}| = 56,
-
-which keeps the same stimulus, result, and effective-privilege decision mapping
-as the full v4 mapper but never emits ``config`` or ``mode-decision`` bins.  The
-56-bin universe is a strict subset of the 144-bin v4 universe, so ``covered/56``
-is directly comparable with the shared-56 projection of U74 and the RTL targets.
-
-Per the hardware-experiment v2 protocol, every scenario is classified as
-``mapped`` / ``unsupported`` / ``observation-unqualified`` with an explicit
-reason, and an operation whose observed outcome contradicts the architectural
-oracle is reported as a *known semantic violation* rather than being counted as
-an oracle pass.
-"""
 from __future__ import annotations
 
 from typing import Any
 
-# --- v4 non-PMP vocabulary ----------------------------------------------------
 
-# Architecturally reachable (privilege, effective_privilege) pairs in v4.
-# M-mode may lower loads/stores to S or U (MPRV); S and U execute as themselves.
-# Instruction fetch is never MPRV-affected, so fetch only appears when v == e.
+
+
+
+
 _REACHABLE_EFFECTIVE = {
     ("m", "m"): {"fetch", "load", "store"},
     ("m", "s"): {"load", "store"},
@@ -112,7 +88,6 @@ def _privilege_decision_bins() -> list[str]:
 
 
 def build_v4_nonpmp_bin_ids() -> list[str]:
-    """Return the frozen 56 non-PMP projection bin IDs (sorted)."""
     return sorted(_stimulus_bins() + _decision_bins() + _privilege_decision_bins())
 
 
@@ -125,7 +100,7 @@ def nonpmp_family_counts(bin_ids: list[str] | None = None) -> dict[str, int]:
     return counts
 
 
-# --- pure target-operation mapping ---------------------------------------------
+
 
 def _normalize(value: Any, allowed: set[str], default: str | None = None) -> str | None:
     if value is None:
@@ -143,13 +118,6 @@ def map_target_operation(
     allow_or_deny: Any,
     mcause_class: Any = None,
 ) -> dict[str, Any]:
-    """Map one qualified target operation to its non-PMP v4 bins.
-
-    Returns ``{"status": "mapped", "bins": [...], "reason": "eligible"}`` or
-    ``{"status": "unsupported", "bins": [], "reason": "<cause>"}``.  A result
-    that is architecturally representable but whose outcome is not attributable
-    is reported by the caller as ``observation-unqualified``.
-    """
     privilege = _normalize(privilege, set(_PRIVILEGES))
     effective = _normalize(effective_privilege, set(_PRIVILEGES))
     access = _normalize(access, set(_ACCESSES))
@@ -202,7 +170,7 @@ def map_target_operation(
                 "reason": f"unrepresentable-deny-class:{access}/{mcause_class}",
             }
         if decision_class == _PAGE_FAULT_CLASS[access] and translation != "sv39":
-            # A page-fault decision is only attributable under sv39 translation.
+
             return {
                 "status": "unsupported",
                 "bins": [],
@@ -218,23 +186,15 @@ def map_target_operation(
     return {"status": "mapped", "bins": sorted(bins), "reason": "eligible"}
 
 
-# --- C910 target-operation bridge ----------------------------------------------
+
 
 _PROTECTION_MCAUSE = set(_MCAUSE_TO_CLASS)
-# mcause values that are the payload's own trap rather than a protection denial:
-# 8=user_ecall, 9=supervisor_ecall, 11=machine_ecall.
+
+
 _NON_PROTECTION_MCAUSE = {8, 9, 11}
 
 
 def _c910_outcome(record: dict[str, Any]) -> tuple[str, str] | None:
-    """Derive (allow_or_deny, mcause_class) from a parsed C910 UART record.
-
-    ``result=allow``/``result=deny`` are authoritative.  ``result=trap`` is a
-    protection denial only when the cause is a protection fault class; otherwise
-    the trap is the probe payload's own trap and the protected access was
-    allowed.  sum-fetch records carry an explicit verdict/marker evidence that
-    takes precedence.
-    """
     result = str(record.get("result") or "").strip().lower()
     kind = str(record.get("kind") or "").strip().lower()
 
@@ -275,22 +235,14 @@ def _c910_outcome(record: dict[str, Any]) -> tuple[str, str] | None:
 def _outcome_from_cause(cause: int, *, access: str) -> tuple[str, str] | None:
     if cause in _PROTECTION_MCAUSE:
         return ("deny", _MCAUSE_TO_CLASS[cause])
-    # Any trap that is not a protection access/page fault means the protected
-    # access itself was permitted; the payload trapped for its own reason
-    # (ecall, illegal instruction, breakpoint, misalignment, ...).  Such a final
-    # trap must never be reported as a protection denial.
+
+
+
+
     return ("allow", "none")
 
 
 def c910_target_operation(case: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
-    """Build a v4 non-PMP target operation from a C910 case + result.
-
-    Uses the authoritative case fields for privilege/effective-privilege/access/
-    translation, and derives the observed outcome from the parsed UART record.
-    Returns ``{"status": "observation-unqualified", ...}`` when the outcome
-    cannot be attributed, and ``{"status": "unsupported", ...}`` for records
-    that are not protection accesses in the v4 sense.
-    """
     record = _parse_uart_record(result.get("uart_raw") or "")
     if record is None:
         return {
@@ -300,8 +252,8 @@ def c910_target_operation(case: dict[str, Any], result: dict[str, Any]) -> dict[
         }
 
     parser = str(case.get("uart_parser") or result.get("uart_parser") or "").strip().lower()
-    # Records that observe memory side effects or probe-only privilege behavior
-    # are not v4 protection target operations.
+
+
     if parser == "side-effect":
         return {"status": "unsupported", "bins": [], "reason": "side-effect-not-v4-target-operation"}
     if parser == "real-mode" and not _has_target_access(case, record):
@@ -323,8 +275,8 @@ def c910_target_operation(case: dict[str, Any], result: dict[str, Any]) -> dict[
         }
     allow_or_deny, mcause_class = outcome
 
-    # The mcause_class is derived from the protection fault; never use the
-    # probe's own final trap (e.g. supervisor_ecall) as a protection decision.
+
+
     return map_target_operation(
         privilege=privilege,
         effective_privilege=effective,
@@ -348,14 +300,6 @@ def classify_scenario(
     *,
     oracle_allow: bool | None = None,
 ) -> dict[str, Any]:
-    """Classify one executed scenario under the non-PMP v4 projection.
-
-    Returns a report with status ``mapped``/``unsupported``/``observation-unqualified``,
-    the mapped bins, an explicit reason, and a ``known_violation`` flag set when
-    the observed outcome contradicts the architectural oracle.  When
-    ``oracle_allow`` is not supplied it is derived from the case's architectural
-    protection context (``architectural_oracle_allow``).
-    """
     mapped = c910_target_operation(case, result)
     report = {
         "case_id": str(case.get("name") or result.get("name") or ""),
@@ -386,15 +330,6 @@ def classify_scenario(
 
 
 def architectural_oracle_allow(case: dict[str, Any]) -> bool | None:
-    """Architectural allow/deny for a non-PMP (C910) protection access.
-
-    Implements the Sv39 PTE permission rules without PMP: M-mode bypasses PTE
-    checks; S-mode may access user pages only through SUM and only for
-    loads/stores; instruction fetch never benefits from SUM or MXR; MXR permits
-    loads to execute-only pages.  Under bare translation with no usable PMP the
-    access is architecturally allowed.  Returns ``None`` when the case does not
-    carry enough context to decide (never treated as a violation).
-    """
     translation = str(case.get("translation") or "").strip().lower()
     effective = str(case.get("effective_privilege") or case.get("privilege") or "").strip().lower()
     access = str(case.get("access") or "").strip().lower()
@@ -405,18 +340,18 @@ def architectural_oracle_allow(case: dict[str, Any]) -> bool | None:
     if effective == "m":
         return True
     if translation == "bare":
-        # No page tables and no usable PMP on this target: nothing denies it.
+
         return True
     if translation != "sv39":
         return None
 
     profile = str(case.get("profile") or "").strip().lower()
     case_name = str(case.get("name") or "").strip().lower()
-    # Stateful TLB / stale-mapping / side-effect / A-D / permission-mutation
-    # tests probe microarchitectural state (whether a fence was issued, whether
-    # a stale mapping is still cached, whether an A/D bit has been set, whether
-    # X was cleared before a fence).  A static PTE model cannot decide them;
-    # leave them unqualified rather than risk a false violation.
+
+
+
+
+
     _STATEFUL_MARKERS = (
         "tlb", "side-effect", "stale", "nosfence", "patch", "fencei",
         "asid", "global", "fill", "after-", "-ad-", "ad-", "watchdog",
@@ -430,10 +365,10 @@ def architectural_oracle_allow(case: dict[str, Any]) -> bool | None:
         pte = {}
 
     if access == "fetch":
-        # SUM does not affect instruction fetch; S-mode may never fetch from a
-        # user page regardless of SUM, and MXR does not affect fetch.  Fetch
-        # probes execute an executable marker page, so the X bit is implied.
-        # The user bit comes from the PTE when present, else from the case name.
+
+
+
+
         pte_user = pte.get("user")
         u_page = (
             bool(pte_user)
@@ -446,14 +381,14 @@ def architectural_oracle_allow(case: dict[str, Any]) -> bool | None:
             return not bool(u_page)
         return None
 
-    # Loads and stores require a fully instantiated PTE.
+
     if not pte:
         return None
     if not bool(pte.get("valid")):
         return False
-    # A/D-update tests run against PTE with the accessed/dirty bits still clear;
-    # the expected fault depends on the platform's A/D-update policy and is not
-    # modelled here.
+
+
+
     if not bool(pte.get("accessed")) or not bool(pte.get("dirty")):
         return None
     rwx = str(pte.get("rwx") or "")

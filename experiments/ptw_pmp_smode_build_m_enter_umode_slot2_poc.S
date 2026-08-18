@@ -87,7 +87,7 @@ stack_top:
 
     .org 0x4000
 s_entry:
-    # S-mode builds the user mapping and malicious target root PTE while bare.
+
     li t0, 0x80010008
     li t1, 0x20004401
     sd t1, 0(t0)

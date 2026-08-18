@@ -1,4 +1,3 @@
-"""Engineering-only tests for the normalized evaluation data contract."""
 
 from __future__ import annotations
 

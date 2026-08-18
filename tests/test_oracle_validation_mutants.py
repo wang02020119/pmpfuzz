@@ -187,10 +187,6 @@ class OracleValidationMutantDefinitionTest(unittest.TestCase):
             )
             text = script_path.read_text(encoding="ascii")
 
-        self.assertIn(
-            "# Preserve immediate generator submodule markers so build.sbt discovers optional DUT projects.",
-            text,
-        )
         self.assertIn('for marker in "$SOURCE_ROOT"/generators/*/.git; do', text)
         self.assertIn('source_module_meta="$SOURCE_ROOT/.git/modules/generators/$module_name"', text)
         self.assertIn('target_module_meta="$TARGET_ROOT/.git/modules/generators/$module_name"', text)

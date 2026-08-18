@@ -111,10 +111,8 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(results, ["result-0"])
         self.assertEqual(calls, [(0, "first")])
 
-    # ---- New tests for execution-qualified coverage (RED phase additions) ----
 
     def test_runner_writes_run_json_with_isa(self):
-        """RunnerConfig should record the isa field."""
         config = RunnerConfig(
             profile="pmp-boundary", count=4, seed=1, jobs=1,
             time_budget_seconds=60, out=Path("/tmp/test_runner_out"),
@@ -123,7 +121,6 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(config.isa, "rv64gc")
 
     def test_runner_config_with_no_smepmp_selects_rv64gc(self):
-        """When no-smepmp is active, ISA defaults to rv64gc."""
         config = RunnerConfig(
             profile="pmp-boundary", count=4, seed=1, jobs=1,
             time_budget_seconds=60, out=Path("/tmp/test_runner_out"),
@@ -133,7 +130,6 @@ class RunnerTest(unittest.TestCase):
         self.assertFalse(config.include_smepmp)
 
     def test_runner_config_with_smepmp_selects_rv64gc_smepmp(self):
-        """When smepmp is active, ISA defaults to rv64gc_smepmp."""
         config = RunnerConfig(
             profile="pmp-boundary", count=4, seed=1, jobs=1,
             time_budget_seconds=60, out=Path("/tmp/test_runner_out"),
@@ -250,12 +246,10 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(result["bapc_coverage"]["qualification_reason"], "missing-actual-observation")
 
 
-    # ---- Fix 8: mocked runner/repro tests --------
 
     @mock.patch("pmpfuzz.runner.make_dut")
     @mock.patch("pmpfuzz.runner.capability_for_dut")
     def test_run_campaign_calls_capability_for_dut_for_spike(self, mock_cap, mock_make):
-        """Runner must call capability_for_dut with correct args for Spike."""
         mock_cap.return_value = {
             "schema_version": 3,
             "dut": "spike",
@@ -281,7 +275,7 @@ class RunnerTest(unittest.TestCase):
             from pmpfuzz.runner import run_campaign
             run_campaign(config)
 
-            # Verify output files were written
+
             self.assertTrue((out / "run.json").is_file(),
                             "run_campaign must write run.json")
             self.assertTrue((out / "dut_capabilities.json").is_file(),
@@ -303,7 +297,6 @@ class RunnerTest(unittest.TestCase):
     @mock.patch("pmpfuzz.__main__.subprocess.run")
     @mock.patch("pmpfuzz.__main__.capability_for_dut")
     def test_repro_writes_run_json_and_dut_capabilities(self, mock_cap, mock_run):
-        """Repro must write run.json with mode=repro and dut_capabilities.json."""
         from pmpfuzz.__main__ import main
         from pmpfuzz.scenario import ScenarioGenerator
         from pmpfuzz.schema import scenario_to_case_dict, write_json
@@ -341,8 +334,8 @@ class RunnerTest(unittest.TestCase):
                 "--no-smepmp",
             ])
 
-            # Unconditional assertions — metadata must always exist
-            self.assertEqual(rc, 1)  # compile failure is expected
+
+            self.assertEqual(rc, 1)
             run_json_path = out / "run.json"
             cap_path = out / "dut_capabilities.json"
             self.assertTrue(run_json_path.is_file(),

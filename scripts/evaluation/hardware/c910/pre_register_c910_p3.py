@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Pre-register the C910 M-3 multi-run campaign (expanded catalog).
-
-Six independent runs: guided x2 seeds and random x4 seeds, each 4 rounds of 16
-cases over the expanded mapped-only shared-56 pool.  No board is touched; the
-manifests are executed by the board adapter.
-"""
 from __future__ import annotations
 
 import json

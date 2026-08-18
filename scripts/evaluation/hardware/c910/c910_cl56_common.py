@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Shared machinery for the C910 closedloop-56 v2 generation campaign.
-
-Defines the declared reachable set (46/56), the directed bin->params
-constructors, and the parent-mutation operators.  The guided and random
-generators share this module so the only difference is *guidance*.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -23,24 +17,24 @@ from pmpfuzz.v4_nonpmp_projection import build_v4_nonpmp_bin_ids
 
 CL56_UNIVERSE = "v4-nonpmp-56"
 
-# 10 structurally unreachable bins on a no-PMP C910 (see PROBE_PARAM_AUDIT.md).
+
 STRUCTURALLY_UNREACHABLE = frozenset(
     [
-        # decision deny *access_fault: bare probe addresses are always mapped;
-        # sv39 permission violations fault as page faults, never access faults.
+
+
         "family=decision|access=fetch|allow_or_deny=deny|mcause_class=instruction_access_fault",
         "family=decision|access=load|allow_or_deny=deny|mcause_class=load_access_fault",
         "family=decision|access=store|allow_or_deny=deny|mcause_class=store_access_fault",
-        # decision deny mcause=other: an unexpected trap cause cannot be directed.
+
         "family=decision|access=fetch|allow_or_deny=deny|mcause_class=other",
         "family=decision|access=load|allow_or_deny=deny|mcause_class=other",
         "family=decision|access=store|allow_or_deny=deny|mcause_class=other",
-        # privdec effective=m deny: without PMP an M-mode access is never denied.
+
         "family=privilege-decision|effective_privilege=m|access=fetch|allow_or_deny=deny",
         "family=privilege-decision|effective_privilege=m|access=load|allow_or_deny=deny",
         "family=privilege-decision|effective_privilege=m|access=store|allow_or_deny=deny",
-        # stimulus m/m fetch sv39: MPRV affects only load/store; M-mode
-        # instruction fetch is architecturally physical, so this never occurs.
+
+
         "family=stimulus|privilege=m|effective_privilege=m|access=fetch|translation=sv39",
     ]
 )
@@ -87,14 +81,6 @@ def _mprv_bare_params(*, privilege: str, effective: str, access: str) -> dict[st
 
 
 def construct_params_for_bin(bin_id: str, index: int, seed: int) -> dict[str, Any] | None:
-    """Directed construction: params whose predicted bins contain ``bin_id``.
-
-    Returns ``None`` when the bin is not constructible (structurally
-    unreachable, or outside the parameterized-runner vocabulary).  The two
-    reachable-but-missing M-3 targets are:
-      privdec s/load/deny  -> sv39 S-mode load of a user page, SUM=0;
-      privdec s/store/deny -> sv39 S-mode store of a user page, SUM=0.
-    """
     f = parse_bin(bin_id)
     family = f.get("family")
     if family == "stimulus":
@@ -112,8 +98,8 @@ def _construct_stimulus(f: dict[str, str]) -> dict[str, Any] | None:
     acc = f["access"]
     trans = f["translation"]
     if acc == "fetch":
-        # No parameterized fetch runner; fetch stimulus is covered by the
-        # catalog's phase-handled fetch records.
+
+
         return None
     if trans == "sv39":
         return _sv39_access_params(
@@ -128,8 +114,8 @@ def _construct_decision(f: dict[str, str]) -> dict[str, Any] | None:
     allow = f["allow_or_deny"] == "allow"
     cause = f["mcause_class"]
     if acc == "fetch":
-        # fetch decision bins are covered by catalog fetch records (the
-        # parameterized runner is load/store only).
+
+
         return None
     if allow:
         return _sv39_access_params(
@@ -137,8 +123,8 @@ def _construct_decision(f: dict[str, str]) -> dict[str, Any] | None:
             pte_rwx="rw-", pte_user=True,
         )
     if cause in ("other",) or cause.endswith("_access_fault"):
-        return None  # structurally unreachable / undirectable
-    # page-fault deny -> a U-mode sv39 PTE that denies the access.
+        return None
+
     pte_rwx = {"load": "--x", "store": "r--"}[acc]
     return _sv39_access_params(
         privilege="u", effective="u", access=acc,
@@ -151,19 +137,19 @@ def _construct_privdec(f: dict[str, str]) -> dict[str, Any] | None:
     acc = f["access"]
     allow = f["allow_or_deny"]
     if acc == "fetch":
-        return None  # fetch via catalog fetch records only
+        return None
     if eff == "m":
         if allow == "deny":
-            return None  # structurally unreachable
+            return None
         return _mprv_bare_params(privilege="m", effective="m", access=acc)
     if allow == "allow":
         return _sv39_access_params(
             privilege=eff, effective=eff, access=acc,
             pte_rwx="rw-", pte_user=(eff == "u"),
         )
-    # deny under sv39 for effective in {s, u}.
+
     if eff == "s":
-        # S-mode load/store of a user page with SUM=0 -> page fault.
+
         return _sv39_access_params(
             privilege="s", effective="s", access=acc,
             pte_rwx="rw-", pte_user=True, sum_enabled=False,
@@ -175,9 +161,6 @@ def _construct_privdec(f: dict[str, str]) -> dict[str, Any] | None:
     )
 
 
-# ---------------------------------------------------------------------------
-# parent mutation (fill)
-# ---------------------------------------------------------------------------
 
 FILL_OPS = ("toggle-pte-rwx", "toggle-pte-user", "toggle-valid", "toggle-sum", "toggle-mxr", "toggle-mpp", "toggle-access")
 _RWX_POOL = ("rw-", "r--", "--x", "r-x", "---")
@@ -186,11 +169,6 @@ _PRIV_POOL = ("m", "s", "u")
 
 
 def mutate_parent_params(parent: dict[str, Any], op: str, attempt: int, *, seed: int) -> dict[str, Any] | None:
-    """Deterministic single-operator mutation of a parent case's params.
-
-    ``op`` is hashed with sha256 (not Python's salted builtin hash) so the
-    mutation stream is reproducible across runs and processes.
-    """
     op_seed = int(hashlib.sha256(op.encode("utf-8")).hexdigest()[:8], 16)
     rng = Random((seed * 7919 + attempt * 104729 + op_seed % 65536) & 0x7FFFFFFF)
     base = dict(parent.get("generated_params") or {})
@@ -226,7 +204,6 @@ def mutate_parent_params(parent: dict[str, Any], op: str, attempt: int, *, seed:
 
 
 def _params_from_parent_case(parent: dict[str, Any]) -> dict[str, Any] | None:
-    """Recover a params tuple from a catalog-case parent if expressible."""
     runner = str(parent.get("runner_params") or {}).lower() if not isinstance(parent.get("runner_params"), dict) else str(parent.get("runner_params", {}).get("runner_kind") or "")
     parser = str(parent.get("uart_parser") or "")
     if parser in {"side-effect", "real-mode", "sum-fetch"}:
@@ -234,7 +211,7 @@ def _params_from_parent_case(parent: dict[str, Any]) -> dict[str, Any] | None:
     translation = str(parent.get("translation") or "bare").lower()
     access = str(parent.get("access") or "load").lower()
     if access == "fetch":
-        return None  # fetch is not expressible in the load/store runner vocabulary
+        return None
     if translation == "sv39":
         pte = parent.get("pte_permissions") or {}
         return {
@@ -269,9 +246,6 @@ def _pick(rng: Random, choices: list[Any], default: Any) -> Any:
     return choices[rng.randrange(len(choices))] if choices else default
 
 
-# ---------------------------------------------------------------------------
-# case assembly (params -> case with predicted bins attached)
-# ---------------------------------------------------------------------------
 
 def assemble_generated(
     params: dict[str, Any],
@@ -283,13 +257,12 @@ def assemble_generated(
     seed: int,
     record_name: str | None = None,
 ) -> dict[str, Any] | None:
-    """Build a generated case (with predicted bins) or None if not mappable."""
     runner_kind = str(params.get("runner_kind") or "sv39_access")
     access = str(params.get("access") or "load").lower()
     if runner_kind in ("sv39_access", "mprv_bare") and access == "fetch":
-        # The parameterized case-runner implements load/store only; an access=
-        # fetch case would be mis-executed (dispatched as store) and the
-        # classification would fabricate coverage of a fetch stimulus bin.
+
+
+
         return None
     if record_name is None:
         record_name = f"gen-{index:04d}"
@@ -317,13 +290,6 @@ def load_seed_pool(path: Path) -> list[dict[str, Any]]:
 
 
 def board_mappable(case: dict[str, Any]) -> bool:
-    """True if the case will be classified ``mapped`` on the board.
-
-    ``predict_shared56_bins`` maps from the case's architectural fields and
-    ignores the UART parser, but ``classify_scenario`` marks side-effect
-    records and target-less real-mode records as ``unsupported``.  The v2 pool
-    builders apply this filter so predicted coverage matches board coverage.
-    """
     parser = str(case.get("uart_parser") or "").strip().lower()
     if parser == "side-effect":
         return False

@@ -1,30 +1,4 @@
 #!/usr/bin/env python3
-"""Aggregate a U74 physical round's real observations into the 144-bin summary.
-
-PROTOCOL §3 / §4.8: only ``results/*/result.json`` board observations are used
--- never predicted bins.  The convergence curve is built exclusively from these
-real observed bins.
-
-Reads:
-
-- ``--round-dir`` ``results/*/result.json`` (per-case real observations) and
-  ``validator/report.json`` (executed/eligible/error counts),
-- the fixed 144-bin universe,
-- the prior round summary (for cumulative coverage / executed set).
-
-Writes ``aggregation/round-000N-summary.json`` with scheduled/executed/eligible,
-pass/fail/skip and failure-class counts, round-new bins, cumulative bins,
-family breakdown, missing-reachable summary and the executed scenario-hash set
-(which the next guided round uses to avoid re-running executed candidates).
-
-Usage:
-
-    PYTHONPATH=. python scripts/evaluation/hardware/u74/aggregate_u74_bapc.py \
-        --round-dir <...>/rounds/round-0001 \
-        --universe <...>/u74-supported-v4-144.json \
-        --prior-summary <...>/aggregation/round-0000-summary.json \
-        --out <...>/aggregation/round-0001-summary.json
-"""
 from __future__ import annotations
 
 import argparse
@@ -59,7 +33,7 @@ def aggregate_round(
     prior_hashes = set(str(h) for h in ((prior or {}).get("executed_scenario_hashes") or []))
     prior_candidate_ids = set(str(c) for c in ((prior or {}).get("executed_candidate_ids") or []))
 
-    # schedule entry lookup (name -> entry) for candidate_id / scenario_hash mapping
+
     schedule_path = round_dir / f"schedule_round_{round_dir.name.replace('round-', '')}.json"
     schedule_entries: list[dict[str, Any]] = []
     if schedule_path.exists():

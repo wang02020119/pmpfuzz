@@ -1,39 +1,4 @@
 #!/usr/bin/env python3
-"""RISCV-DV baseline runtime splicer (PMPFuzz experiment tooling; NOT part of riscv-dv).
-
-Input: a riscv-dv-generated .S program (unmodified pygen or SV/eUVM-port output).
-Output: the same program with the PMPFuzz-style observation runtime spliced in.
-
-Injected pieces (all our own code; no riscv-dv source is modified):
-1. At the `init:` label (executed after pygen privileged entry writes mtvec): a
-   prologue that repoints mtvec (DIRECT mode, 4-byte aligned) to our trap handler
-   and zeroes medeleg/mideleg so every trap lands in M-mode.
-2. A position-independent M-mode trap handler `rdv_trap_handler` (first trap
-   terminates): reads mcause/mtval/mepc/mstatus/satp/[mseccfg]/readable pmpcfg/
-   readable pmpaddr into the result area (docs/riscv-dv-baseline.md section 5.2),
-   emits the 30-bit observation tohost record and spins. Completion (mcause=11)
-   is emitted as kind=COMPLETION phase=COMPLETED. A re-entry guard converts
-   handler self-faults into an INFRA_ERROR tohost record instead of recursing.
-   No instruction sequence is read or decoded; no PMP CSR is written; no page
-   table is built; no privilege switch is performed.
-   The readable CSR set is per-DUT (verified by the Phase 2.3 CSR capability
-   probe); reading a missing CSR would self-fault the handler, so the lists
-   below are the only CSRs touched.
-3. A result-area block in .data per docs/riscv-dv-baseline.md section 5.2.
-   The CSR readback evidence is captured from the DUT commit trace (the
-   handler executes a fixed sequence of csrr instructions at known addresses).
-4. Optional R3 graft (--pmp-graft upstream-enable-all, default off; contract
-   docs/riscv-dv-baseline-r3-addendum.md section 4.1): transcribes upstream
-   gen_pmp_enable_all() (li + 2 CSR writes) between the runtime prologue and
-   the original init body, and writes a per-case graft.json sidecar. Without
-   the graft the output is byte-identical to the v1 splicer.
-5. Optional R4 designated probe (--designated-probe epilogue-load, default off;
-   contract docs/riscv-dv-baseline-r4-addendum.md section 3.1): one M-mode
-   probe load injected immediately before the terminal ecall after
-   test_done/test_end, plus a per-case probe.json sidecar. Measurement
-   infrastructure only (no protection semantics, no PMP/CSR writes beyond the
-   graft). Without the probe the output is byte-identical to the R3 splicer.
-"""
 
 import argparse
 import json
@@ -41,11 +6,7 @@ import re
 import sys
 
 
-# CSR read set verified per-DUT with the Phase 2.3 CSR-capability probe
-# (csr_probe.S). rocket-clean / boom-clean: 4 PMP entries (pmpcfg0,2 only),
-# pmpaddr0-15 all readable, mseccfg not implemented. cva6-clean /
 
-# CLI overrides exist for re-verification runs.
 DUT_PARAMS = {
     "rocket-clean": {"pmpcfg_csrs": [0x3A0, 0x3A2], "pmpaddr_count": 16, "read_mseccfg": 0},
     "boom-clean": {"pmpcfg_csrs": [0x3A0, 0x3A2], "pmpaddr_count": 16, "read_mseccfg": 0},
@@ -59,11 +20,7 @@ _ECALL_RE = re.compile(r"^\s*ecall\s*$")
 _WRITE_TOHOST_RE = re.compile(r"^write_tohost:\s*$")
 _SYMBOL_DEF_RE = re.compile(r"^([a-zA-Z_.$][a-zA-Z0-9_.$]*):\s*$")
 
-# R4 designated probe variants (docs/riscv-dv-baseline-r4-addendum.md section 3.1).
-# Measurement infrastructure only: one M-mode probe load in the wrapper epilogue
-# becomes the designated target operation for completion->allow attribution
-# (mirrors Cascade's single-target-op convention). No protection semantics; no
-# PMP/CSR writes beyond the graft.
+
 PROBE_VARIANTS = {
     "epilogue-load": {
         "name": "epilogue-load",
@@ -90,9 +47,7 @@ PROBE_VARIANTS = {
     },
 }
 
-# R3 graft variants (docs/riscv-dv-baseline-r3-addendum.md section 4.1).
-# Verbatim transcription of upstream riscv-dv initialization; lives ONLY in
-# this splicer -- the riscv-dv source tree is never modified.
+
 GRAFT_VARIANTS = {
     "upstream-enable-all": {
         "name": "upstream-enable-all",
@@ -154,7 +109,6 @@ def _hex(value):
 
 def _prologue():
     return [
-        "    # --- rdv runtime prologue (injected by riscv_dv_splice.py) ---",
         "    la x26, rdv_trap_handler",
         "    csrw 0x305, x26",
         "    csrw 0x302, zero",
@@ -164,7 +118,6 @@ def _prologue():
 
 
 def _find_terminal_ecall(lines):
-    """Index of the terminal ecall after test_done/test_end (fallback: before write_tohost)."""
     for idx, line in enumerate(lines):
         if _TERMINAL_LABEL_RE.match(line):
             for j in range(idx + 1, min(idx + 40, len(lines))):
@@ -183,7 +136,6 @@ def _find_terminal_ecall(lines):
 
 
 def _resolve_probe_symbol(lines, priority_symbols):
-    """Pick the probe address symbol; returns (symbol, is_fallback_slot)."""
     defined = set()
     for line in lines:
         m = _SYMBOL_DEF_RE.match(line.strip())
@@ -199,8 +151,6 @@ def _probe_block(name, symbol):
     spec = PROBE_VARIANTS[name]
     asm = [line.replace("__RDV_PROBE_SYMBOL__", symbol) for line in spec["asm"]]
     lines = [
-        "    # --- rdv designated probe: %s (R4 wrapper measurement infrastructure) ---" % name,
-        "    # %s" % spec["provenance"],
         "    .globl rdv_probe_start",
         "rdv_probe_start:",
     ]
@@ -238,11 +188,8 @@ def _write_probe_sidecar(name, symbol, fallback, dut, in_path, out_path, probe_j
     return sidecar_path
 
 def _graft_block(name):
-    """The R3 graft block (docs/riscv-dv-baseline-r3-addendum.md section 4.1)."""
     spec = GRAFT_VARIANTS[name]
     lines = [
-        "    # --- rdv pmp graft: %s ---" % name,
-        "    # %s (%s)" % (spec["source"], spec["source_lines"]),
         "    .globl rdv_graft_start",
         "rdv_graft_start:",
     ]
@@ -280,21 +227,21 @@ def _handler(dut, pmpcfg_csrs, pmpaddr_count, read_mseccfg):
     lines.append("    .section .text")
     lines.append("    .align 2")
     lines.append("rdv_trap_handler:")
-    lines.append("    csrr t2, 0x342              # mcause")
-    lines.append("    csrr t3, 0x343              # mtval")
+    lines.append("    csrr t2, 0x342")
+    lines.append("    csrr t3, 0x343")
     lines.append("    la t0, rdv_result")
-    lines.append("    lw t1, 0x8(t0)              # re-entry guard")
+    lines.append("    lw t1, 0x8(t0)")
     lines.append("    bnez t1, rdv_handler_infra")
     lines.append("    li t1, 1")
     lines.append("    sw t1, 0x8(t0)")
-    lines.append("    csrr t4, 0x341              # mepc")
+    lines.append("    csrr t4, 0x341")
     lines.append("    sd t4, 0x20(t0)")
-    lines.append("    csrr t5, 0x300              # mstatus")
+    lines.append("    csrr t5, 0x300")
     lines.append("    sd t5, 0x28(t0)")
-    lines.append("    csrr t6, 0x180              # satp")
+    lines.append("    csrr t6, 0x180")
     lines.append("    sd t6, 0x30(t0)")
     if read_mseccfg:
-        lines.append("    csrr t5, 0x747              # mseccfg")
+        lines.append("    csrr t5, 0x747")
         lines.append("    sd t5, 0x38(t0)")
     for csr in pmpcfg_csrs:
         slot = (csr - 0x3A0) // 2
@@ -304,7 +251,7 @@ def _handler(dut, pmpcfg_csrs, pmpaddr_count, read_mseccfg):
         csr = 0x3B0 + i
         lines.append("    csrr t1, " + _hex(csr))
         lines.append("    sd t1, " + _hex(OFF_PMPADDR_BASE + 8 * i) + "(t0)")
-    lines.append("    csrr t6, 0x180              # final snapshot fields")
+    lines.append("    csrr t6, 0x180")
     lines.append("    sd t6, " + _hex(OFF_FINAL_SATP) + "(t0)")
     if read_mseccfg:
         lines.append("    csrr t5, 0x747")
@@ -313,17 +260,16 @@ def _handler(dut, pmpcfg_csrs, pmpaddr_count, read_mseccfg):
     lines.append("    sd t5, " + _hex(OFF_FINAL_MSTATUS) + "(t0)")
     lines.append("    sd t2, 0x10(t0)")
     lines.append("    sd t3, 0x18(t0)")
-    lines.append("    # --- 30-bit observation tohost record ---")
     lines.append("    li t1, 11")
     lines.append("    beq t2, t1, rdv_obs_completion")
-    lines.append("    li t5, 1                    # phase=PROBE")
-    lines.append("    li t6, 0                    # kind=TRAP")
+    lines.append("    li t5, 1")
+    lines.append("    li t6, 0")
     lines.append("    j rdv_obs_build")
     lines.append("rdv_obs_completion:")
-    lines.append("    li t5, 2                    # phase=COMPLETED")
-    lines.append("    li t6, 1                    # kind=COMPLETION")
+    lines.append("    li t5, 2")
+    lines.append("    li t6, 1")
     lines.append("rdv_obs_build:")
-    lines.append("    li a0, 0x20000000           # version 1 << 29")
+    lines.append("    li a0, 0x20000000")
     lines.append("    slli t1, t6, 28")
     lines.append("    or a0, a0, t1")
     lines.append("    slli t1, t5, 25")
@@ -349,17 +295,17 @@ def _handler(dut, pmpcfg_csrs, pmpaddr_count, read_mseccfg):
     lines.append("    ori a0, a0, 1")
     lines.append("    la t0, tohost")
     lines.append("    sd a0, 0(t0)")
-    # observation slot at result+32 (cascade convention)
+
     lines.append("    la t0, rdv_result")
     lines.append("    sd a0, 32(t0)")
     lines.append("rdv_spin:")
     lines.append("    j rdv_spin")
     lines.append("")
     lines.append("rdv_handler_infra:")
-    # marker bit31=1 distinguishes infra from observation records
-    # (observation records always have bits 31:30 == 0)
+
+
     lines.append("    li a0, 0x80000000")
-    lines.append("    li t1, 5                    # INFRA_ERROR class")
+    lines.append("    li t1, 5")
     lines.append("    slli t1, t1, 16")
     lines.append("    or a0, a0, t1")
     lines.append("    andi t1, t2, 0xFF")
@@ -393,18 +339,18 @@ def _data_section(has_tohost, has_fromhost, with_probe_slot=False):
         lines.append("    .dword 0")
     lines.append("    .align 3")
     lines.append("rdv_result:")
-    lines.append("    .word 0x504D5246            # magic PMRF")
-    lines.append("    .word 1                     # version")
-    lines.append("    .word 0                     # trap_count")
-    lines.append("    .word 0                     # reserved")
-    lines.append("    .skip 0x300                 # trap slots 16 x 48B (v1 uses slot 0)")
-    lines.append("    .skip 64                    # pmpcfg[8] x u64")
-    lines.append("    .skip 128                   # pmpaddr[16] x u64")
-    lines.append("    .skip 24                    # satp / mseccfg / mstatus")
+    lines.append("    .word 0x504D5246")
+    lines.append("    .word 1")
+    lines.append("    .word 0")
+    lines.append("    .word 0")
+    lines.append("    .skip 0x300")
+    lines.append("    .skip 64")
+    lines.append("    .skip 128")
+    lines.append("    .skip 24")
     if with_probe_slot:
         lines.append("    .align 3")
         lines.append("rdv_probe_slot:")
-        lines.append("    .dword 0                    # R4 designated-probe fallback slot (8B aligned)")
+        lines.append("    .dword 0")
     return lines
 
 

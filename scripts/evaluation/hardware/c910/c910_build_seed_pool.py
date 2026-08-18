@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Freeze the C910 closedloop-56 parent seed pool.
-
-Parents = the mapped catalog cases (78 records x 4 slots) plus a directed
-construction for every reachable bin.  Each candidate carries its predicted
-reachable bins so guided rounds can weight parents by coverage value.
-"""
 from __future__ import annotations
 
 import argparse
@@ -49,8 +43,8 @@ def build_seed_pool() -> tuple[list[dict[str, Any]], dict[str, Any]]:
             seen.add(entry["scenario_hash"])
             candidates.append(entry)
 
-    # Directed constructions for every reachable bin enrich the parent pool so
-    # mutations have well-typed sv39_access parents to start from.
+
+
     for index, bin_id in enumerate(REACHABLE_BINS):
         params = construct_params_for_bin(bin_id, index, seed=20260812)
         if params is None:

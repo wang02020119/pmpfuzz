@@ -1,12 +1,3 @@
-"""TDD RED: scoped aggregate validation — bypass detection tests.
-
-These tests verify the validator catches known bypasses:
-1. No scope + empty security events → valid=False
-2. bb-wb + empty events → valid=False (always)
-3. Partial PMPFuzz modes → valid=False
-4. Scoped Cartesian-product bypass → valid=False
-5. Scoped happy path → valid=True
-"""
 
 import csv
 import hashlib
@@ -25,7 +16,7 @@ from pmpfuzz.coverage_universe import make_coverage_universe
 NL = chr(10)
 ALL_FOUR = ["semantic", "pairwise", "security-triples", "predicates"]
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+
 
 def _tl_row(**kw):
     return {
@@ -50,12 +41,11 @@ def _tl_row(**kw):
 
 def _write_timeline(metrics_dir, cid="test", variant="random", seed=101,
                     partial_drop=None, rows_count=3):
-    """Write a PMPFuzz timeline.  If partial_drop is set, remove those mode keys."""
     rows = [_tl_row(cid=cid, variant=variant, seed=seed, seq=0)]
     DENOMS = {"semantic": 313, "pairwise": 3691, "security-triples": 225, "predicates": 41}
     for i in range(1, rows_count + 1):
-        # Use integer covered values that produce exact rates
-        s_cov = int(0.1 * i * 313)  # e.g. i=1:31, i=2:62, i=3:93
+
+        s_cov = int(0.1 * i * 313)
         p_cov = int(0.1 * i * 3691)
         t_cov = int(0.1 * i * 225)
         pr_cov = int(0.1 * i * 41)
@@ -204,9 +194,9 @@ def _write_coverage_universes(
     _write_validation(campaign)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Test 1: No scope + empty events → valid=False
-# ══════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestNoScopeEmptyEvents(unittest.TestCase):
 
@@ -223,9 +213,9 @@ class TestNoScopeEmptyEvents(unittest.TestCase):
                             f"Must have scope-related error, got: {report.get('errors')}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Test 2: bb-wb + empty events → valid=False (always)
-# ══════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestBBWBEmptyEventsAlwaysFail(unittest.TestCase):
 
@@ -255,9 +245,9 @@ class TestBBWBEmptyEventsAlwaysFail(unittest.TestCase):
                             f"Must have bbwb/event error, got: {report.get('errors')}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Test 3: Partial PMPFuzz modes → valid=False
-# ══════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestPartialModesFailClosed(unittest.TestCase):
 
@@ -276,7 +266,6 @@ class TestPartialModesFailClosed(unittest.TestCase):
                             f"Must have mode-related error, got: {report.get('errors')}")
 
     def test_partial_no_scope_must_be_invalid(self):
-        """Even without analysis-scope, incomplete PMPFuzz timeline must fail."""
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             _make_campaign(root, "partial-ns", partial_drop="predicates", rows_count=3)
@@ -321,14 +310,13 @@ class TestPartialModesFailClosed(unittest.TestCase):
             self.assertTrue(any("predicates" in err.lower() for err in report.get("errors", [])))
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Test 4: Scoped Cartesian-product bypass
-# ══════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestCartesianBypass(unittest.TestCase):
 
     def test_bb_missing_three_modes_must_fail(self):
-        """Random has 4 modes, BB only has semantic — must fail."""
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             _make_campaign(root, "r-full", variant="random", rows_count=3)
@@ -339,15 +327,15 @@ class TestCartesianBypass(unittest.TestCase):
             self.assertFalse(report["valid"],
                              "BB missing modes must produce valid=False")
             errors = report.get("errors", [])
-            # Must mention the specific missing mode
+
             pred_errs = [e for e in errors if "predicates" in e.lower()]
             self.assertTrue(len(pred_errs) > 0,
                             f"Must report missing predicates, got: {errors}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Test 5: Scoped happy path → valid=True
-# ══════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestScopedHappyPath(unittest.TestCase):
 
@@ -362,9 +350,9 @@ class TestScopedHappyPath(unittest.TestCase):
                             f"Happy path must be valid, got errors: {report.get('errors')}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Legacy + field mapping tests (kept from original)
-# ══════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestCoverageUniverseComparability(unittest.TestCase):
 
@@ -496,9 +484,9 @@ class TestLegacyBaseline(unittest.TestCase):
                              f"Cascade must stay single-mode, got {modes}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Four-mode export + field mappings
-# ══════════════════════════════════════════════════════════════════════════════
+
+
+
 
 class TestFourModeFields(unittest.TestCase):
 
@@ -524,7 +512,7 @@ class TestFourModeFields(unittest.TestCase):
             by_mode = {}
             for r in rows:
                 by_mode.setdefault(r["coverage_mode"], []).append(r)
-            # Check final values
+
             for mode, denom in [("semantic", "313"), ("pairwise", "3691"),
                                 ("security-triples", "225"), ("predicates", "41")]:
                 mr = by_mode[mode]

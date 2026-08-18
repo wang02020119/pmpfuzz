@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Offline closed-loop simulation for the C910 closedloop-56 campaign.
-
-Treats each round's schedule predicted bins as the board's real coverage
-(perfect-oracle simulation) to validate the generation loop and the
-convergence rule without hardware.  Not part of the experiment.
-"""
 from __future__ import annotations
 
 import argparse

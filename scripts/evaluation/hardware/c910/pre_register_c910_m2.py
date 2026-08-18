@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""Pre-register the C910 M-2 campaign (guided vs random replay).
-
-Generates, for both conditions, three frozen round manifests over the frozen
-256-case catalog, with full provenance (seed, candidate pool, covered-bin
-prediction input, per-case predicted bins, selection rationale).  No board is
-touched; the manifests are executed by the board adapter when hardware is
-available.
-"""
 from __future__ import annotations
 
 import json
@@ -26,7 +18,7 @@ from pmpfuzz.c910_nonpmp_dynamic import catalog_cases
 CAMPAIGN_GUIDED = "hw-v2-m2-c910-guided"
 CAMPAIGN_RANDOM = "hw-v2-m2-c910-random"
 SEEDS_GUIDED = (4, 5, 6)
-SEEDS_RANDOM = (104, 105, 106)  # distinct seeds, pre-registered
+SEEDS_RANDOM = (104, 105, 106)
 BUDGET = M2_BUDGET_PER_ROUND
 DEFAULT_OUT = Path(os.environ.get("PMPFUZZ_ARTIFACT_ROOT", "artifacts")) / "hw-v2-m2" / "c910"
 
@@ -101,9 +93,9 @@ def main() -> int:
             (round_dir / "provenance.json").write_text(
                 json.dumps(built["provenance"], ensure_ascii=True, indent=2), encoding="utf-8"
             )
-            # Simulate coverage feedback from the selected cases' predicted bins
-            # for the purposes of pre-registration (the board run replaces this
-            # with real observations).  Dedup by scenario fingerprint.
+
+
+
             name_to_hash = {c["name"]: str(c.get("scenario_hash") or c.get("name") or "") for c in catalog}
             for name, detail in built["provenance"]["selection_details"].items():
                 used_fingerprints.add(name_to_hash.get(name, name))

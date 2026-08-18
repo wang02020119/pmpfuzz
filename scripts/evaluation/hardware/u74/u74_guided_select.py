@@ -1,37 +1,4 @@
 #!/usr/bin/env python3
-"""Guided selection for the U74 closedloop-144 experiment.
-
-Round 0 (EXPERIMENT_PROTOCOL.md §3): stratified-breadth seed over coverage
-families and PMP modes -- no prior observations are used, so round 0 is not
-evidence of feedback guidance.
-
-Rounds >= 1 (PROTOCOL §4): marginal-gain selection over the frozen candidate
-corpus using the *cumulative real observed coverage* from all previous physical
-rounds:
-
-- primary score  : predicted reachable bins in the missing set (reachable - covered);
-- secondary score: coverage-family priority (config / stimulus gaps win ties);
-- tertiary score : scheduler seed for deterministic tie-breaking.
-
-Selection is pre-registered: the full selection log (prior coverage hash,
-corpus hash, selected/rejected candidate ids, predicted bins, marginal gain,
-seed and tie-break rule) is written before any board execution.
-
-Writes into ``--out-dir``:
-
-- ``schedule_round_000N.json``  (scenario-native entries with lowering);
-- ``selection-log.json``        (pre-registration provenance);
-- ``catalog.json``              (runner ``--u74-catalog`` input).
-
-Usage:
-
-    PYTHONPATH=. python scripts/evaluation/hardware/u74/u74_guided_select.py \
-        --corpus <closedloop-144>/corpus/corpus.json \
-        --universe <...>/u74-supported-v4-144.json \
-        --round-index 1 --budget 96 --seed 4 \
-        --prior-summary <closedloop-144>/aggregation/round-0000-summary.json \
-        --out-dir <closedloop-144>/rounds/round-0001
-"""
 from __future__ import annotations
 
 import argparse
@@ -48,9 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import u74_cl144_common as C
 
 
-# ---------------------------------------------------------------------------
-# scoring
-# ---------------------------------------------------------------------------
+
+
+
 
 def _score_round0(cand: dict[str, Any], *, covered_config: set, covered_families: set, covered_bins: set, missing_bins: set, rng_index: int) -> tuple:
     config_classes = {tuple(cls) for cls in cand.get("config_classes") or []}
@@ -70,15 +37,14 @@ def _score_guided(cand: dict[str, Any], *, covered_config: set, covered_families
 
 
 def _score_noop_key(key: tuple) -> tuple:
-    """Demote a candidate's key to fill-level (only the tie-break survives)."""
     if not key:
         return key
     return tuple([0] * (len(key) - 1)) + (key[-1],)
 
 
-# ---------------------------------------------------------------------------
-# greedy selection
-# ---------------------------------------------------------------------------
+
+
+
 
 def _is_locked_candidate(cand: dict[str, Any]) -> bool:
     return bool(cand.get("has_locked"))
@@ -96,13 +62,6 @@ def select(
     mode: str,
     max_locked: int = 20,
 ) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], dict[str, Any]]:
-    """Return (selected, stats) where each selection is (candidate, detail).
-
-    ``max_locked`` caps the number of locked cases per round: locked cases
-    mostly *skip* on the U74 board (PMP entry exhaustion under the locked-last
-    protocol), so letting the greedy chase the locked config bins wastes the
-    budget; the cap keeps the round focused on reachable gaps.
-    """
     rng = Random((int(seed) + int(round_index) * 7919) & 0x7FFFFFFF)
     pool = [
         cand for cand in corpus
@@ -135,8 +94,8 @@ def select(
         best_idx = -1
         for index, cand in enumerate(remaining):
             if _is_locked_candidate(cand) and locked_picked >= max_locked:
-                # hard cap: skip locked candidates once the per-round budget is
-                # used up (locked cases mostly skip on the board).
+
+
                 continue
             rng_index = shuffled.index(cand)
             key = scorer(
@@ -173,7 +132,7 @@ def select(
         covered_families.update(C.family_of_bin(b) for b in predicted)
         remaining.pop(best_idx)
 
-    # Fill remaining budget (no candidate predicts a new bin) in seeded order.
+
     for cand in shuffled:
         if len(selected) >= budget:
             break
@@ -202,17 +161,17 @@ def select(
     return selected, stats
 
 
-# ---------------------------------------------------------------------------
-# schedule / selection-log / catalog emission
-# ---------------------------------------------------------------------------
+
+
+
 
 def build_schedule_entries(selected: list[tuple[dict[str, Any], dict[str, Any]]], *, round_index: int, selection_source: str) -> list[dict[str, Any]]:
     entries = []
     for slot, (cand, detail) in enumerate(selected):
         name = f"u74-cl144-r{round_index}-case-{slot:04d}"
         lowering = dict(cand["lowering"])
-        # The firmware prints case={lowering.name}; it must equal the schedule
-        # entry name or the validator's scheduled-vs-UART reconciliation fails.
+
+
         lowering["name"] = name
         entry = {
             "schema_version": 1,
@@ -240,7 +199,6 @@ def build_schedule_entries(selected: list[tuple[dict[str, Any], dict[str, Any]]]
 
 
 def build_catalog_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Catalog entries for the board runner (fake UART synthesis needs these)."""
     rows = []
     trap_name_by_cause = {
         1: "instruction_access_fault",
@@ -275,9 +233,9 @@ def build_catalog_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]
     return rows
 
 
-# ---------------------------------------------------------------------------
-# main
-# ---------------------------------------------------------------------------
+
+
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="U74 closedloop-144 guided / breadth selection")

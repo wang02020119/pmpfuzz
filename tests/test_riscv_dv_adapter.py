@@ -1,4 +1,3 @@
-"""Unit tests for the riscv-dv baseline adapter (engineering contract only)."""
 
 from __future__ import annotations
 
@@ -54,7 +53,7 @@ def _classified(event="trap", mcause=7, tag=0, fp=0):
 class TestRiscvDvAdapter(unittest.TestCase):
 
     def test_context_off_entries_keep_raw_rwx_bits(self):
-        # pmpcfg0 bytes 0x07 = OFF with R/W/X=1 raw readback bits (config family)
+
         snap = _snap(7, 0x80004000, 0x0A00000800, 0x0,
                      [0x0707070707070707, 0x0707070707070707], [0] * 16)
         ctx = riscv_dv.build_context(snap)
@@ -69,7 +68,7 @@ class TestRiscvDvAdapter(unittest.TestCase):
         self.assertFalse(entry0["locked"])
 
     def test_smode_store_deny_is_eligible_with_config_and_decision_bins(self):
-        # entry0: TOR @0x80002000 RWX (0x0F); entry1: NAPOT deny [0x80004000,0x80008000) (0x18)
+
         pmpcfg0 = 0x0F | (0x18 << 8)
         snap = _snap(
             7,

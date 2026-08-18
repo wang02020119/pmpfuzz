@@ -1,10 +1,3 @@
-"""P0-1: Real guided DUT-qualified feedback tests (RED phase).
-
-These tests expose bugs:
-1. _coverage_gap_* functions hardcode dut="unknown" — all real results excluded
-2. guided may return fewer than round_size candidates
-3. bb may consume whitebox feedback
-"""
 
 from __future__ import annotations
 
@@ -15,7 +8,6 @@ from tempfile import TemporaryDirectory
 
 
 class TestGuidedFeedbackDutQualified(unittest.TestCase):
-    """P0-1: guided must use real DUT-qualified execution feedback."""
 
     def setUp(self):
         self.tmp = TemporaryDirectory()
@@ -52,22 +44,20 @@ class TestGuidedFeedbackDutQualified(unittest.TestCase):
                 "observed_tohost": 0, "oracle_applicability": "valid",
             }), encoding="ascii")
 
-    # --- RED tests: demonstrate the dut="unknown" bug ---
+
 
     def test_coverage_gap_with_real_dut_finds_bins(self):
-        """GREEN: _coverage_gap_semantic with real DUT finds eligible results."""
         from scripts.evaluation.campaigns.run_closed_loop_campaign import _coverage_gap_semantic
         from pmpfuzz.semantic_coverage import target_semantic_bins
 
         full_target = set(target_semantic_bins(target="core-stateful"))
         missing = _coverage_gap_semantic([self.root / "round_0000"], dut="spike")
-        # With real DUT (spike), the eligible case_A closes some bins
-        # missing should be a proper subset (not the full target)
+
+
         self.assertLess(len(missing), len(full_target),
                         "FIX: with correct DUT, eligible cases reduce coverage gap")
 
     def test_collect_evidence_with_correct_dut_finds_eligible(self):
-        """Evidence with correct DUT finds eligible cases."""
         from pmpfuzz.coverage_qualification import collect_execution_evidence
         evidence = collect_execution_evidence(
             [self.root / "round_0000"], dut="spike")
@@ -75,7 +65,6 @@ class TestGuidedFeedbackDutQualified(unittest.TestCase):
                           "Only case_A (spike, obs_valid=True) is eligible")
 
     def test_wrong_dut_results_excluded(self):
-        """Other DUT results must not pollute spike gap."""
         from pmpfuzz.coverage_qualification import collect_execution_evidence
         ev_spike = collect_execution_evidence([self.root / "round_0000"], dut="spike")
         ev_rocket = collect_execution_evidence([self.root / "round_0000"], dut="rocket-clean")
@@ -84,7 +73,6 @@ class TestGuidedFeedbackDutQualified(unittest.TestCase):
 
 
 class TestGuidedFillsRoundSize(unittest.TestCase):
-    """P0-1: guided fills to round_size with fallback."""
 
     def _make_pool(self, n):
         return [{"candidate_id": f"c_{i:04d}", "profile": "pmp-boundary",
@@ -94,7 +82,6 @@ class TestGuidedFillsRoundSize(unittest.TestCase):
                 for i in range(n)]
 
     def test_guided_fills_to_round_size(self):
-        """With sufficient candidates, guided returns exactly round_size."""
         from scripts.evaluation.campaigns.run_closed_loop_campaign import _select_guided, CampaignState
         pool = self._make_pool(64)
         state = CampaignState("t", "guided", "spike", 1, "semantic", pool, 0.0)
@@ -102,7 +89,6 @@ class TestGuidedFillsRoundSize(unittest.TestCase):
         self.assertEqual(len(selected), 32)
 
     def test_guided_returns_all_when_insufficient(self):
-        """When fewer candidates than round_size, return all remaining."""
         from scripts.evaluation.campaigns.run_closed_loop_campaign import _select_guided, CampaignState
         pool = self._make_pool(5)
         state = CampaignState("t", "guided", "spike", 1, "semantic", pool, 0.0)
@@ -110,7 +96,6 @@ class TestGuidedFillsRoundSize(unittest.TestCase):
         self.assertEqual(len(selected), 5)
 
     def test_guided_never_repeats_executed(self):
-        """Guided never selects already-executed candidates."""
         from scripts.evaluation.campaigns.run_closed_loop_campaign import _select_guided, CampaignState
         pool = self._make_pool(64)
         state = CampaignState("t", "guided", "spike", 1, "semantic", pool, 0.0)
@@ -122,7 +107,6 @@ class TestGuidedFillsRoundSize(unittest.TestCase):
             self.assertNotIn(c["candidate_id"], state.executed_ids)
 
     def test_guided_reproducible(self):
-        """Same seed + pool = same guided selection."""
         from scripts.evaluation.campaigns.run_closed_loop_campaign import _select_guided, CampaignState
         pool = self._make_pool(64)
         s1 = _select_guided(CampaignState("t", "guided", "spike", 1, "sem", pool, 0.0), pool, 16, [], 42)
@@ -131,7 +115,6 @@ class TestGuidedFillsRoundSize(unittest.TestCase):
 
 
 class TestBBNoWhitebox(unittest.TestCase):
-    """P0-1: bb consumes only blackbox, not whitebox."""
 
     def _make_pool(self, n):
         return [{"candidate_id": f"c_{i:04d}", "profile": "pmp-boundary",
@@ -141,7 +124,6 @@ class TestBBNoWhitebox(unittest.TestCase):
                 for i in range(n)]
 
     def test_bb_and_bb_wb_both_return_full_rounds(self):
-        """Both bb and bb-wb return round_size selections."""
         from scripts.evaluation.campaigns.run_closed_loop_campaign import select_next_candidates, CampaignState
         pool = self._make_pool(64)
         bb = select_next_candidates(

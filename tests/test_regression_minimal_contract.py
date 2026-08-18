@@ -1,8 +1,3 @@
-"""Regression tests for fail-closed validation gate, idempotent exclusions,
-and runner metadata completeness.
-
-These tests verify the minimum data contract required for Phase 2 paired smoke.
-"""
 
 import csv
 import hashlib
@@ -18,17 +13,16 @@ from pmpfuzz.experiment_protocols import (
     BAPC_CONVERGENCE_PROTOCOL_ID,
 )
 
-# Ensure aggregate is importable
+
 import sys
 _script_dir = Path(__file__).resolve().parents[1]
 if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 
 
-# ── helpers ────────────────────────────────────────────────────────────────────
+
 
 def _write_validation(campaign_dir: Path, valid=True, corrupt=False):
-    """Write a validation.json to a campaign directory."""
     val_path = campaign_dir / "validation.json"
     if corrupt:
         val_path.write_text("not-valid-json{{{{", encoding="ascii")
@@ -67,11 +61,6 @@ def _write_minimal_campaign(root: Path, campaign_id: str,
                             variant: str = "random",
                             validation: bool = True,
                             corrupt_validation: bool = False):
-    """Create a minimal campaign under *root*.
-
-    If *validation* is False, no validation.json is written.
-    If *corrupt_validation* is True, an unparseable validation.json is written.
-    """
     try:
         seed_num = int(campaign_id)
     except (ValueError, TypeError):
@@ -81,7 +70,7 @@ def _write_minimal_campaign(root: Path, campaign_id: str,
     camp.mkdir(parents=True)
     (camp / "metrics").mkdir()
 
-    # timeline
+
     tl = [
         {"schema_version": 1, "campaign_id": campaign_id, "variant": variant,
          "dut": "rocket-clean", "seed": seed_num,
@@ -117,7 +106,7 @@ def _write_minimal_campaign(root: Path, campaign_id: str,
                   for r in tl) + "\n",
         encoding="ascii")
 
-    # metadata
+
     (camp / "metrics" / "campaign_metadata.json").write_text(json.dumps({
         "campaign_id": campaign_id, "variant": variant,
         "dut": "rocket-clean", "seed": seed_num,
@@ -356,14 +345,12 @@ def _write_formal_bapc_campaign(
     return camp
 
 
-# ── tests ──────────────────────────────────────────────────────────────────────
+
 
 
 class TestValidationGateFailClosed(unittest.TestCase):
-    """Fail-closed: missing, corrupt, or invalid validation.json excludes campaign."""
 
     def test_missing_validation_excludes_campaign(self):
-        """Campaign without validation.json must be excluded."""
         from scripts.evaluation.analysis.aggregate_results import aggregate
 
         with TemporaryDirectory() as tmp:
@@ -379,15 +366,14 @@ class TestValidationGateFailClosed(unittest.TestCase):
             self.assertIn("1", excluded_ids,
                           "campaign missing validation.json must be excluded")
 
-            # No campaign data in output
+
             camp_csv = root / "aggregate" / "campaign_index.csv"
-            # campaign_index.csv may exist but be empty/header-only
+
             self.assertFalse(
                 camp_csv.exists() and camp_csv.stat().st_size > 50,
                 "No valid campaigns => campaign_index should be empty or absent")
 
     def test_corrupt_validation_excludes_campaign(self):
-        """Campaign with unparseable validation.json must be excluded."""
         from scripts.evaluation.analysis.aggregate_results import aggregate
 
         with TemporaryDirectory() as tmp:
@@ -405,13 +391,12 @@ class TestValidationGateFailClosed(unittest.TestCase):
                             "Corrupt validation.json must be recorded")
 
     def test_valid_false_excludes_campaign(self):
-        """Campaign with valid=false must be excluded."""
         from scripts.evaluation.analysis.aggregate_results import aggregate
 
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             camp = _write_minimal_campaign(root, "3")
-            _write_validation(camp, valid=False)  # overwrite with valid=False
+            _write_validation(camp, valid=False)
             aggregate(root, "test-exp")
 
             excl = root / "aggregate" / "exclusions.csv"
@@ -423,7 +408,6 @@ class TestValidationGateFailClosed(unittest.TestCase):
                           "Campaign with valid=false must be excluded")
 
     def test_valid_true_includes_campaign(self):
-        """Campaign with valid=true must be included."""
         from scripts.evaluation.analysis.aggregate_results import aggregate
 
         with TemporaryDirectory() as tmp:
@@ -439,7 +423,6 @@ class TestValidationGateFailClosed(unittest.TestCase):
             self.assertIn("4", ids, "Valid campaign must be in normalized output")
 
     def test_missing_validation_excludes_complete_strict_campaign(self):
-        """Strict metadata completeness must not relax missing validation.json."""
         from scripts.evaluation.analysis.aggregate_results import aggregate
 
         with TemporaryDirectory() as tmp:
@@ -466,7 +449,6 @@ class TestValidationGateFailClosed(unittest.TestCase):
             self.assertIn("strict-complete", excluded_ids)
 
     def test_string_false_validation_excludes_campaign(self):
-        """validation.valid must be strict bool true, not a truthy string."""
         from scripts.evaluation.analysis.aggregate_results import aggregate
 
         with TemporaryDirectory() as tmp:
@@ -488,7 +470,6 @@ class TestValidationGateFailClosed(unittest.TestCase):
             self.assertIn("string-false", excluded_ids)
 
     def test_stale_timeline_digest_excludes_campaign(self):
-        """Strict validation must be bound to the current timeline bytes."""
         from scripts.evaluation.analysis.aggregate_results import aggregate
 
         with TemporaryDirectory() as tmp:
@@ -512,7 +493,6 @@ class TestValidationGateFailClosed(unittest.TestCase):
             self.assertIn("validation bindings", reasons["stale-digest"])
 
     def test_unknown_run_class_excludes_campaign(self):
-        """Unknown non-empty run_class must not silently degrade to legacy."""
         from scripts.evaluation.analysis.aggregate_results import aggregate
 
         with TemporaryDirectory() as tmp:
@@ -539,10 +519,8 @@ class TestValidationGateFailClosed(unittest.TestCase):
 
 
 class TestExclusionsIdempotent(unittest.TestCase):
-    """Exclusions must use real campaign_id from metadata and be idempotent."""
 
     def test_exclusions_use_metadata_campaign_id(self):
-        """Exclusion records must use campaign_id from metadata, not dir name."""
         from scripts.evaluation.analysis.aggregate_results import aggregate
 
         with TemporaryDirectory() as tmp:
@@ -558,7 +536,6 @@ class TestExclusionsIdempotent(unittest.TestCase):
                           "Must use metadata campaign_id, not directory name")
 
     def test_exclusions_idempotent(self):
-        """Repeated aggregate must not create duplicate exclusion rows."""
         from scripts.evaluation.analysis.aggregate_results import aggregate
 
         with TemporaryDirectory() as tmp:
@@ -566,7 +543,7 @@ class TestExclusionsIdempotent(unittest.TestCase):
             _write_minimal_campaign(root, "dup-test", validation=False)
 
             aggregate(root, "test-exp")
-            aggregate(root, "test-exp")  # second run
+            aggregate(root, "test-exp")
 
             excl = root / "aggregate" / "exclusions.csv"
             with excl.open("r", encoding="ascii", newline="") as f:
@@ -577,7 +554,6 @@ class TestExclusionsIdempotent(unittest.TestCase):
 
 
 class TestRunnerMetadataCompleteness(unittest.TestCase):
-    """Campaign metadata must include all required provenance fields."""
 
     REQUIRED_FIELDS = [
         "method", "variant", "dut", "seed", "coverage_mode",
@@ -588,10 +564,9 @@ class TestRunnerMetadataCompleteness(unittest.TestCase):
     ]
 
     def test_metadata_contains_all_required_fields(self):
-        """Strict metadata must include all 14+ provenance fields."""
-        # This test verifies the contract, not a specific campaign on disk.
-        # The aggregate's _build_campaign_row reads these fields from metadata.
-        # We check that the CAMPAIGN_FIELDS constant covers them.
+
+
+
         from scripts.evaluation.analysis.aggregate_results import CAMPAIGN_FIELDS
 
         for field in self.REQUIRED_FIELDS:
@@ -600,20 +575,18 @@ class TestRunnerMetadataCompleteness(unittest.TestCase):
 
 
 class TestArtifactManifestTamper(unittest.TestCase):
-    """Tampering with an artifact must cause validator failure."""
 
     def test_tampered_hash_causes_manifest_failure(self):
-        """Modifying a file after manifest generation invalidates it."""
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             camp = _write_minimal_campaign(root, "tamper")
 
-            # Generate manifest manually by running aggregate
+
             from scripts.evaluation.analysis.aggregate_results import aggregate
             aggregate(root, "test-exp")
 
-            # Manually add a raw campaign file to the manifest
-            # (aggregate only adds output files; the driver adds raw files)
+
+
             import hashlib
             manifests_dir = root / "manifests"
             manifest_path = manifests_dir / "artifact-sha256.txt"
@@ -627,14 +600,14 @@ class TestArtifactManifestTamper(unittest.TestCase):
             self.assertTrue(manifest_path.exists(),
                             "artifact-sha256.txt must be generated")
 
-            # Tamper: modify the file
+
             tl_path.write_text(original + "/* tampered */\n", encoding="ascii")
 
-            # Re-validate using the validator
+
             from scripts.evaluation.validation.validate_timeline import validate_timeline
             report = validate_timeline(camp)
 
-            # The manifest integrity check should fail because the hash changed
+
             manifest_checks = [c for c in report["checks"]
                                if "artifact_sha" in c["name"]]
             hash_ok = any(
@@ -644,7 +617,7 @@ class TestArtifactManifestTamper(unittest.TestCase):
             self.assertFalse(hash_ok,
                              "Tampered file must cause manifest integrity failure")
 
-            # Restore original for cleanup
+
             tl_path.write_text(original, encoding="ascii")
 
 

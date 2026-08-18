@@ -1,4 +1,3 @@
-"""B1 (E3 CVA6 mutant cross-check) adapter tests: dut-binary override + mutant provenance."""
 import hashlib
 import sys
 import tempfile
@@ -7,7 +6,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "scripts" / "evaluation" / "baseline_adapters"))
-import riscv_dv  # noqa: E402
+import riscv_dv
 
 
 def _file_sha256(p):

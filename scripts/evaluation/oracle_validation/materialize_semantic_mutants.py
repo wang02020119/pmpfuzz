@@ -1045,7 +1045,6 @@ def _write_prepare_source_root_script(
         if sync_path.rstrip("/") == "generators":
             lines.extend(
                 [
-                    "# Preserve immediate generator submodule markers so build.sbt discovers optional DUT projects.",
                     'for marker in "$SOURCE_ROOT"/generators/*/.git; do',
                     '  [ -e "$marker" ] || continue',
                     '  module_dir="$(dirname "$marker")"',
@@ -1089,7 +1088,6 @@ def _write_prepare_source_root_script(
         ]
     )
     if cleanup_paths:
-        lines.append("# Remove stale build outputs that can hide newly synced DUT sources.")
         for cleanup_path in cleanup_paths:
             lines.append(f'rm -rf "$TARGET_ROOT/{cleanup_path}"')
     lines.extend(
@@ -1180,7 +1178,7 @@ def _write_apply_script(path: Path, *, source_root: Path, patch_path: Path) -> N
     try:
         path.chmod(0o755)
     except OSError:
-        # Windows may ignore or reject POSIX mode bits; the content remains usable via `sh script`.
+
         pass
 
 

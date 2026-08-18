@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""Aggregate results across all campaigns into standard CSV tables for plotting.
-
-Produces:
-- aggregate/campaign_index.csv
-- aggregate/coverage_final.csv
-- aggregate/coverage_threshold_times.csv
-- aggregate/coverage_auc.csv
-- aggregate/coverage_timeseries.csv
-- aggregate/statistics.json
-"""
 
 from __future__ import annotations
 
@@ -23,8 +13,6 @@ from pathlib import Path
 from pathlib import Path as _Path
 from typing import Any
 
-# Ensure repository-local imports work when the aggregator is executed directly
-# from a runtime override tree.
 _source_root_override = os.environ.get("PMPFUZZ_SOURCE_ROOT")
 _script_root = (
     _Path(_source_root_override).resolve()
@@ -124,7 +112,6 @@ def _load_experiment_contract(artifact_root: Path) -> dict[str, Any] | None:
 
 
 def _is_superseded_campaign_path(path: Path) -> bool:
-    """Ignore archival duplicates created during resume/repair workflows."""
     return any(
         ".orphaned-" in part
         or ".replaced-" in part
@@ -797,10 +784,6 @@ def aggregate(
     *,
     security_events_mode: str = "full",
 ) -> dict[str, Path]:
-    """Scan *artifact_root* for campaigns, extract data, write CSV tables.
-
-    Returns a dict mapping table names to output Paths.
-    """
     aggregate_dir = artifact_root / "aggregate"
     aggregate_dir.mkdir(parents=True, exist_ok=True)
     normalized_dir = artifact_root / "normalized"
@@ -901,12 +884,10 @@ def aggregate(
 
     outputs: dict[str, Path] = {}
 
-    # --- normalized/campaigns.csv ---
     campaigns_path = normalized_dir / "campaigns.csv"
     _write_csv_with_fields(campaigns_path, campaigns, CAMPAIGN_FIELDS)
     outputs["normalized_campaigns"] = campaigns_path
 
-    # --- normalized/coverage_timeseries.csv ---
     normalized_coverage_path = normalized_dir / "coverage_timeseries.csv"
     _write_csv_with_fields(
         normalized_coverage_path,
@@ -922,19 +903,16 @@ def aggregate(
     )
     outputs["normalized_coverage_timeseries"] = normalized_coverage_path
 
-    # --- normalized/security_event_timeseries.csv ---
     normalized_events_path = normalized_dir / "security_event_timeseries.csv"
     _write_csv_with_fields(normalized_events_path, security_event_rows, EVENT_FIELDS)
     outputs["normalized_security_event_timeseries"] = normalized_events_path
 
-    # --- campaign_index.csv ---
     if campaigns:
         path = aggregate_dir / "campaign_index.csv"
         _write_csv(path, campaigns)
         outputs["campaign_index"] = path
         print(f"campaign_index: {len(campaigns)} rows -> {path}")
 
-    # --- coverage_final.csv ---
     coverage_final = [_coverage_final_row(c) for c in campaigns if _effective_eligible_count(c) > 0]
     if coverage_final:
         path = aggregate_dir / "coverage_final.csv"
@@ -956,7 +934,6 @@ def aggregate(
         outputs["bapc_qualification_reason_distribution"] = path
         print(f"bapc_qualification_reason_distribution: {len(bapc_reason_rows)} rows -> {path}")
 
-    # Build horizon lookup: campaign_id -> {horizon, budget_class, experiment_id, dut, run_class}
     horizon_map: dict[str, dict[str, Any]] = {}
     for c in campaigns:
         horizon_map[str(c["campaign_id"])] = {
@@ -968,7 +945,6 @@ def aggregate(
             "run_class": c.get("run_class", ""),
         }
 
-    # --- coverage_threshold_times.csv ---
     threshold_rows = _compute_thresholds(timeseries_rows, horizon_map)
     if threshold_rows:
         path = aggregate_dir / "coverage_threshold_times.csv"
@@ -976,14 +952,12 @@ def aggregate(
         outputs["coverage_threshold_times"] = path
         print(f"coverage_threshold_times: {len(threshold_rows)} rows -> {path}")
 
-    # --- coverage_timeseries.csv (normalized) ---
     if timeseries_rows:
         path = aggregate_dir / "coverage_timeseries.csv"
         _write_csv(path, timeseries_rows)
         outputs["coverage_timeseries"] = path
         print(f"coverage_timeseries: {len(timeseries_rows)} rows -> {path}")
 
-    # --- coverage_auc.csv ---
     auc_rows = _compute_auc(timeseries_rows, horizon_map)
     auc_path = aggregate_dir / "coverage_auc.csv"
     _write_csv_with_fields(
@@ -998,7 +972,6 @@ def aggregate(
     )
     outputs["coverage_auc"] = auc_path
 
-    # --- overhead.csv ---
     overhead_rows = _compute_overhead(campaigns, timeseries_rows)
     overhead_path = aggregate_dir / "overhead.csv"
     _write_csv_with_fields(
@@ -1013,7 +986,6 @@ def aggregate(
     )
     outputs["overhead"] = overhead_path
 
-    # --- exclusions.csv ---
     exclusions_path = aggregate_dir / "exclusions.csv"
     deduped_exclusions = {
         str(row["campaign_id"]): row for row in exclusion_rows
@@ -1025,7 +997,6 @@ def aggregate(
     )
     outputs["exclusions"] = exclusions_path
 
-    # --- statistics.json ---
     stats = _compute_statistics(campaigns, timeseries_rows)
     stats["security_event_export_mode"] = security_events_mode
     stats["security_event_source_count"] = security_event_source_count
@@ -1034,12 +1005,10 @@ def aggregate(
     path.write_text(json.dumps(stats, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
     outputs["statistics"] = path
 
-    # --- schema documentation ---
     dictionary_path = schemas_dir / "data_dictionary.md"
     dictionary_path.write_text(_data_dictionary(), encoding="utf-8")
     outputs["data_dictionary"] = dictionary_path
 
-    # --- aggregate validation report ---
     validation_path = aggregate_dir / "validation_report.json"
     horizon_errors = _validate_horizon_contract(
         horizon_validation_campaigns, timeseries_rows, horizon_map)
@@ -1047,7 +1016,6 @@ def aggregate(
         campaigns_path, normalized_coverage_path, normalized_events_path,
         auc_path, overhead_path, exclusions_path, dictionary_path,
     )
-    # Merge horizon validation errors into the report
     for err in horizon_errors:
         validation["errors"].append(err)
     for err in contract_errors:
@@ -1062,7 +1030,6 @@ def aggregate(
     )
     outputs["validation_report"] = validation_path
 
-    # --- artifact hashes (written last; the manifest does not hash itself) ---
     hash_path = manifests_dir / "artifact-sha256.txt"
     _write_artifact_hashes(
         artifact_root,
@@ -1356,11 +1323,9 @@ def _build_timeseries_row(
         "hpm": "hpm_rate",
         "bapc": "bapc_rate",
     }
-    # D1: Skip synthetic baseline row (completion_seq=0)
     if line.get("completion_seq", 0) == 0:
         return None
 
-    # D2: Correct field name mapping for new_bins
     new_bins_key = {
         "semantic": "new_semantic_bins",
         "pairwise": "new_pairwise_bins",
@@ -1427,17 +1392,11 @@ def _compute_thresholds(
     timeseries: list[dict],
     horizon_map: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict]:
-    """Compute time and case count to reach coverage thresholds.
-
-    Adds censor_time_seconds (=T) for censored rows and not_applicable
-    for zero-denominator campaigns.
-    """
     from collections import defaultdict
 
     if horizon_map is None:
         horizon_map = {}
 
-    # Group by campaign_id and coverage_mode
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in timeseries:
         key = (row["campaign_id"], row["coverage_mode"])
@@ -1451,7 +1410,6 @@ def _compute_thresholds(
         hinfo = horizon_map.get(str(cid), {})
         T, _ = _normalize_horizon(hinfo.get("wall_clock_horizon_seconds"))
 
-        # Check denominator
         target_bins = rows[0].get("target_bins", 0) if rows else 0
         has_valid_rates = any(
             r.get("coverage_rate") is not None and r.get("coverage_rate") != ""
@@ -1529,7 +1487,6 @@ def _compute_thresholds(
 
 
 def _compute_statistics(campaigns: list[dict], timeseries: list[dict]) -> dict:
-    """Compute basic summary statistics."""
     import statistics as st
     from collections import defaultdict
 
@@ -1539,7 +1496,6 @@ def _compute_statistics(campaigns: list[dict], timeseries: list[dict]) -> dict:
         "total_timeseries_rows": len(timeseries),
     }
 
-    # Per-method per-variant per-dut final coverage stats
     groups: dict[tuple[str, str, str], list[float]] = defaultdict(list)
     for c in campaigns:
         for cmode, key in [("semantic", "semantic_final_rate"), ("pairwise", "pairwise_final_rate"),
@@ -1570,17 +1526,6 @@ def _compute_auc(
     timeseries: list[dict[str, Any]],
     horizon_map: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Compute right-continuous step coverage AUC for every campaign/mode.
-
-    Coverage is modelled as a right-continuous step function:
-    - 0 before the first completion
-    - jumps to the observed rate at each completion time
-    - holds that rate until the next completion
-    - the last observed rate extends to the explicit wall_clock_horizon_seconds
-
-    Integration:  AUC = sum(y_i * (t_{i+1} - t_i)) + y_n * (T - t_n)
-    where points are (t_i, y_i) sorted by (elapsed_wall_seconds, completion_seq).
-    """
     from collections import defaultdict
 
     if horizon_map is None:
@@ -1593,14 +1538,12 @@ def _compute_auc(
     output: list[dict[str, Any]] = []
     for (cid, coverage_mode), rows in groups.items():
         first = rows[0]
-        # Sort by (elapsed_wall_seconds, completion_seq) for determinism
         rows_sorted = sorted(
             rows,
             key=lambda item: (float(item["elapsed_wall_seconds"]),
                               int(item["completion_seq"])),
         )
 
-        # Collect valid (time, rate) points
         points: list[tuple[float, float]] = [(0.0, 0.0)]
         all_rates_null = True
         any_rate_valid = False
@@ -1613,7 +1556,6 @@ def _compute_auc(
             points.append(
                 (float(row["elapsed_wall_seconds"]), float(rate)))
 
-        # Determine explicit horizon T via safe normalisation
         hinfo = horizon_map.get(str(cid), {})
         run_class = str(hinfo.get("run_class", ""))
         is_strict = run_class in _STRICT_RUN_CLASSES
@@ -1623,19 +1565,16 @@ def _compute_auc(
         if T is not None:
             horizon_source = "explicit"
         elif is_strict:
-            # Strict campaign with invalid/missing horizon:
-            # do NOT fall back to last_point — the aggregate is unusable.
+
             T = 0.0
             horizon_source = "invalid" if horizon_err else "missing"
         elif points[-1][0] > 0:
-            # Non-strict / legacy fallback to last data point
             T = points[-1][0]
             horizon_source = "last_point"
         else:
             T = 0.0
             horizon_source = "none"
 
-        # Denominator check: target_bins = 0 or all rates null
         target_bins = rows_sorted[0].get("target_bins", 0) if rows_sorted else 0
         denominator_zero = (
             int(target_bins) == 0
@@ -1666,7 +1605,6 @@ def _compute_auc(
             continue
 
         if len(points) < 2:
-            # No valid data points, but denominator > 0 -> tiny AUC=0
             output.append({
                 **base_row,
                 "horizon_seconds": T,
@@ -1678,15 +1616,12 @@ def _compute_auc(
             })
             continue
 
-        # Right-continuous step AUC integration
         area = 0.0
         for i in range(len(points) - 1):
             _x_curr, y_curr = points[i]
             x_next, _y_next = points[i + 1]
-            # During [t_i, t_{i+1}), value is y_i (the rate that just jumped)
             area += y_curr * (x_next - points[i][0])
 
-        # Extension from last data point to horizon T
         last_x, last_y = points[-1]
         extension = max(0.0, T - last_x)
         area += last_y * extension
@@ -1707,7 +1642,6 @@ def _compute_auc(
 def _compute_overhead(
     campaigns: list[dict[str, Any]], timeseries: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Build campaign-level throughput rows without interpreting result content."""
     last_by_campaign: dict[str, dict[str, Any]] = {}
     for row in timeseries:
         campaign_id = str(row["campaign_id"])
@@ -1744,35 +1678,23 @@ def _compute_overhead(
 
 
 def _normalize_horizon(value: Any) -> tuple[float | None, str | None]:
-    """Safely normalise a wall_clock_horizon_seconds value from campaign metadata.
-
-    Returns (T, error_reason) where:
-    - T is a finite positive float on success, None on failure.
-    - error_reason is None on success, a short diagnostic on failure.
-
-    Rejects bool, non-numeric strings, NaN, Infinity, zero, and negative
-    values.  Never raises — all failures are returned as *error_reason*.
-    """
     if value is None:
         return None, "missing horizon"
 
-    # Reject bool explicitly — bool is a subclass of int in Python,
-    # so float(True) == 1.0 would silently accept it otherwise.
+
+
     if isinstance(value, bool):
         return None, f"invalid horizon type bool (value={value})"
 
-    # Attempt numeric conversion
     try:
         f = float(value)
     except (ValueError, TypeError):
         return None, f"invalid non-numeric horizon: {value!r}"
 
-    # Reject non-finite (NaN, Infinity, -Infinity)
     import math
     if not math.isfinite(f):
         return None, f"non-finite horizon: {value!r}"
 
-    # Reject zero and negative
     if f <= 0:
         return None, f"non-positive horizon: {f}"
 
@@ -1784,18 +1706,8 @@ def _validate_horizon_contract(
     timeseries_rows: list[dict[str, Any]],
     horizon_map: dict[str, dict[str, Any]],
 ) -> list[str]:
-    """Validate horizon contract for all campaigns.
-
-    Checks:
-    - strict campaigns must have a valid (finite > 0) wall_clock_horizon_seconds
-    - no analysis timeseries point may exceed its campaign's horizon
-    - same (experiment_id, dut, budget_class) must share the same T
-      (cross-method equality is enforced within the budget class, not
-      across distinct budget classes for the same DUT)
-    """
     errors: list[str] = []
 
-    # --- Per-campaign checks ---
     for c in campaigns:
         cid = str(c["campaign_id"])
         run_class = str(c.get("run_class", ""))
@@ -1803,14 +1715,12 @@ def _validate_horizon_contract(
 
         T, horizon_err = _normalize_horizon(c.get("wall_clock_horizon_seconds"))
 
-        # Strict campaigns must have a valid explicit horizon
         if is_strict and horizon_err is not None:
             errors.append(
                 f"horizon_invalid: campaign={cid} run_class={run_class} "
                 f"{horizon_err}"
             )
 
-        # No timeline point may exceed a valid horizon
         if T is not None:
             for row in timeseries_rows:
                 if str(row.get("campaign_id", "")) == cid:
@@ -1822,9 +1732,8 @@ def _validate_horizon_contract(
                         )
                         break
 
-    # --- Group-level checks ---
-    # Same (experiment_id, dut, budget_class) must share the same T.
-    # Cross-method equality is enforced within the budget class.
+
+
     budget_groups: dict[tuple[str, str, str], set[float]] = {}
     for c in campaigns:
         T, _ = _normalize_horizon(c.get("wall_clock_horizon_seconds"))

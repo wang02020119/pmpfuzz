@@ -1,13 +1,3 @@
-"""R6 static PMP-state deriver + trap-address fingerprint recovery (riscv-dv baseline).
-
-Derives the deterministic post-setup PMP state (16 entries) of a riscv-dv
-SV-generator program from its generated .S (all PMP CSR writes in the setup
-block are immediate literals) and recovers the trap address (mtval) of
-instruction-access-fault observations (mcause=1 => mtval == mepc) by inverting
-the 17-bit tohost fingerprint over the program's code region, cross-checked
-against the 4-bit mepc tag. Engineering instrumentation only: no DUT reruns,
-no pmpfuzz/bapc.py changes, no safety analysis.
-"""
 
 import json
 import re
@@ -45,12 +35,6 @@ def fold17(value):
 
 
 def derive_static_pmp(asm_path, elf_path):
-    """Derive the deterministic post-setup PMP state from the generated .S.
-
-    Returns a dict with per-entry mode/rwx/locked/pmpaddr plus the raw words
-    and the parsed anchor instructions. Raises ValueError when the .S shape
-    does not match the expected generator layout.
-    """
     lines = Path(asm_path).read_text(encoding="utf-8", errors="replace").splitlines()
     in_setup = False
     regs = {}
@@ -136,18 +120,12 @@ def derive_static_pmp(asm_path, elf_path):
 
 
 def recover_trap_address(fp, tag, elf_path, main_addr=None):
-    """Recover mtval for mcause=1 traps by inverting the 17-bit fingerprint
-    over the code region, cross-checked with the 4-bit mepc tag.
-
-    Returns (address, unique) where unique is False when the inversion is
-    ambiguous (then the caller must not use the address for mode matching).
-    """
     if main_addr is None:
         main_addr = _symbol_address(elf_path, "main")
     if main_addr is None:
         return None, False
     matches = []
-    # step 2: instruction addresses may be 2-byte aligned (compressed ISA)
+
     for addr in range(main_addr, main_addr + 0x40000, 2):
         if ((addr >> 12) & 0xF) != (tag & 0xF):
             continue

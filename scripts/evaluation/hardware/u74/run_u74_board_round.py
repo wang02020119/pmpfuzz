@@ -135,16 +135,6 @@ def _load_schedule(path: Path) -> list[dict]:
 
 
 def _lowered_cases_from_schedule(schedule_entries: list[dict]) -> list[dict[str, Any]]:
-    """Extract lowered board-case payloads from the schedule's ``lowering`` fields.
-
-    Every lowered U74 scenario entry carries a fully-materialized ``lowering``
-    object with the same schema as a generated-manifest lowered case (probe
-    address, access, expected trap, PMP entries, ...). The board firmware's
-    lowered case loop is only rendered when ``lowered_cases`` is present in the
-    manifest payload, so building it here keeps runs that do not pass a frozen
-    generated-round-manifest file from silently generating a manifest-only
-    (no-case-loop) firmware image.
-    """
     return [dict(item["lowering"]) for item in schedule_entries if item.get("lowering")]
 
 
@@ -374,9 +364,9 @@ def _render_lowered_pmp_entries(entries: list[dict[str, Any]]) -> str:
 
 
 def _render_lowered_case_table(lowered_cases: list[dict[str, Any]]) -> str:
-    # Option A locked protocol: cases that install a locked PMP entry are moved
-    # to the end of the round so their irreversible entries do not contaminate
-    # later cases; the round resets once after the locked batch.
+
+
+
     def _case_is_locked(case: dict[str, Any]) -> bool:
         return any(
             bool(int((entry.get("prot") or 0)) & 0x80)
@@ -1381,9 +1371,9 @@ def _build_remote_fit(
 
     lowered_cases = [dict(item) for item in (manifest_payload.get("lowered_cases") or [])]
     if not lowered_cases and schedule_entries:
-        # No lowered payload in the (possibly frozen) manifest: materialize it
-        # from the schedule entries so the firmware keeps its case loop instead
-        # of degrading to a manifest-only image that runs zero cases.
+
+
+
         lowered_cases = _lowered_cases_from_schedule(schedule_entries)
     if lowered_cases:
         validate_direct_board_case_selection(
@@ -1709,10 +1699,10 @@ def _run_uart_capture(args: argparse.Namespace, *, out_dir: Path, label: str) ->
         str(args.capture_wait_timeout_seconds),
     ]
     if getattr(args, "board_reboot_over_ssh", False):
-        # The capture script's own -RebootOverSsh uses Start-Process for ssh,
-        # which is unreliable from -NonInteractive pwsh. Instead: open the
-        # capture in the background, then trigger the reboot with a direct ssh
-        # invocation, then wait for the capture to finish.
+
+
+
+
         capture = subprocess.Popen(
             capture_args,
             stdout=subprocess.PIPE,
@@ -1721,7 +1711,7 @@ def _run_uart_capture(args: argparse.Namespace, *, out_dir: Path, label: str) ->
             encoding="utf-8",
             errors="replace",
         )
-        time.sleep(3)  # let the serial port open before the reboot drops the link
+        time.sleep(3)
         reboot_cmd = (
             f"printf '%s\\n' '{args.board_sudo_password}' | sudo -S -p '' reboot"
         )

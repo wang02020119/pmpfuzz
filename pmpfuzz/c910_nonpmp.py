@@ -314,18 +314,11 @@ _CASE_SPECS: tuple[dict[str, Any], ...] = (
     {"profile": "c910-nonpmp-side-effect", "record": "translated-observer-initial-before-ciall", "parser": "alias-load", "privilege": "U", "access": "load", "translation": "sv39", "required_caps": ["sv39", "u_mode"], "security_focus": "translated_pa_side_effect", "preload_mode": "initial_observer_va"},
     {"profile": "c910-nonpmp-side-effect", "record": "store-stale-initial", "parser": "alias-load", "privilege": "U", "access": "load", "translation": "sv39", "required_caps": ["sv39", "u_mode"], "security_focus": "store_stale", "preload_mode": "initial_same_va"},
     {"profile": "c910-nonpmp-side-effect", "record": "store-stale-observer-initial", "parser": "alias-load", "privilege": "U", "access": "load", "translation": "sv39", "required_caps": ["sv39", "u_mode"], "security_focus": "store_stale", "preload_mode": "initial_observer_va"},
-    # --- M-2 catalog expansion spike: M/S-mode bare target operations ---
-    # Cover the previously-unreached (m,m) store/fetch and (s,s) store stimulus
-    # and privilege-decision bins.  Dispatched by the probe via real_mode with
-    # mpp=PRV_M/PRV_S (see security_chain_probe.c probe_nonpmp_privilege_switch_bare).
+
     {"profile": "c910-nonpmp-privilege", "record": "m-store-bare-fw-data", "parser": "real-mode", "privilege": "M", "access": "store", "translation": "bare", "required_caps": [], "security_focus": "real_mode"},
     {"profile": "c910-nonpmp-privilege", "record": "m-fetch-bare-fw-data", "parser": "real-mode", "privilege": "M", "access": "fetch", "translation": "bare", "required_caps": [], "security_focus": "real_mode"},
     {"profile": "c910-nonpmp-privilege", "record": "s-store-bare-fw-data", "parser": "real-mode", "privilege": "S", "access": "store", "translation": "bare", "required_caps": ["s_mode"], "security_focus": "real_mode"},
-    # --- M-2 catalog expansion phase 2: M-mode MPRV + sv39 target operations ---
-    # Cover the unreached (m,m) load/store sv39, (m,s)/(m,u) load/store bare+sv39,
-    # and (s,s) store sv39 stimulus bins.  Dispatched by the probe via
-    # print_load_result/print_store_result with mpp=PRV_M/PRV_S/PRV_U (see
-    # probe_sv39_mmu_tlb and probe_mprv_bare).
+
     {"profile": "c910-nonpmp-sv39", "record": "m-load-sv39-fw-data", "parser": "mprv", "privilege": "M", "access": "load", "translation": "sv39", "required_caps": ["sv39"], "security_focus": "sv39_permissions", "pte_permissions": {"rwx": "rw-", "user": False, "accessed": True, "dirty": True, "valid": True}},
     {"profile": "c910-nonpmp-sv39", "record": "m-store-sv39-fw-data", "parser": "mprv", "privilege": "M", "access": "store", "translation": "sv39", "required_caps": ["sv39"], "security_focus": "sv39_permissions", "pte_permissions": {"rwx": "rw-", "user": False, "accessed": True, "dirty": True, "valid": True}},
     {"profile": "c910-nonpmp-sv39", "record": "m-mprv-s-load-sv39-fw-data", "parser": "mprv", "privilege": "M", "effective_privilege": "S", "access": "load", "translation": "sv39", "required_caps": ["sv39"], "security_focus": "sv39_permissions", "pte_permissions": {"rwx": "rw-", "user": False, "accessed": True, "dirty": True, "valid": True}},

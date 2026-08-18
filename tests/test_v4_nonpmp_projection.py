@@ -1,10 +1,3 @@
-"""Tests for the BAPC-core v4 non-PMP projection mapper.
-
-Covers the frozen 56-bin vocabulary, the pure target-operation mapper, the C910
-UART bridge (including the SUM-fetch normalization and payload-trap handling),
-and the conservative architectural oracle used to flag known semantic
-violations.
-"""
 from __future__ import annotations
 
 import json

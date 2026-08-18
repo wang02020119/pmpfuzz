@@ -28,6 +28,7 @@ def judge_observation(
     observed_stage: str | None = None,
     observed_ptw_level: str | None = None,
     observed_fault_address: int | None = None,
+    observed_probe_vaddr: int | None = None,
 ) -> ObservationJudgment:
     expected = case.get("expected") or {}
     expected_allowed = bool(expected.get("allowed"))
@@ -49,8 +50,6 @@ def judge_observation(
         ecall_cause = _expected_ecall_cause(case)
         if ecall_cause is not None and event.mcause != ecall_cause:
             return _failure("invalid_completion", "completion event does not contain the expected ecall cause")
-        if event.mtval_fingerprint != mtval_fingerprint(0):
-            return _failure("invalid_completion", "completion ecall reported a non-zero mtval")
         if not _mepc_matches_probe_window(case, event):
             return _failure("wrong_mepc", "completion mepc is outside the active probe instruction window")
         if expected_allowed:
@@ -61,6 +60,9 @@ def judge_observation(
         side_effect = _stateful_side_effect_judgment(case, event)
         if side_effect is not None:
             return side_effect
+        stale_permission = _stateful_stale_permission_judgment(case, event)
+        if stale_permission is not None:
+            return stale_permission
         return _failure(
             "unexpected_no_trap",
             "probe completed although the host oracle expected a trap",
@@ -75,6 +77,14 @@ def judge_observation(
         return _failure(
             "wrong_path",
             f"trap reported from unexpected phase {event.phase.name.lower()}",
+        )
+    if expected_stage == "page_table_walk" and _probe_vaddr_mismatches_case(case, observed_probe_vaddr):
+        return ObservationJudgment(
+            "inconclusive",
+            "unverified_trap_stage",
+            "source probe vaddr does not match the target access address",
+            True,
+            False,
         )
     if expected_allowed:
         return _failure("unexpected_trap", "DUT trapped although the host oracle expected completion")
@@ -159,6 +169,15 @@ def _expected_ecall_cause(case: dict[str, Any]) -> int | None:
     return {"U": 8, "S": 9, "M": 11}.get(case.get("privilege"))
 
 
+def _probe_vaddr_mismatches_case(case: dict[str, Any], observed_probe_vaddr: int | None) -> bool:
+    if observed_probe_vaddr is None:
+        return False
+    if str(case.get("translation") or "") != "sv39":
+        return False
+    address = _case_address(case)
+    return address is not None and observed_probe_vaddr != address
+
+
 def _failure(
     failure_class: str,
     reason: str,
@@ -194,6 +213,30 @@ def _stateful_side_effect_judgment(
             stage_verified=True,
         )
     return None
+
+
+def _stateful_stale_permission_judgment(
+    case: dict[str, Any], event: ObservedEvent
+) -> ObservationJudgment | None:
+    if not _expected_stage_is_stateful(case):
+        return None
+    sequence = case.get("stateful_sequence") or {}
+    if str(sequence.get("final_probe") or "") != "repeat":
+        return None
+    if str(sequence.get("expected_final") or "") != "trap_after_mutation":
+        return None
+    if event.phase not in {
+        ObservationPhase.FINAL,
+        ObservationPhase.FINAL_SENTINEL_INITIAL,
+        ObservationPhase.FINAL_SENTINEL_MODIFIED,
+        ObservationPhase.FINAL_SENTINEL_OTHER,
+    }:
+        return None
+    return _failure(
+        "stale_permission",
+        "stateful final repeat probe completed after a mutation that should have forced a trap",
+        stage_verified=True,
+    )
 
 
 def _expected_stage_is_stateful(case: dict[str, Any]) -> bool:

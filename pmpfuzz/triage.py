@@ -130,7 +130,7 @@ def render_markdown_report(run_dir: Path) -> str:
             f"- Infra-unadapted results: {applicability.get('infra_unadapted', 0)}",
             f"- Experimental results: {applicability.get('experimental', 0)}",
             "",
-            "## Coverage Summary",
+            "## Manifest Coverage (generated-only statistics)",
             "",
             f"- Generated cases: {coverage.get('total_cases', 0)}",
             f"- Result records: {coverage.get('total_results', 0)}",
@@ -140,68 +140,81 @@ def render_markdown_report(run_dir: Path) -> str:
             f"- Semantic coverage: {coverage.get('covered_target_bins', 0)}/{coverage.get('target_bins', 0)} "
             f"({coverage.get('coverage_rate', 0.0)})",
             "",
+            "> **Note:** Manifest coverage counts every generated case.json, regardless of whether "
+            "the test actually executed to the target observation stage. "
+            "For paper experiments, use Execution-Qualified Coverage below.",
+            "",
         ]
     )
 
+    # ---- Execution-Qualified Coverage ---------------------------------------
+    exec_cov = coverage.get("execution_coverage") or {}
+    lines.extend([
+        "## Execution-Qualified Coverage",
+        "",
+        f"- Model: `{exec_cov.get('coverage_model', 'none')}`",
+        "",
+    ])
+    by_dut = exec_cov.get("by_dut") or {}
+    for dut_name, entry in sorted(by_dut.items()):
+        available = entry.get("available", False)
+        lines.append(f"### DUT: `{dut_name}`")
+        if not available:
+            lines.append(f"- **Unavailable:** `{entry.get('unavailable_reason', 'unknown')}`")
+            lines.append("")
+            continue
+        qual = entry.get("qualification") or {}
+        lines.extend([
+            f"- Capability fingerprint: `{entry.get('capability_fingerprint', 'none')}`",
+            f"- Total generated cases: {coverage.get('total_cases', 0)}",
+            f"- Total result records: {qual.get('total_results', 0)}",
+            f"- Eligible results: {qual.get('eligible_results', 0)}",
+            f"- Excluded results: {qual.get('excluded_results', 0)}",
+            f"- Missing results: {qual.get('missing_results', 0)}",
+            f"- Orphan results: {qual.get('orphan_results', 0)}",
+            f"- Valid mismatches: {qual.get('valid_mismatches', 0)}",
+            "",
+        ])
+        excluded = qual.get("excluded_by_reason") or {}
+        if excluded:
+            lines.append("**Excluded by reason:**")
+            for reason, count in sorted(excluded.items()):
+                lines.append(f"- `{reason}`: {count}")
+            lines.append("")
+        for cov_name in ("semantic", "pairwise", "security_triples", "predicates"):
+            section = entry.get(cov_name) or {}
+            rate = section.get("coverage_rate")
+            rate_str = f"{rate:.4f}" if rate is not None else "null"
+            lines.append(
+                f"- **{cov_name}**: {section.get('covered_target_bins', 0)}/"
+                f"{section.get('total_target_bins', 0)} ({rate_str})"
+            )
+        lines.append("")
+        # suggested schedule command
+        target = coverage.get("target") or "core-stateful"
+        lines.append(
+            f"Suggested next schedule: `python3 -m pmpfuzz schedule --from-runs {run_dir} "
+            f"--target {target} --coverage-mode predicates --coverage-basis execution "
+            f"--dut {dut_name} --max-cases 64 --seed 20260628 --out runs/next`"
+        )
+        lines.append("")
+
+    if not by_dut:
+        lines.append("- No execution coverage data available")
+        lines.append("")
+
+    # ---- Old manifest guidance (kept for reference) -------------------------
     lines.extend(
         [
-            "## Semantic Coverage Guidance",
+            "## Manifest Coverage Gaps (reference)",
             "",
             f"- Missing semantic bins: {coverage.get('missing_target_bins', 0)}",
-            f"- Suggested scheduler: `python3 -m pmpfuzz schedule --from-runs {run_dir} "
+            f"- Suggested manifest scheduler: `python3 -m pmpfuzz schedule --from-runs {run_dir} "
             f"--target {coverage.get('target') or 'core-stateful'} --max-cases 64 --seed 20260628 "
-            f"--out runs/semantic_next`",
-            "",
-            "Top gaps:",
+            f"--coverage-basis manifest --out runs/semantic_next`",
             "",
         ]
     )
-    for gap in coverage.get("top_gaps", [])[:10]:
-        lines.append(f"- `{gap}`")
-    if not coverage.get("top_gaps"):
-        lines.append("- none")
-
-    lines.extend(
-        [
-            "",
-            "## Combination Coverage Guidance",
-            "",
-            f"- Pairwise combo coverage: {coverage.get('covered_target_combo_bins', 0)}/"
-            f"{coverage.get('target_combo_bins', 0)} ({coverage.get('combo_coverage_rate', 0.0)})",
-            f"- Missing pairwise combo bins: {coverage.get('missing_target_combo_bins', 0)}",
-            f"- Suggested pairwise scheduler: `python3 -m pmpfuzz schedule --from-runs {run_dir} "
-            f"--target {coverage.get('target') or 'core-stateful'} --coverage-mode pairwise "
-            f"--max-cases 64 --seed 20260628 --out runs/combo_next`",
-            "",
-            "Top combo gaps:",
-            "",
-        ]
-    )
-    for gap in coverage.get("top_combo_gaps", [])[:10]:
-        lines.append(f"- `{gap}`")
-    if not coverage.get("top_combo_gaps"):
-        lines.append("- none")
-
-    lines.extend(
-        [
-            "",
-            "## Contract Predicate Coverage",
-            "",
-            f"- Predicate coverage: {coverage.get('covered_target_predicates', 0)}/"
-            f"{coverage.get('target_predicates', 0)} ({coverage.get('predicate_coverage_rate', 0.0)})",
-            f"- Missing contract predicates: {coverage.get('missing_target_predicates', 0)}",
-            f"- Suggested predicate scheduler: `python3 -m pmpfuzz schedule --from-runs {run_dir} "
-            f"--target {coverage.get('target') or 'core-stateful'} --coverage-mode predicates "
-            f"--max-cases 64 --seed 20260628 --out runs/predicate_next`",
-            "",
-            "Top predicate gaps:",
-            "",
-        ]
-    )
-    for gap in coverage.get("top_predicate_gaps", [])[:10]:
-        lines.append(f"- `{gap}`")
-    if not coverage.get("top_predicate_gaps"):
-        lines.append("- none")
 
     behavior = behavior_guidance_summary(run_dir)
     lines.extend(

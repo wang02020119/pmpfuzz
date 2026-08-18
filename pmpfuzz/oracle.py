@@ -6,6 +6,7 @@ from enum import IntEnum
 from .mmu import AdUpdateMode, PageFaultKind, Sv39Model, TranslationMode, TranslationStage
 from .pmp import Access, PmpDecision, PmpEntry, PmpModel, Privilege
 from .scenario import PmpScenario
+from .stateful import apply_canonical_stateful_transition, canonical_stateful_sequence
 
 
 class TrapCause(IntEnum):
@@ -30,6 +31,13 @@ class ExpectedOutcome:
     stage: str
     reason: str
     physical_address: int | None = None
+
+
+_STALE_FAILURE_BY_MUTATION = {
+    "pte-deny-leaf": "STALE_TLB_PERMISSION",
+    "pmpcfg-deny-target": "STALE_PMP_PERMISSION",
+    "pmpcfg-deny-ptw": "STALE_PTW_PERMISSION",
+}
 
 
 def evaluate_scenario(scenario: PmpScenario) -> ExpectedOutcome:
@@ -109,6 +117,33 @@ def evaluate_scenario(scenario: PmpScenario) -> ExpectedOutcome:
         reason=decision.reason,
         physical_address=scenario.probe.physical_address,
     )
+
+
+def final_stateful_scenario(scenario: PmpScenario) -> PmpScenario:
+    sequence = canonical_stateful_sequence(scenario) or {}
+    mutation = str(sequence.get("mutation") or "none")
+    if not sequence or mutation == "none":
+        return scenario
+    return apply_canonical_stateful_transition(scenario)
+
+
+def normalized_stateful_sequence(scenario: PmpScenario) -> dict[str, object] | None:
+    sequence = canonical_stateful_sequence(scenario)
+    if not sequence:
+        return None
+    normalized = dict(sequence)
+    final_outcome = evaluate_scenario(final_stateful_scenario(scenario))
+    if scenario.probe.access == Access.STORE:
+        expected_final = "store_side_effect" if final_outcome.allowed else "trap_no_side_effect"
+    elif final_outcome.allowed:
+        expected_final = "allowed_after_mutation"
+    else:
+        expected_final = "trap_after_mutation"
+    mutation = str(normalized.get("mutation") or "none")
+    normalized["expected_final"] = expected_final
+    normalized["expected_cause"] = int(final_outcome.trap_cause) if final_outcome.trap_cause is not None else None
+    normalized["stale_failure_class"] = _STALE_FAILURE_BY_MUTATION.get(mutation) if not final_outcome.allowed else None
+    return normalized
 
 
 def contract_trace_for_scenario(scenario: PmpScenario) -> dict[str, object]:
@@ -369,14 +404,14 @@ def _pte_decision_trace(scenario: PmpScenario) -> dict[str, object]:
 def _side_effect_policy(scenario: PmpScenario, outcome: ExpectedOutcome) -> str:
     if scenario.probe.access != Access.STORE:
         return "not_applicable"
-    sequence = scenario.stateful_sequence or {}
+    sequence = normalized_stateful_sequence(scenario) or {}
     if sequence:
         return "allowed" if sequence.get("expected_final") == "store_side_effect" else "forbidden"
     return "allowed" if outcome.allowed else "forbidden"
 
 
 def _stateful_trace(scenario: PmpScenario) -> dict[str, object] | None:
-    sequence = scenario.stateful_sequence
+    sequence = normalized_stateful_sequence(scenario)
     if not sequence:
         return None
     return {

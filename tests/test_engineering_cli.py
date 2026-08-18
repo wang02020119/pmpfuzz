@@ -195,8 +195,8 @@ class EngineeringCliTest(unittest.TestCase):
             report_path = write_report(run_dir)
             report_text = report_path.read_text(encoding="ascii")
 
-        self.assertIn("Combination Coverage Guidance", report_text)
-        self.assertIn("Pairwise combo coverage", report_text)
+        self.assertIn("Execution-Qualified Coverage", report_text)
+        self.assertIn("Manifest Coverage", report_text)
 
     def test_repro_reemits_dut_specific_assembly_backend(self):
         from pmpfuzz.__main__ import _repro_assembly_for_dut
@@ -212,6 +212,29 @@ class EngineeringCliTest(unittest.TestCase):
         self.assertNotIn(".word 0x0000006b", tohost_asm)
         self.assertIn(".word 0x0000006b", xiangshan_asm)
         self.assertIn("xiangshan_finish_good", xiangshan_asm)
+
+
+    def test_schedule_cli_defaults_to_execution_coverage_basis(self):
+        """Schedule CLI defaults to --coverage-basis execution."""
+        from pmpfuzz.__main__ import build_parser
+        parser = build_parser()
+        args = parser.parse_args([
+            "schedule",
+            "--from-runs", "seed",
+            "--out", "next",
+        ])
+        self.assertEqual(args.coverage_basis, "execution")
+        self.assertIsNone(args.dut)
+
+        args = parser.parse_args([
+            "schedule",
+            "--from-runs", "seed",
+            "--out", "next",
+            "--coverage-basis", "manifest",
+            "--dut", "spike",
+        ])
+        self.assertEqual(args.coverage_basis, "manifest")
+        self.assertEqual(args.dut, "spike")
 
 
 if __name__ == "__main__":

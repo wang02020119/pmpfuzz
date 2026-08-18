@@ -1,159 +1,70 @@
-# PMP Fuzz
+# PMPFuzz
 
-Research-grade RISC-V PMP fuzzing tool for PMP, privilege switching, Sv39
-translation, and page-table-walk PMP checks.
+PMPFuzz is a RISC-V PMP/Smepmp fuzzing and evaluation toolkit. This branch
+consolidates the newest project code found on GitHub, the experiment server,
+and the local U74/C910 development trees.
 
-Current scope:
+## Release scope
 
-- PMP/Smepmp-aware scenario model.
-- Sv39 page-table walk and final-physical PMP oracle.
-- Smepmp/MMU profile generator with harness-safe M/S/U regions.
-- Independent PMP oracle.
-- Assembly testcase emitter for Spike and clean Chipyard Rocket/BOOM.
-- Engineering CLI with generation, run, repro, triage, and report commands.
-- Coverage matrix and security verdict reporting for differential DUT evidence.
-- No AFL, libFuzzer, Cascade, GenHuzz, or other external fuzzers in this stage.
+The repository intentionally contains only reusable project material:
 
-Run tests:
+- `pmpfuzz/`: generators, models, emitters, DUT adapters, coverage logic, and
+  campaign runtimes;
+- `scripts/evaluation/`: evaluation tools grouped into analysis, campaigns,
+  baselines, validation, OFF-state, Oracle, and hardware-specific modules;
+- `configs/evaluation/`: versioned experiment contracts;
+- `tests/`: unit, integration, data-contract, and regression tests;
+- `defect/`: standalone project regression material;
+- `docs/`: the design and engineering contracts required by `AGENTS.md`.
+
+Raw experiment data, generated artifacts, paper sources, plotting scripts,
+temporary Git bundles, and run logs are deliberately excluded. Data must be
+stored and released separately from the tool repository.
+
+## Consolidation provenance
+
+The 2026-08-18 consolidation uses these inputs:
+
+- private GitHub baseline: `c45de85d0d3c7ea0dc0067611c6d2b0c2b00cd24`;
+- latest server branch: `8be1d6c02569ee28ff422b71af5d9dbf4b379f48`;
+- local U74 baseline: `6d297d064fd48d008ae5908f5c27aebaa0337095`;
+- later local C910, Oracle-validation, U74 campaign, and serial transport files
+  that had not yet been published.
+
+The release-layout regression test prevents the repository from losing the
+new server/local components or reintroducing paper, plotting, and raw-data
+material.
+
+## Quick start
+
+Run the portable test suite:
 
 ```sh
-python3 -m unittest discover -s tests
+python -m pytest -q
 ```
 
-Check the experiment environment:
+Check the local experiment environment:
 
 ```sh
-python3 -m pmpfuzz env-check
+python -m pmpfuzz env-check
 ```
 
 Generate cases without running a DUT:
 
 ```sh
-python3 -m pmpfuzz gen \
-  --profile legacy-data \
-  --count 16 \
-  --no-smepmp \
-  --out runs/generated_legacy_data
-```
-
-Generate multiple coverage profiles in one run directory:
-
-```sh
-python3 -m pmpfuzz gen \
+python -m pmpfuzz gen \
   --profiles pmp-boundary,sv39-perm-matrix,sv39-ptw-pmp-matrix \
   --count 8 \
   --no-smepmp \
-  --out runs/generated_coverage_matrix
+  --out runs/generated
 ```
 
-Run a campaign:
+Hardware, simulator, compiler, Docker, and external-generator checks may need
+their explicitly configured dependencies. The U74 and C910 drivers require
+the corresponding board or serial environment; Cascade and RISCV-DV adapters
+require their external toolchains.
 
-```sh
-python3 -m pmpfuzz run \
-  --dut rocket-clean \
-  --profile sv39-final-pmp \
-  --count 30 \
-  --seed 20260628 \
-  --no-smepmp \
-  --per-case-timeout 60 \
-  --out runs/rocket_sv39_final
-```
-
-Reproduce a single generated case across Spike/Rocket/BOOM:
-
-```sh
-python3 -m pmpfuzz repro \
-  --case runs/rocket_sv39_final/cases/scenario_0000 \
-  --dut spike,rocket-clean,boom-clean \
-  --no-smepmp \
-  --out runs/repro_scenario_0000
-```
-
-Classify failures and write a report:
-
-```sh
-python3 -m pmpfuzz triage --run-dir runs/rocket_sv39_final
-python3 -m pmpfuzz coverage --run-dir runs/rocket_sv39_final
-python3 -m pmpfuzz report --run-dir runs/rocket_sv39_final
-```
-
-Build the next campaign from semantic coverage gaps:
-
-```sh
-python3 -m pmpfuzz schedule \
-  --from-runs runs/rocket_sv39_final \
-  --target core-stateful \
-  --max-cases 64 \
-  --seed 20260628 \
-  --out runs/semantic_next
-
-python3 -m pmpfuzz gen \
-  --schedule runs/semantic_next/schedule.json \
-  --out runs/semantic_next_generated
-
-python3 -m pmpfuzz run \
-  --dut rocket-clean \
-  --schedule runs/semantic_next/schedule.json \
-  --no-smepmp \
-  --out runs/rocket_semantic_next
-```
-
-Build a campaign from pairwise combination gaps:
-
-```sh
-python3 -m pmpfuzz schedule \
-  --from-runs runs/rocket_sv39_final \
-  --target core-stateful \
-  --coverage-mode pairwise \
-  --max-cases 64 \
-  --seed 20260628 \
-  --out runs/combo_next
-
-python3 -m pmpfuzz gen \
-  --schedule runs/combo_next/schedule.json \
-  --out runs/combo_next_generated
-```
-
-The report includes a `Security Verdict` section. A BOOM PTW/PMP hang with
-Spike/Rocket pass evidence is reported as `confirmed_new_failure_mode`.
-Reports also include `Semantic Coverage Guidance`, which lists the covered
-semantic target, missing bins, and a ready-to-run scheduler command. The
-`Combination Coverage Guidance` section reports pairwise combo coverage and
-the next pairwise scheduler command.
-
-Useful coverage-oriented profiles:
-
-- `pmp-boundary`: TOR/NA4/NAPOT boundary and first-match PMP behavior.
-- `sv39-perm-matrix`: S/U, SUM, MXR, and final PTE permission matrix.
-- `sv39-ptw-pmp-matrix`: PTW PMP deny coverage across walk levels and preload modes.
-- `boom-ptw-pmp-regression`: fixed BOOM PTW/PMP regression and controls.
-
-Stateful permission profiles close the stale-permission and memory-side-effect
-part of the PMP security chain:
-
-- `pmp-side-effect`: denied store must trap without changing the sentinel word;
-  allowed store controls must update it.
-- `tlb-stale-pte`: warm translation, mutate leaf PTE to deny, then probe again.
-- `tlb-stale-pmp`: warm translation, mutate final-target PMP to deny, then probe again.
-- `ptw-stale-pmp`: warm PTW path, mutate PTE-page PMP to deny, then probe again.
-
-Run the chain-closure smoke suite on the server:
-
-```sh
-sh scripts/run_chain_closure_smoke.sh
-```
-
-Run the engineering smoke suite on the server:
-
-```sh
-sh scripts/run_engineering_smoke.sh
-```
-
-Campaign output uses this structure:
-
-- `cases/<case>/case.json` and `<case>.S`
-- `results/<case>/result.json` and simulator log
-- `failures/` copied artifacts for non-pass cases
-- `aggregate.json`, `triage/triage.json`, `reports/report.md`
-
-The legacy `python3 -m pmpfuzz.runner` entry point is kept for compatibility.
+See [`docs/PMPFUZZ_DESIGN.md`](docs/PMPFUZZ_DESIGN.md) for the architecture.
+See [`scripts/README.md`](scripts/README.md) for the complete script layout.
+See [`scripts/evaluation/README.md`](scripts/evaluation/README.md) for the
+evaluation-tool directory map and module entry points.

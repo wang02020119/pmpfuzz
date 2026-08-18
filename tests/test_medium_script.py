@@ -4,7 +4,7 @@ from pathlib import Path
 
 class MediumSmokeScriptTest(unittest.TestCase):
     def test_medium_multidut_script_exists_and_uses_conservative_jobs(self):
-        script = Path("scripts/run_medium_multidut_smoke.sh")
+        script = Path("scripts/smoke/run_medium_multidut_smoke.sh")
         self.assertTrue(script.exists())
         text = script.read_text(encoding="ascii")
 
@@ -17,7 +17,7 @@ class MediumSmokeScriptTest(unittest.TestCase):
         self.assertIn("xiangshan-clean", text)
 
     def test_medium_multidut_script_has_three_hour_outer_budget_and_per_dut_budgets(self):
-        script = Path("scripts/run_medium_multidut_smoke.sh")
+        script = Path("scripts/smoke/run_medium_multidut_smoke.sh")
         text = script.read_text(encoding="ascii")
 
         self.assertIn('TOTAL_BUDGET="${TOTAL_BUDGET:-3h}"', text)
@@ -30,7 +30,7 @@ class MediumSmokeScriptTest(unittest.TestCase):
         self.assertIn('--time-budget "$dut_budget"', text)
 
     def test_smepmp_hardening_script_is_capability_gated_and_skips_cva6_by_default(self):
-        script = Path("scripts/run_smepmp_hardening_smoke.sh")
+        script = Path("scripts/smoke/run_smepmp_hardening_smoke.sh")
         self.assertTrue(script.exists())
         text = script.read_text(encoding="ascii")
 

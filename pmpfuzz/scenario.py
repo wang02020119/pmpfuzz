@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field, replace
 from random import Random
 
@@ -22,6 +23,7 @@ PROBE_VA = 0x40000000
 TARGET_VA = 0x80000000
 M_HARNESS_PMP_INDEX = 3
 SU_HARNESS_PMP_INDEX = 2
+GENERATOR_VARIANTS = frozenset({"full", "syntax"})
 
 
 @dataclass(frozen=True)
@@ -63,13 +65,29 @@ class PmpScenario:
 
 
 class ScenarioGenerator:
-    def __init__(self, seed: int | None = None, include_smepmp: bool = True, profile: str = "legacy") -> None:
+    def __init__(
+        self,
+        seed: int | None = None,
+        include_smepmp: bool = True,
+        profile: str = "legacy",
+        generator_variant: str = "full",
+    ) -> None:
+        if generator_variant not in GENERATOR_VARIANTS:
+            raise ValueError(f"unsupported generator variant: {generator_variant}")
+        self.seed = seed
         self.random = Random(seed)
         self.include_smepmp = include_smepmp
         self.profile = profile
+        self.generator_variant = generator_variant
 
     def generate_batch(self, count: int) -> list[PmpScenario]:
-        return [self._generate_one(index) for index in range(count)]
+        return [self.generate_one(index) for index in range(count)]
+
+    def generate_one(self, index: int) -> PmpScenario:
+        scenario = self._generate_one(index)
+        if self.generator_variant == "syntax":
+            return self._generate_syntax_variant(scenario, index)
+        return scenario
 
     def _generate_one(self, index: int) -> PmpScenario:
         if self.profile == "legacy-data":
@@ -136,6 +154,82 @@ class ScenarioGenerator:
         if self.profile != "legacy":
             raise ValueError(f"unsupported scenario profile: {self.profile}")
         return self._generate_legacy(index, accesses=(Access.LOAD, Access.STORE, Access.FETCH), profile="legacy")
+
+    def _generate_syntax_variant(self, scenario: PmpScenario, index: int) -> PmpScenario:
+        rng = Random(_stable_variant_seed(self.seed, self.profile, index, "syntax"))
+        translation = scenario.translation
+        access = (Access.LOAD, Access.STORE, Access.FETCH)[rng.randrange(3)]
+        size = 4 if access == Access.FETCH else (8 if rng.randrange(4) == 0 else 4)
+        physical_address, offset_name = _syntax_probe_address(rng, size)
+        virtual_address = None
+        if translation == TranslationMode.SV39:
+            virtual_address = (TARGET_VA if rng.randrange(2) == 0 else PROBE_VA) + (physical_address & 0xFFF)
+
+        smepmp_enabled = self.include_smepmp or scenario.profile.startswith("smepmp") or scenario.smepmp_rule is not None
+        if smepmp_enabled:
+            mseccfg = Mseccfg(
+                rlb=bool(rng.randrange(2)),
+                mmwp=bool(rng.randrange(2)),
+                mml=bool(rng.randrange(2)),
+            )
+        else:
+            mseccfg = Mseccfg()
+
+        entries = [
+            entry if _is_syntax_harness_entry(entry) else _syntax_mutate_entry(entry, rng, mseccfg=mseccfg)
+            for entry in scenario.entries
+        ]
+        sv39 = scenario.sv39
+        pte_permissions = dict(scenario.pte_permissions)
+        if sv39 is not None:
+            pte = _syntax_pte(rng)
+            sv39 = replace(
+                sv39,
+                physical_page=_syntax_page_base(rng),
+                walk_addresses=tuple(
+                    PAGE_TABLE_BASE + rng.randrange(0, PAGE_TABLE_SIZE, 0x1000)
+                    for _ in sv39.walk_addresses
+                ),
+                pte=pte,
+            )
+            pte_permissions = self._pte_permission_metadata(pte)
+
+        sequence = _syntax_stateful_sequence(scenario.stateful_sequence, rng)
+        return replace(
+            scenario,
+            entries=entries,
+            privilege=(Privilege.U, Privilege.S, Privilege.M)[rng.randrange(3)],
+            probe=AccessProbe(
+                access=access,
+                physical_address=physical_address,
+                virtual_address=virtual_address,
+                size=size,
+                offset_name=offset_name,
+            ),
+            mprv=bool(rng.randrange(2)),
+            mpp=(Privilege.U, Privilege.S, Privilege.M)[rng.randrange(3)],
+            mseccfg=mseccfg,
+            sv39=sv39,
+            sum_enabled=bool(rng.randrange(2)),
+            mxr=bool(rng.randrange(2)),
+            sfence_vma=bool(rng.randrange(2)),
+            coverage_tags=(*scenario.coverage_tags, "syntax-variant"),
+            ptw_fault_level=(
+                (None, "L2", "L1", "L0")[rng.randrange(4)]
+                if translation == TranslationMode.SV39
+                else None
+            ),
+            preload_mode=(
+                (None, "cold", "root-target", "denied-l1", "all")[rng.randrange(5)]
+                if translation == TranslationMode.SV39
+                else None
+            ),
+            pmp_match_mode=("syntax-random", "unmatched", "final-pmp", "ptw-pmp")[rng.randrange(4)],
+            pte_permissions=pte_permissions,
+            security_focus="syntax-ablation",
+            stateful_sequence=sequence,
+            ad_update_mode=(AdUpdateMode.SVADE, AdUpdateMode.HARDWARE)[rng.randrange(2)],
+        )
 
     def _generate_legacy(self, index: int, *, accesses: tuple[Access, ...], profile: str) -> PmpScenario:
         base = TARGET_BASE + (index % 8) * 0x2000
@@ -208,12 +302,19 @@ class ScenarioGenerator:
             ("first-match-overlap", "inside", False),
             ("first-match-overlap", "inside", True),
         )
-        mode, offset_kind, allow = variants[index % len(variants)]
+        variant_index = index % len(variants)
+        mode, offset_kind, allow = variants[variant_index]
         access = [Access.LOAD, Access.STORE, Access.FETCH][(index // len(variants)) % 3]
         privilege = [Privilege.U, Privilege.S, Privilege.M][(index // (len(variants) * 3)) % 3]
         base = TARGET_BASE + ((index // (len(variants) * 3 * 3 * 2)) % 2) * 0x2000
         size = 0x1000
         locked = bool((index // (len(variants) * 3 * 3)) % 2)
+        mprv, mpp = self._boundary_effective_privilege(
+            privilege=privilege,
+            access=access,
+            variant_index=variant_index,
+        )
+        effective_privilege = mpp if mprv and privilege == Privilege.M and access in {Access.LOAD, Access.STORE} else privilege
 
         if mode == "tor":
             offset_name, address = ("inside", base + 0x100) if offset_kind == "inside" else ("upper_bound", base + size)
@@ -302,8 +403,8 @@ class ScenarioGenerator:
             entries=entries,
             privilege=privilege,
             probe=AccessProbe(access=access, physical_address=address, size=4, offset_name=offset_name),
-            mprv=False,
-            mpp=Privilege.M,
+            mprv=mprv,
+            mpp=mpp,
             mseccfg=Mseccfg(),
             profile="pmp-boundary",
             coverage_tags=(
@@ -315,10 +416,26 @@ class ScenarioGenerator:
                 "locked" if locked else "unlocked",
                 "allow" if allow else "deny",
                 offset_name,
+                "mprv" if mprv else "nomprv",
+                f"mpp-{mpp.value.lower()}",
+                f"effective-{effective_privilege.value.lower()}",
             ),
             pmp_match_mode=mode,
             security_focus="pmp-boundary",
         )
+
+    def _boundary_effective_privilege(
+        self,
+        *,
+        privilege: Privilege,
+        access: Access,
+        variant_index: int,
+    ) -> tuple[bool, Privilege]:
+        if privilege != Privilege.M or access not in {Access.LOAD, Access.STORE}:
+            return False, Privilege.M
+        if variant_index % 2 == 1:
+            return False, Privilege.M
+        return True, Privilege.S if (variant_index // 2) % 2 == 0 else Privilege.U
 
     def _generate_smepmp_table(self, index: int) -> PmpScenario:
         encoding = index % 16
@@ -751,7 +868,8 @@ class ScenarioGenerator:
             security_focus="memory-side-effect",
             stateful_sequence=self._stateful_sequence(
                 kind="pmp-side-effect",
-                warmup=False,
+                warmup=True,
+                warmup_access=Access.LOAD.value,
                 mutation="none",
                 fence="none",
                 expected_final=expected_final,
@@ -1284,6 +1402,7 @@ class ScenarioGenerator:
         *,
         kind: str,
         warmup: bool,
+        warmup_access: str | None = None,
         mutation: str,
         fence: str,
         expected_final: str,
@@ -1293,6 +1412,7 @@ class ScenarioGenerator:
         return {
             "kind": kind,
             "warmup": warmup,
+            "warmup_access": warmup_access,
             "mutation": mutation,
             "fence": fence,
             "final_probe": "repeat",
@@ -1403,3 +1523,125 @@ class ScenarioGenerator:
             ("upper_bound", base + size),
         ]
         return probes[index % len(probes)]
+
+
+def _stable_variant_seed(seed: int | None, profile: str, index: int, variant: str) -> int:
+    digest = hashlib.sha256()
+    for part in (seed if seed is not None else "none", profile, index, variant):
+        digest.update(str(part).encode("ascii"))
+        digest.update(b"\0")
+    return int.from_bytes(digest.digest()[:8], byteorder="big", signed=False)
+
+
+def _is_syntax_harness_entry(entry: PmpEntry) -> bool:
+    harness_pmpaddrs = {
+        PmpEntry.encode_napot(base=0x80000000, size=0x4000),
+        PmpEntry.encode_napot(base=M_TEXT_BASE, size=M_TEXT_SIZE),
+        PmpEntry.encode_napot(base=M_DATA_BASE, size=M_DATA_SIZE),
+        PmpEntry.encode_napot(base=SU_CODE_BASE, size=SU_CODE_SIZE),
+    }
+    return entry.pmpaddr in harness_pmpaddrs
+
+
+def _syntax_probe_address(rng: Random, size: int) -> tuple[int, str]:
+    bases = (
+        TARGET_BASE,
+        TARGET_BASE + TARGET_SIZE,
+        PAGE_TABLE_BASE,
+        M_DATA_BASE,
+        SU_CODE_BASE,
+    )
+    base = bases[rng.randrange(len(bases))]
+    step = 8 if size == 8 else 4
+    offsets = (
+        0,
+        step,
+        0x40,
+        0x100,
+        0x7F8 if step == 8 else 0x7FC,
+        0xFF8 if step == 8 else 0xFFC,
+    )
+    offset = offsets[rng.randrange(len(offsets))]
+    labels = {
+        0: "lower_bound",
+        step: "near_lower_bound",
+        0x40: "inside",
+        0x100: "inside",
+        0x7F8 if step == 8 else 0x7FC: "near_upper_bound",
+        0xFF8 if step == 8 else 0xFFC: "last_aligned",
+    }
+    return base + offset, labels.get(offset, "syntax")
+
+
+def _syntax_page_base(rng: Random) -> int:
+    pages = (
+        TARGET_BASE,
+        TARGET_BASE + TARGET_SIZE,
+        M_DATA_BASE,
+        SU_CODE_BASE,
+    )
+    return pages[rng.randrange(len(pages))]
+
+
+def _syntax_mutate_entry(entry: PmpEntry, rng: Random, *, mseccfg: Mseccfg) -> PmpEntry:
+    mode = (AddressMode.OFF, AddressMode.TOR, AddressMode.NA4, AddressMode.NAPOT)[rng.randrange(4)]
+    base = _syntax_page_base(rng)
+    if mode == AddressMode.OFF:
+        pmpaddr = 0
+    elif mode == AddressMode.TOR:
+        pmpaddr = (base + (0x1000 if rng.randrange(2) == 0 else 0x100)) >> 2
+    elif mode == AddressMode.NA4:
+        pmpaddr = base >> 2
+    else:
+        size = (0x8, 0x10, 0x100, 0x1000)[rng.randrange(4)]
+        aligned_base = base & ~(size - 1)
+        pmpaddr = PmpEntry.encode_napot(base=aligned_base, size=size)
+    read = bool(rng.randrange(2))
+    write = bool(rng.randrange(2))
+    execute = bool(rng.randrange(2))
+    if write and not read and not mseccfg.mml:
+        read = True
+    return PmpEntry(
+        index=entry.index,
+        address_mode=mode,
+        pmpaddr=pmpaddr,
+        read=read,
+        write=write,
+        execute=execute,
+        locked=bool(rng.randrange(2)),
+    )
+
+
+def _syntax_pte(rng: Random) -> PageTableEntry:
+    rwx = ("---", "r--", "rw-", "r-x", "rwx", "--x")[rng.randrange(6)]
+    read = "r" in rwx
+    write = "w" in rwx
+    execute = "x" in rwx
+    if write and not read:
+        read = True
+    return PageTableEntry(
+        read=read,
+        write=write,
+        execute=execute,
+        user=bool(rng.randrange(2)),
+        accessed=bool(rng.randrange(2)),
+        dirty=bool(rng.randrange(2)) if write else False,
+        valid=bool(rng.randrange(4)),
+        global_mapping=bool(rng.randrange(2)),
+    )
+
+
+def _syntax_stateful_sequence(sequence: dict[str, object] | None, rng: Random) -> dict[str, object] | None:
+    if sequence is None:
+        return None
+    out = dict(sequence)
+    out["warmup"] = False
+    out["fence"] = "none"
+    out["mutation"] = ("none", "pmpcfg-deny-target", "pmpcfg-deny-ptw", "pte-deny-leaf")[rng.randrange(4)]
+    out["expected_final"] = (
+        "allow_after_mutation",
+        "trap_after_mutation",
+        "store_side_effect",
+        "trap_no_side_effect",
+    )[rng.randrange(4)]
+    return out

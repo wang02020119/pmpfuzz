@@ -5,10 +5,16 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .oracle import contract_trace_for_scenario, evaluate_scenario
+from .oracle import contract_trace_for_scenario, evaluate_scenario, final_stateful_scenario, normalized_stateful_sequence
 from .pmp import Access, PmpEntry, PmpModel
 from .scenario import M_DATA_BASE, M_DATA_SIZE, M_TEXT_BASE, M_TEXT_SIZE, SU_CODE_BASE, SU_CODE_SIZE, PmpScenario
-from .semantic_coverage import combo_bins_for_case, contract_predicates_for_case, semantic_bins_for_case
+from .scenario_codec import scenario_hash, scenario_to_spec
+from .semantic_coverage import (
+    combo_bins_for_case,
+    contract_predicates_for_case,
+    derived_pmp_match_mode_for_case,
+    semantic_bins_for_case,
+)
 from .capabilities import oracle_applicability_for_case, required_capabilities_for_case
 
 
@@ -37,8 +43,21 @@ def pmp_entry_to_dict(entry: PmpEntry) -> dict[str, Any]:
     }
 
 
-def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> dict[str, Any]:
+def scenario_to_case_dict(
+    scenario: PmpScenario,
+    *,
+    seed: int,
+    index: int,
+    generator_variant: str = "full",
+    generation_seed: int | None = None,
+    scenario_index: int | None = None,
+    mutation_operator: str = "root",
+    continuous_sequence: int | None = None,
+) -> dict[str, Any]:
+    spec = scenario_to_spec(scenario)
+    spec_hash = scenario_hash(spec)
     outcome = evaluate_scenario(scenario)
+    normalized_sequence = normalized_stateful_sequence(scenario)
     pmp_decision = PmpModel(scenario.entries, scenario.mseccfg).check(
         privilege=scenario.privilege,
         access=scenario.probe.access,
@@ -52,20 +71,37 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
     expected_stage = outcome.stage
     expected_reason = outcome.reason
     expected_pa = f"0x{outcome.physical_address:x}" if outcome.physical_address is not None else None
-    if scenario.stateful_sequence is not None:
-        final = scenario.stateful_sequence.get("expected_final")
-        final_cause = scenario.stateful_sequence.get("expected_cause")
-        expected_allowed = final == "store_side_effect"
-        expected_cause = int(final_cause) if final_cause is not None else None
+    if normalized_sequence is not None:
+        final_scenario = final_stateful_scenario(scenario)
+        final_outcome = evaluate_scenario(final_scenario)
+        expected_allowed = final_outcome.allowed
+        expected_cause = int(final_outcome.trap_cause) if final_outcome.trap_cause is not None else None
         expected_stage = "stateful_final"
-        expected_reason = f"stateful final outcome: {final}"
-        expected_pa = f"0x{scenario.probe.physical_address:x}"
+        expected_reason = f"stateful final outcome: {normalized_sequence.get('expected_final')}"
+        expected_pa = (
+            f"0x{final_outcome.physical_address:x}" if final_outcome.physical_address is not None else None
+        )
     pmp_locked, pmp_allow = _pmp_metadata_for_scenario(scenario)
+    pte_permissions = scenario.pte_permissions
+    if scenario.sv39 is not None:
+        pte = scenario.sv39.pte
+        pte_permissions = {
+            "rwx": ("r" if pte.read else "-") + ("w" if pte.write else "-") + ("x" if pte.execute else "-"),
+            "user": pte.user,
+            "accessed": pte.accessed,
+            "dirty": pte.dirty,
+            "valid": pte.valid,
+        }
     data: dict[str, Any] = {
-        "schema_version": STATEFUL_SCHEMA_VERSION if scenario.stateful_sequence else SCHEMA_VERSION,
+        "schema_version": STATEFUL_SCHEMA_VERSION if normalized_sequence else SCHEMA_VERSION,
         "name": scenario.name,
         "seed": seed,
         "index": index,
+        "generator_variant": str(generator_variant),
+        "generation_seed": int(seed if generation_seed is None else generation_seed),
+        "scenario_index": int(index if scenario_index is None else scenario_index),
+        "continuous_sequence": continuous_sequence,
+        "mutation_operator": str(mutation_operator),
         "profile": scenario.profile,
         "privilege": scenario.privilege.value,
         "access": scenario.probe.access.value,
@@ -85,17 +121,19 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
         "coverage_tags": list(scenario.coverage_tags),
         "ptw_fault_level": scenario.ptw_fault_level,
         "preload_mode": scenario.preload_mode,
-        "pmp_match_mode": scenario.pmp_match_mode,
+        "pmp_match_mode": None,
         "pmp_match_result": "matched" if pmp_decision.match_index is not None else "unmatched",
         "pmp_locked": pmp_locked,
         "pmp_allow": pmp_allow,
         "effective_privilege": pmp_decision.effective_privilege.value,
         "expected_allowed": expected_allowed,
-        "pte_permissions": scenario.pte_permissions,
+        "pte_permissions": pte_permissions,
         "security_focus": scenario.security_focus,
         "smepmp_rule": scenario.smepmp_rule,
         "required_capabilities": [],
         "oracle_applicability": "valid",
+        "scenario_spec": spec,
+        "scenario_hash": spec_hash,
         "expected": {
             "allowed": expected_allowed,
             "trap_cause": expected_cause,
@@ -105,6 +143,7 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
         },
         "contract_trace": contract_trace_for_scenario(scenario),
     }
+    data["pmp_match_mode"] = derived_pmp_match_mode_for_case(data)
     if scenario.sv39 is not None:
         data["sv39"] = {
             "virtual_page": f"0x{scenario.sv39.virtual_page:x}",
@@ -113,8 +152,8 @@ def scenario_to_case_dict(scenario: PmpScenario, *, seed: int, index: int) -> di
             "walk_addresses": [f"0x{address:x}" for address in scenario.sv39.walk_addresses],
             "pte": asdict(scenario.sv39.pte),
         }
-    if scenario.stateful_sequence is not None:
-        data["stateful_sequence"] = scenario.stateful_sequence
+    if normalized_sequence is not None:
+        data["stateful_sequence"] = normalized_sequence
     data["required_capabilities"] = required_capabilities_for_case(data)
     data["oracle_applicability"] = oracle_applicability_for_case(data)
     data["semantic_bins"] = semantic_bins_for_case(data)
@@ -186,10 +225,16 @@ def result_to_dict(
     observed_stage: str | None = None,
     observed_ptw_level: str | None = None,
     observed_fault_address: int | None = None,
+    observed_probe_vaddr: int | None = None,
     observation_valid: bool = False,
     stage_verified: bool = False,
     failure_class: str | None = None,
     oracle_applicability: str | None = None,
+    hpm_manifest: dict[str, Any] | None = None,
+    hpm_snapshot_before: dict[str, Any] | None = None,
+    hpm_snapshot_after: dict[str, Any] | None = None,
+    hpm_coverage: dict[str, Any] | None = None,
+    bapc_coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -197,6 +242,12 @@ def result_to_dict(
         "result_id": f"{case.get('seed', 'unknown')}:{case.get('index', 'unknown')}:{case['name']}:{dut}",
         "name": case["name"],
         "profile": case["profile"],
+        "generator_variant": case.get("generator_variant", "full"),
+        "generation_seed": case.get("generation_seed", case.get("seed")),
+        "scenario_index": case.get("scenario_index", case.get("index")),
+        "continuous_sequence": case.get("continuous_sequence"),
+        "mutation_operator": case.get("mutation_operator", "root"),
+        "scenario_hash": case.get("scenario_hash"),
         "dut": dut,
         "status": status,
         "failure_class": failure_class,
@@ -219,10 +270,18 @@ def result_to_dict(
         "observed_fault_address": (
             f"0x{observed_fault_address:x}" if observed_fault_address is not None else None
         ),
+        "observed_probe_vaddr": (
+            f"0x{observed_probe_vaddr:x}" if observed_probe_vaddr is not None else None
+        ),
         "observation_valid": observation_valid,
         "stage_verified": stage_verified,
         "log": str(log),
         "reason": reason,
+        "hpm_manifest": hpm_manifest,
+        "hpm_snapshot_before": hpm_snapshot_before,
+        "hpm_snapshot_after": hpm_snapshot_after,
+        "hpm_coverage": hpm_coverage,
+        "bapc_coverage": bapc_coverage,
     }
 
 

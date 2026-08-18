@@ -17,15 +17,17 @@ from .capabilities import (
     oracle_applicability_for_case,
     oracle_applicability_for_result,
 )
-from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, make_dut
+from .bapc import normalize_bapc_core_version, summarize_bapc_for_pmpfuzz_case
+from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DutRunResult, make_dut
 from .emitter import AssemblyEmitter
+from .hpm import parse_hpm_uart_snapshots, summarize_hpm_coverage
 from .judgment import judge_observation
 from .scenario import ScenarioGenerator
 from .schema import scenario_to_case_dict, result_to_dict, write_aggregate, write_json
 from .semantic_coverage import scenarios_from_schedule
 
 
-DEFAULT_SPIKE = "/home/dubhe/wjs/boom_host_deploy/opt-riscv/bin/spike"
+DEFAULT_SPIKE = os.environ.get("PMPFUZZ_SPIKE", shutil.which("spike") or "spike")
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,12 @@ class RunnerConfig:
     indices: tuple[int, ...] | None = None
     schedule: Path | None = None
     whitebox_artifacts: bool = False
+    record_timeline: bool = False
+    campaign_id: str | None = None
+    variant: str | None = None
+    generator_variant: str = "full"
+    hpm_manifest: dict[str, Any] | None = None
+    bapc_core_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +84,68 @@ class CampaignResult:
     reason: str | None = None
 
 
+def _bapc_actual_result(dut_result: DutRunResult) -> dict[str, object]:
+    observed_mepc_tag = getattr(dut_result, "observed_mepc_tag", None)
+    observed_mtval_fingerprint = getattr(dut_result, "observed_mtval_fingerprint", None)
+    if dut_result.observation is not None:
+        if observed_mepc_tag is None:
+            observed_mepc_tag = dut_result.observation.mepc_tag
+        if observed_mtval_fingerprint is None:
+            observed_mtval_fingerprint = dut_result.observation.mtval_fingerprint
+    observed_event = None
+    observation_valid = False
+    if dut_result.observation is not None:
+        observed_event = dut_result.observation.kind.name.lower()
+        observation_valid = True
+    elif dut_result.dut != "xiangshan-clean" and dut_result.status == "pass":
+        observed_event = "completion"
+        observation_valid = True
+    elif dut_result.dut != "xiangshan-clean" and dut_result.status == "fail":
+        observed_event = "trap"
+        observation_valid = True
+    return {
+        "status": dut_result.status,
+        "observation_valid": observation_valid,
+        "observed_event": observed_event,
+        "observed_mcause": dut_result.observed_mcause,
+        "observed_stage": dut_result.observed_stage,
+        "observed_fault_address": dut_result.observed_fault_address,
+        "observed_mepc_tag": observed_mepc_tag,
+        "observed_mtval_fingerprint": observed_mtval_fingerprint,
+    }
+
+
+def _ineligible_bapc_coverage(
+    *,
+    case: dict[str, Any],
+    dut: str,
+    status: str,
+    elapsed_seconds: float,
+    returncode: int | None,
+    failure_class: str | None,
+    reason: str | None,
+    log_text: str,
+    supports_smepmp: bool,
+    bapc_core_version: str,
+) -> dict[str, Any]:
+    return summarize_bapc_for_pmpfuzz_case(
+        case,
+        _bapc_actual_result(
+            DutRunResult(
+                dut=dut,
+                status=status,
+                elapsed_seconds=elapsed_seconds,
+                returncode=returncode,
+                failure_class=failure_class,
+                reason=reason,
+            )
+        ),
+        log_text=log_text,
+        supports_smepmp=supports_smepmp,
+        bapc_core_version=bapc_core_version,
+    )
+
+
 def parse_time_budget(value: str) -> int:
     unit = value[-1]
     amount = int(value[:-1]) if unit in {"h", "m", "s"} else int(value)
@@ -101,6 +171,7 @@ def write_summary(*, config: RunnerConfig, results: list[CampaignResult]) -> Non
     summary = {
         "profile": config.profile,
         "profiles": list(config.profiles or (config.profile,)),
+        "generator_variant": config.generator_variant,
         "dut": config.dut,
         "seed": config.seed,
         "count_requested": config.count,
@@ -141,10 +212,20 @@ def _run_indexed_work_with_budget(
     start_time: float,
     time_budget_seconds: int,
     time_fn=time.monotonic,
+    on_complete=None,
 ):
+    """Execute *indexed_work* with a thread pool until the time budget is exhausted.
+
+    *on_complete*, if provided, is called in the main thread immediately after a
+    future resolves and result is appended.  Signature::
+
+        on_complete(index, scenario, CampaignResult, completion_seq,
+                    campaign_elapsed_seconds)
+    """
     results = []
     work_iter = iter(indexed_work)
     pending = {}
+    completion_seq = 0
 
     def submit_next(executor: ThreadPoolExecutor) -> bool:
         if time_fn() - start_time >= time_budget_seconds:
@@ -163,8 +244,13 @@ def _run_indexed_work_with_budget(
         while pending:
             done, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in done:
-                pending.pop(future)
-                results.append(future.result())
+                index, scenario = pending.pop(future)
+                result = future.result()
+                results.append(result)
+                completion_seq += 1
+                if on_complete is not None:
+                    campaign_elapsed = time_fn() - start_time
+                    on_complete(index, scenario, result, completion_seq, campaign_elapsed)
             if time_fn() - start_time >= time_budget_seconds:
                 for future in pending:
                     future.cancel()
@@ -175,7 +261,13 @@ def _run_indexed_work_with_budget(
     return results
 
 
-def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
+def run_campaign(config: RunnerConfig, *, on_complete=None) -> list[CampaignResult]:
+    if not str(config.bapc_core_version or "").strip():
+        raise ValueError("run_campaign requires explicit bapc_core_version")
+    config = replace(
+        config,
+        bapc_core_version=normalize_bapc_core_version(config.bapc_core_version),
+    )
     out_dir = config.out.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     cases_dir = out_dir / "cases"
@@ -198,11 +290,30 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
             "isa": config.isa,
             "chipyard_dir": str(config.chipyard_dir),
             "include_smepmp": config.include_smepmp,
+            "generator_variant": config.generator_variant,
             "schedule": str(config.schedule) if config.schedule else None,
             "whitebox_artifacts": config.whitebox_artifacts,
+            "bapc_core_version": config.bapc_core_version,
         },
     )
-    dut_capability = capability_for_dut(config.dut, path=config.dut_bin) if config.dut_bin else capability_for_dut(config.dut)
+    # Create capability with actual binary path and ISA
+    if config.dut == "spike":
+        dut_capability = capability_for_dut(
+            config.dut,
+            path=config.spike,
+            isa=config.isa,
+        )
+    elif config.dut_bin:
+        dut_capability = capability_for_dut(
+            config.dut,
+            path=config.dut_bin,
+            isa=config.isa,
+        )
+    else:
+        dut_capability = capability_for_dut(
+            config.dut,
+            isa=config.isa,
+        )
     write_json(
         out_dir / "dut_capabilities.json",
         {
@@ -222,13 +333,23 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
     )
     emitter_backend = _emitter_backend_for_dut(config.dut)
     indexed_scenarios = _scenario_plan(config)
+    schedule_metadata = _schedule_metadata_by_name(config.schedule)
     root = Path(__file__).resolve().parents[1]
     compile_script = root / "scripts" / "compile_one.sh"
     start = time.monotonic()
 
     def run_one(index: int, scenario) -> CampaignResult:
         case_start = time.monotonic()
-        case = scenario_to_case_dict(scenario, seed=config.seed, index=index)
+        case = scenario_to_case_dict(
+            scenario,
+            seed=config.seed,
+            index=index,
+            generator_variant=config.generator_variant,
+            generation_seed=config.seed,
+            scenario_index=index,
+            mutation_operator="root",
+        )
+        case.update(schedule_metadata.get(scenario.name, {}))
         expected_allowed = bool(case["expected"]["allowed"])
         expected_cause = case["expected"]["trap_cause"]
         case_applicability = oracle_applicability_for_case(case, dut_capability)
@@ -240,7 +361,10 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
         elf = case_dir / f"{scenario.name}.elf"
         log = result_dir / f"{scenario.name}.log"
         case_path = case_dir / "case.json"
-        asm.write_text(emitter.emit(scenario, backend=emitter_backend), encoding="ascii")
+        asm.write_text(
+            emitter.emit(scenario, backend=emitter_backend, hpm_manifest=config.hpm_manifest),
+            encoding="ascii",
+        )
         write_json(case_path, case)
         if case_applicability == "unsupported":
             result = CampaignResult(
@@ -252,6 +376,18 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                 elapsed_seconds=time.monotonic() - case_start,
                 failure_class="setup_unsupported",
                 reason="case requires capabilities not implemented by this DUT",
+            )
+            bapc_coverage = _ineligible_bapc_coverage(
+                case=case,
+                dut=config.dut,
+                status=result.status,
+                elapsed_seconds=result.elapsed_seconds,
+                returncode=None,
+                failure_class=result.failure_class,
+                reason=result.reason,
+                log_text="",
+                supports_smepmp=bool(dut_capability["supported_capabilities"].get("smepmp", False)),
+                bapc_core_version=config.bapc_core_version,
             )
             write_json(
                 result_dir / "result.json",
@@ -265,6 +401,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                     reason=result.reason,
                     failure_class=result.failure_class,
                     oracle_applicability=case_applicability,
+                    bapc_coverage=bapc_coverage,
                 ),
             )
             return result
@@ -279,6 +416,18 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                 failure_class="setup_unsupported",
                 reason="locked Smepmp RW=01 setup requires mseccfg.RLB; this Spike hardwires RLB to zero",
             )
+            bapc_coverage = _ineligible_bapc_coverage(
+                case=case,
+                dut=config.dut,
+                status=result.status,
+                elapsed_seconds=result.elapsed_seconds,
+                returncode=None,
+                failure_class=result.failure_class,
+                reason=result.reason,
+                log_text="",
+                supports_smepmp=bool(dut_capability["supported_capabilities"].get("smepmp", False)),
+                bapc_core_version=config.bapc_core_version,
+            )
             write_json(
                 result_dir / "result.json",
                 result_to_dict(
@@ -291,6 +440,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                     reason=result.reason,
                     failure_class=result.failure_class,
                     oracle_applicability="unsupported",
+                    bapc_coverage=bapc_coverage,
                 ),
             )
             return result
@@ -318,6 +468,18 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                 log=str(log),
                 reason="compile failed",
             )
+            bapc_coverage = _ineligible_bapc_coverage(
+                case=case,
+                dut=config.dut,
+                status=result.status,
+                elapsed_seconds=result.elapsed_seconds,
+                returncode=result.returncode,
+                failure_class=result.failure_class,
+                reason=result.reason,
+                log_text=compile_run.stdout or "",
+                supports_smepmp=bool(dut_capability["supported_capabilities"].get("smepmp", False)),
+                bapc_core_version=config.bapc_core_version,
+            )
             write_json(
                 result_dir / "result.json",
                 result_to_dict(
@@ -330,11 +492,26 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                     reason=result.reason,
                     failure_class=result.failure_class,
                     oracle_applicability=case_applicability,
+                    bapc_coverage=bapc_coverage,
                 ),
             )
             return result
 
         dut_result = dut_runner.run(elf, timeout_seconds=config.per_case_timeout_seconds, log_path=log)
+        log_text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+        hpm_snapshot_before = None
+        hpm_snapshot_after = None
+        hpm_coverage = None
+        bapc_coverage = None
+        if config.hpm_manifest is not None:
+            hpm_snapshots = parse_hpm_uart_snapshots(log_text)
+            hpm_snapshot_before = hpm_snapshots.get("before")
+            hpm_snapshot_after = hpm_snapshots.get("after")
+            hpm_coverage = summarize_hpm_coverage(
+                manifest=config.hpm_manifest,
+                before=hpm_snapshot_before,
+                after=hpm_snapshot_after,
+            )
         status = dut_result.status
         failure_class = dut_result.failure_class
         reason = dut_result.reason
@@ -362,6 +539,13 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
             dut_capability,
             status=status,
             failure_class=failure_class,
+        )
+        bapc_coverage = summarize_bapc_for_pmpfuzz_case(
+            case,
+            _bapc_actual_result(dut_result),
+            log_text=log_text,
+            supports_smepmp=bool(dut_capability["supported_capabilities"].get("smepmp", False)),
+            bapc_core_version=config.bapc_core_version,
         )
         if status != "pass":
             _copy_failure_artifacts(failures, case_dir, result_dir)
@@ -415,6 +599,11 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
                 stage_verified=result.stage_verified,
                 failure_class=result.failure_class,
                 oracle_applicability=result_applicability,
+                hpm_manifest=config.hpm_manifest,
+                hpm_snapshot_before=hpm_snapshot_before,
+                hpm_snapshot_after=hpm_snapshot_after,
+                hpm_coverage=hpm_coverage,
+                bapc_coverage=bapc_coverage,
             ),
         )
         return result
@@ -427,6 +616,7 @@ def run_campaign(config: RunnerConfig) -> list[CampaignResult]:
         max_workers=effective_jobs,
         start_time=start,
         time_budget_seconds=config.time_budget_seconds,
+        on_complete=on_complete,
     )
 
     results.sort(key=lambda result: result.name)
@@ -443,7 +633,12 @@ def _scenario_plan(config: RunnerConfig):
     selected = set(config.indices or ())
     indexed_scenarios = []
     for profile in profiles:
-        generator = ScenarioGenerator(seed=config.seed, include_smepmp=config.include_smepmp, profile=profile)
+        generator = ScenarioGenerator(
+            seed=config.seed,
+            include_smepmp=config.include_smepmp,
+            profile=profile,
+            generator_variant=config.generator_variant,
+        )
         scenarios = generator.generate_batch(config.count)
         for index, scenario in enumerate(scenarios):
             if selected and index not in selected:
@@ -452,6 +647,40 @@ def _scenario_plan(config: RunnerConfig):
                 scenario = replace(scenario, name=f"{profile}__{scenario.name}")
             indexed_scenarios.append((index, scenario))
     return indexed_scenarios
+
+
+def _schedule_metadata_by_name(schedule_path: Path | None) -> dict[str, dict[str, Any]]:
+    if schedule_path is None:
+        return {}
+    try:
+        schedule = json.loads(Path(schedule_path).read_text(encoding="ascii"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    entries = schedule.get("entries") or []
+    if not isinstance(entries, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    default_seed = int(schedule.get("seed") or 0)
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "")
+        if not name:
+            continue
+        metadata = {
+            "generator_variant": str(entry.get("generator_variant") or "full"),
+            "generation_seed": int(entry.get("generation_seed") or entry.get("seed") or default_seed),
+            "scenario_index": int(
+                entry.get("scenario_index")
+                if entry.get("scenario_index") is not None
+                else entry.get("index", 0)
+            ),
+            "mutation_operator": str(entry.get("mutation_operator") or "root"),
+        }
+        if entry.get("continuous_sequence") is not None:
+            metadata["continuous_sequence"] = int(entry["continuous_sequence"])
+        out[name] = metadata
+    return out
 
 
 def _emitter_backend_for_dut(dut: str) -> str:
@@ -511,8 +740,10 @@ def main() -> int:
     parser.add_argument("--dut-bin", type=Path, default=None)
     parser.add_argument("--simlen", type=int, default=100000)
     parser.add_argument("--per-case-timeout", type=int, default=10)
+    parser.add_argument("--generator-variant", choices=["full", "syntax"], default="full")
     parser.add_argument("--indices", default=None)
     parser.add_argument("--no-smepmp", action="store_true")
+    parser.add_argument("--bapc-core-version", choices=["v2", "v3", "v4"], default=None)
     args = parser.parse_args()
 
     config = RunnerConfig(
@@ -530,8 +761,10 @@ def main() -> int:
         dut_bin=args.dut_bin,
         simlen=args.simlen,
         per_case_timeout_seconds=args.per_case_timeout,
+        generator_variant=args.generator_variant,
         include_smepmp=not args.no_smepmp,
         indices=_parse_indices(args.indices),
+        bapc_core_version=args.bapc_core_version,
     )
     results = run_campaign(config)
     failed = [result for result in results if result.status not in {"pass", "setup_unsupported"}]

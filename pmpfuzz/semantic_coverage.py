@@ -1,11 +1,29 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import asdict, dataclass, replace
 from itertools import combinations
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable
 
+from .capabilities import (
+    capability_coverage_projection,
+    oracle_applicability_for_case,
+)
+from .c910_nonpmp import (
+    C910_NONPMP_PROFILES,
+    C910_NONPMP_TARGET,
+    bootstrap_cases,
+)
+from .coverage_qualification import (
+    collect_execution_evidence,
+    load_capability_map,
+    load_case_map,
+    load_results,
+    qualify_all_results,
+    qualify_result_for_coverage,
+)
 from .oracle import contract_trace_for_scenario, evaluate_scenario
 from .pmp import Access, PmpEntry, PmpModel
 from .scenario import PmpScenario, ScenarioGenerator
@@ -89,6 +107,108 @@ PROFILE_TARGET_COUNTS = {
 COVERAGE_MODES = ("semantic", "pairwise", "security-triples", "predicates")
 
 
+def derived_pmp_match_mode_for_case(case: dict[str, Any]) -> str | None:
+    trace = case.get("contract_trace") or {}
+    checks = list(trace.get("pmp_checks") or [])
+    overlap_mode = _overlap_match_mode_for_case(case, checks)
+    if overlap_mode is not None:
+        return overlap_mode
+    for check in checks:
+        if str(check.get("reason") or "") == "lowest-numbered matching entry only partially covers access":
+            return "first-match-overlap"
+    for preferred_stage in ("final", "bare", "ptw", "pte_ad_update"):
+        for check in checks:
+            if str(check.get("stage") or "") != preferred_stage:
+                continue
+            mode = str(check.get("match_mode") or "")
+            if not mode:
+                continue
+            return "unmatched" if mode == "no-match" else mode
+    if checks:
+        mode = str(checks[0].get("match_mode") or "")
+        if mode:
+            return "unmatched" if mode == "no-match" else mode
+    raw = str(case.get("pmp_match_mode") or "")
+    return raw or None
+
+
+def _overlap_match_mode_for_case(case: dict[str, Any], checks: list[dict[str, Any]]) -> str | None:
+    entries = sorted(
+        [entry for entry in case.get("pmp_entries") or [] if isinstance(entry, dict)],
+        key=lambda entry: int(entry.get("index") or 0),
+    )
+    if len(entries) < 2:
+        return None
+    for preferred_stage in ("final", "bare", "ptw", "pte_ad_update"):
+        check = next((item for item in checks if str(item.get("stage") or "") == preferred_stage), None)
+        if check is None:
+            continue
+        try:
+            address = int(str(check.get("physical_address") or "0"), 16)
+            size = int(check.get("size") or 0)
+        except (TypeError, ValueError):
+            return None
+        if size <= 0:
+            return None
+        matches = [entry for entry in entries if _entry_matches_case_access(entries, entry, address, size)]
+        if len(matches) >= 2:
+            return "first-match-overlap"
+        break
+    return None
+
+
+def _entry_matches_case_access(
+    entries: list[dict[str, Any]],
+    entry: dict[str, Any],
+    physical_address: int,
+    size: int,
+) -> bool:
+    bounds = _case_entry_bounds(entries, entry)
+    if bounds is None:
+        return False
+    lower, upper = bounds
+    access_upper = physical_address + size
+    return lower < access_upper and physical_address < upper
+
+
+def _case_entry_bounds(entries: list[dict[str, Any]], entry: dict[str, Any]) -> tuple[int, int] | None:
+    mode = str(entry.get("address_mode") or "").lower()
+    pmpaddr = _parse_case_int(entry.get("pmpaddr"))
+    if pmpaddr is None or mode == "off":
+        return None
+    if mode == "tor":
+        previous_addr = 0
+        index = int(entry.get("index") or 0)
+        if index > 0:
+            previous = next((item for item in entries if int(item.get("index") or 0) == index - 1), None)
+            if previous is not None:
+                previous_addr = _parse_case_int(previous.get("pmpaddr")) or 0
+        lower = previous_addr << 2
+        upper = pmpaddr << 2
+        if upper <= lower:
+            return None
+        return lower, upper
+    if mode == "na4":
+        lower = pmpaddr << 2
+        return lower, lower + 4
+    if mode == "napot":
+        ones = 0
+        while pmpaddr & (1 << ones):
+            ones += 1
+        size = 1 << (ones + 3)
+        lower = (pmpaddr & ~((1 << ones) - 1)) << 2
+        return lower, lower + size
+    return None
+
+
+def _parse_case_int(value: object) -> int | None:
+    if isinstance(value, str):
+        return int(value, 16)
+    if type(value) is int:
+        return value
+    return None
+
+
 def semantic_bins_for_case(case: dict[str, Any]) -> list[str]:
     explicit = case.get("semantic_bins")
     if explicit:
@@ -109,16 +229,16 @@ def semantic_bins_for_case(case: dict[str, Any]) -> list[str]:
     if translation:
         bins.add(f"profile={profile}|translation={translation}")
 
-    for tag in case.get("coverage_tags") or []:
-        bins.add(f"profile={profile}|tag={tag}")
-
-    _add_field_bin(bins, profile, "pmp", case.get("pmp_match_mode"))
+    _add_field_bin(bins, profile, "pmp", derived_pmp_match_mode_for_case(case))
     _add_field_bin(bins, profile, "ptw", case.get("ptw_fault_level"))
     _add_field_bin(bins, profile, "preload", case.get("preload_mode"))
     _add_field_bin(bins, profile, "security", case.get("security_focus"))
     _add_field_bin(bins, profile, "smepmp_rule", case.get("smepmp_rule"))
     _add_field_bin(bins, profile, "effective_priv", case.get("effective_privilege"))
     _add_field_bin(bins, profile, "match", case.get("pmp_match_result"))
+    _add_field_bin(bins, profile, "page_bank", case.get("page_bank"))
+    _add_field_bin(bins, profile, "va_bank", case.get("va_bank"))
+    _add_field_bin(bins, profile, "asid_bank", case.get("asid_bank"))
 
     mseccfg = case.get("mseccfg") or {}
     if mseccfg:
@@ -232,7 +352,7 @@ def contract_predicates_for_case(case: dict[str, Any]) -> list[str]:
         if stage == "final" and not allowed:
             predicates.add("sv39.final_pmp_deny_after_translation")
 
-    pmp_match_mode = str(case.get("pmp_match_mode") or "")
+    pmp_match_mode = str(derived_pmp_match_mode_for_case(case) or "")
     if pmp_match_mode == "first-match-overlap":
         predicates.add("pmp.first_match_overlap")
     if pmp_match_mode in {"tor", "na4", "napot"}:
@@ -294,6 +414,10 @@ def contract_predicates_for_case(case: dict[str, Any]) -> list[str]:
         predicates.add("smepmp.mmwp_enabled")
     if bool(mseccfg.get("rlb")):
         predicates.add("smepmp.rlb_enabled")
+    for field_name in ("page_bank", "va_bank", "asid_bank"):
+        field_value = case.get(field_name)
+        if field_value:
+            predicates.add(f"target.{field_name}.{field_value}")
 
     return sorted(predicates)
 
@@ -391,27 +515,247 @@ def contract_predicates_for_scenario(scenario: PmpScenario) -> list[str]:
     return contract_predicates_for_case(case)
 
 
+def _capability_case_for_scenario(scenario: PmpScenario) -> dict[str, Any]:
+    """Build a minimal case-like dict that oracle_applicability_for_case can read."""
+    ad_mode = getattr(scenario, 'ad_update_mode', None)
+    case: dict[str, Any] = {
+        "profile": scenario.profile,
+        "privilege": scenario.privilege.value,
+        "access": scenario.probe.access.value,
+        "translation": scenario.translation.value,
+        "mseccfg": asdict(scenario.mseccfg),
+        "ad_update_mode": ad_mode.value if ad_mode else "unknown",
+        "stateful_sequence": scenario.stateful_sequence,
+    }
+    if scenario.sv39 is not None:
+        case["sv39"] = {
+            "pte": asdict(scenario.sv39.pte),
+        }
+    return case
+
+
+# ---------------------------------------------------------------------------
+# ExecutionCoverageContext — single source of truth for execution coverage
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExecutionCoverageContext:
+    """Bundles DUT, capability, and run directories for execution coverage."""
+
+    dut: str
+    capability: dict[str, Any]
+    capability_fingerprint: str
+    run_dirs: tuple[Path, ...]
+
+
+def _capability_fingerprint(capability: dict[str, Any] | None) -> str:
+    """Stable fingerprint for a capability dict using coverage projection."""
+    if capability is None:
+        return "none"
+    projection = capability_coverage_projection(capability)
+    raw = json.dumps(projection, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def resolve_execution_coverage_context(
+    run_dirs: Iterable[Path],
+    *,
+    dut: str | None,
+) -> ExecutionCoverageContext:
+    """Resolve and validate the execution coverage context across run_dirs.
+
+    Rules:
+    - Every run_dir must have a dut_capabilities.json.
+    - When *dut* is explicit, every capability map must contain it.
+    - When *dut* is None, auto-infer ONLY when every run has exactly one DUT
+      with the same name.
+    - All runs must share the same capability fingerprint for the selected DUT.
+    """
+    run_dirs = tuple(run_dirs)
+    if not run_dirs:
+        raise ValueError("at least one run_dir is required")
+
+    requested_dut = dut  # preserve original: None means "auto-infer"
+    resolved_dut: str | None = None
+    fingerprints: dict[str, str] = {}  # dut_name -> fingerprint
+    capability_by_run: dict[Path, dict[str, Any]] = {}
+
+    for rd in run_dirs:
+        cap_map = load_capability_map(rd)
+        if cap_map is None:
+            raise ValueError(
+                f"run directory {rd} is missing dut_capabilities.json; "
+                f"execution coverage requires a capability file"
+            )
+        capability_by_run[rd] = cap_map
+
+        if requested_dut is not None:
+            # Explicit DUT: every map must contain it
+            if requested_dut not in cap_map:
+                raise ValueError(
+                    f"run directory {rd} has no capability entry for DUT "
+                    f"'{requested_dut}'; available: {sorted(cap_map.keys())}"
+                )
+            fp = _capability_fingerprint(cap_map[requested_dut])
+            fingerprints[requested_dut] = fp
+        else:
+            # Auto-infer: every run must have exactly one DUT with same name
+            dut_names = sorted(cap_map.keys())
+            if len(dut_names) == 0:
+                raise ValueError(
+                    f"run directory {rd} has an empty capability map"
+                )
+            if len(dut_names) > 1:
+                raise ValueError(
+                    f"run directory {rd} contains multiple DUTs "
+                    f"({dut_names}); pass --dut to select one"
+                )
+            inferred = dut_names[0]
+            if resolved_dut is None:
+                resolved_dut = inferred
+            elif resolved_dut != inferred:
+                raise ValueError(
+                    f"run directories have different single DUTs: "
+                    f"'{resolved_dut}' vs '{inferred}' from {rd}"
+                )
+            fp = _capability_fingerprint(cap_map[inferred])
+            fingerprints[inferred] = fp
+
+    # --- finalize DUT name --------------------------------------------------
+    if requested_dut is not None:
+        resolved_dut = requested_dut
+    assert resolved_dut is not None
+
+    # --- validate fingerprint consistency across runs -----------------------
+    first_fp = fingerprints[resolved_dut]
+    for rd in run_dirs:
+        cap_map = capability_by_run[rd]
+        cap = cap_map[resolved_dut]
+        rd_fp = _capability_fingerprint(cap)
+        if rd_fp != first_fp:
+            raise ValueError(
+                f"capability fingerprint mismatch for DUT '{resolved_dut}': "
+                f"run {rd} has fingerprint {rd_fp}, "
+                f"expected {first_fp}. "
+                f"ISA={cap.get('isa')}, "
+                f"run_dir={rd}"
+            )
+
+    return ExecutionCoverageContext(
+        dut=resolved_dut,
+        capability=capability_by_run[run_dirs[0]][resolved_dut],
+        capability_fingerprint=first_fp,
+        run_dirs=run_dirs,
+    )
+
+
+def _semantic_bins_for_case(case: dict[str, Any]) -> set[str]:
+    return set(semantic_bins_for_case(case))
+
+
+def _combo_bins_for_case_pairwise(case: dict[str, Any]) -> set[str]:
+    return set(combo_bins_for_case(case, coverage_mode="pairwise"))
+
+
+def _combo_bins_for_case_triples(case: dict[str, Any]) -> set[str]:
+    return set(combo_bins_for_case(case, coverage_mode="security-triples"))
+
+
+def _predicates_for_case(case: dict[str, Any]) -> set[str]:
+    return set(contract_predicates_for_case(case))
+
+
+def _gap_coverage_rate(
+    covered: int,
+    total: int,
+    *,
+    coverage_basis: str,
+) -> float | None:
+    """Return coverage rate consistent with the coverage basis.
+
+    Execution mode: zero denominator → None (no applicable targets).
+    Manifest mode: zero denominator → 1.0 (legacy compatibility).
+    """
+    if total:
+        return round(covered / total, 6)
+    if coverage_basis == "execution":
+        return None
+    return 1.0
+
+
+def _observed_execution_bins(
+    run_dir: Path,
+    dut: str | None,
+    bin_fn,
+) -> set[str]:
+    """Return bins from execution-qualified results for *dut* (or all DUTs).
+
+    Uses qualify_result_for_coverage as the single source of truth so that
+    coverage gap, build_schedule, and coverage.py all share the same
+    eligibility rules.
+    """
+    case_map = load_case_map(run_dir)
+    results_by_case = load_results(run_dir)
+    observed: set[str] = set()
+    for case_name, result_list in results_by_case.items():
+        case = case_map.get(case_name)
+        if case is None:
+            continue
+        for result in result_list:
+            result_dut = str(result.get("dut") or "")
+            if dut is not None and result_dut != dut:
+                continue
+            qual = qualify_result_for_coverage(case, result)
+            if qual.eligible:
+                observed.update(bin_fn(case))
+    return observed
+
+
 def coverage_gap_from_runs(
     run_dirs: Iterable[Path],
     *,
     target: str = CORE_STATEFUL_TARGET,
     include_experimental: bool = False,
     seed: int = 20260628,
+    coverage_basis: str = "manifest",
+    dut: str | None = None,
+    capability: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    target_bins = set(target_semantic_bins(target=target, include_experimental=include_experimental, seed=seed))
+    run_dirs = tuple(Path(item) for item in run_dirs)
+    # --- execution mode: resolve context (fail closed) ----------------------
+    resolved_dut: str | None = dut
+    resolved_capability: dict[str, Any] | None = capability
+    if coverage_basis == "execution":
+        ctx = resolve_execution_coverage_context(run_dirs, dut=dut)
+        resolved_dut = ctx.dut
+        resolved_capability = ctx.capability
+
+    target_bins = set(target_semantic_bins(
+        target=target, include_experimental=include_experimental, seed=seed,
+        capability=resolved_capability,
+    ))
     observed_bins: set[str] = set()
     run_dir_text: list[str] = []
     for run_dir in run_dirs:
         run_dir = Path(run_dir)
         run_dir_text.append(str(run_dir))
-        for case_path in sorted((run_dir / "cases").glob("*/case.json")):
-            observed_bins.update(semantic_bins_for_case(_read_json(case_path)))
+        if coverage_basis == "execution":
+            observed_bins.update(_observed_execution_bins(
+                run_dir, resolved_dut, _semantic_bins_for_case,
+            ))
+        else:
+            for case_path in sorted((run_dir / "cases").glob("*/case.json")):
+                observed_bins.update(semantic_bins_for_case(_read_json(case_path)))
 
     covered_target = observed_bins & target_bins
     missing = target_bins - covered_target
-    coverage_rate = round(len(covered_target) / len(target_bins), 6) if target_bins else 1.0
-    return {
+    coverage_rate = _gap_coverage_rate(
+        len(covered_target), len(target_bins), coverage_basis=coverage_basis,
+    )
+    gap = {
         "schema_version": 1,
+        "coverage_basis": coverage_basis,
         "target": target,
         "include_experimental": include_experimental,
         "run_dirs": run_dir_text,
@@ -424,6 +768,10 @@ def coverage_gap_from_runs(
         "coverage_rate": coverage_rate,
         "top_gaps": sorted(missing)[:25],
     }
+    if coverage_basis == "execution":
+        gap["dut"] = resolved_dut
+        gap["capability_fingerprint"] = ctx.capability_fingerprint if ctx else None
+    return gap
 
 
 def combination_gap_from_runs(
@@ -433,30 +781,51 @@ def combination_gap_from_runs(
     include_experimental: bool = False,
     seed: int = 20260628,
     coverage_mode: str = "pairwise",
+    coverage_basis: str = "manifest",
+    dut: str | None = None,
+    capability: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    run_dirs = tuple(Path(item) for item in run_dirs)
     if coverage_mode not in {"pairwise", "security-triples"}:
         raise ValueError("combination coverage gap requires pairwise or security-triples mode")
+
+    # --- execution mode: resolve context (fail closed) ----------------------
+    resolved_dut: str | None = dut
+    resolved_capability: dict[str, Any] | None = capability
+    if coverage_basis == "execution":
+        ctx = resolve_execution_coverage_context(run_dirs, dut=dut)
+        resolved_dut = ctx.dut
+        resolved_capability = ctx.capability
+
     target_bins = set(
         target_combo_bins(
             target=target,
             include_experimental=include_experimental,
             seed=seed,
             coverage_mode=coverage_mode,
+            capability=resolved_capability,
         )
     )
+    bin_fn = _combo_bins_for_case_pairwise if coverage_mode == "pairwise" else _combo_bins_for_case_triples
     observed_bins: set[str] = set()
     run_dir_text: list[str] = []
     for run_dir in run_dirs:
         run_dir = Path(run_dir)
         run_dir_text.append(str(run_dir))
-        for case_path in sorted((run_dir / "cases").glob("*/case.json")):
-            observed_bins.update(combo_bins_for_case(_read_json(case_path), coverage_mode=coverage_mode))
+        if coverage_basis == "execution":
+            observed_bins.update(_observed_execution_bins(run_dir, resolved_dut, bin_fn))
+        else:
+            for case_path in sorted((run_dir / "cases").glob("*/case.json")):
+                observed_bins.update(combo_bins_for_case(_read_json(case_path), coverage_mode=coverage_mode))
 
     covered_target = observed_bins & target_bins
     missing = target_bins - covered_target
-    coverage_rate = round(len(covered_target) / len(target_bins), 6) if target_bins else 1.0
-    return {
+    coverage_rate = _gap_coverage_rate(
+        len(covered_target), len(target_bins), coverage_basis=coverage_basis,
+    )
+    gap = {
         "schema_version": 3,
+        "coverage_basis": coverage_basis,
         "target": target,
         "coverage_mode": coverage_mode,
         "include_experimental": include_experimental,
@@ -470,6 +839,10 @@ def combination_gap_from_runs(
         "combo_coverage_rate": coverage_rate,
         "top_combo_gaps": sorted(missing)[:25],
     }
+    if coverage_basis == "execution":
+        gap["dut"] = resolved_dut
+        gap["capability_fingerprint"] = ctx.capability_fingerprint if ctx else None
+    return gap
 
 
 def predicate_gap_from_runs(
@@ -478,23 +851,42 @@ def predicate_gap_from_runs(
     target: str = CORE_STATEFUL_TARGET,
     include_experimental: bool = False,
     seed: int = 20260628,
+    coverage_basis: str = "manifest",
+    dut: str | None = None,
+    capability: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    run_dirs = tuple(Path(item) for item in run_dirs)
+    # --- execution mode: resolve context (fail closed) ----------------------
+    resolved_dut: str | None = dut
+    resolved_capability: dict[str, Any] | None = capability
+    if coverage_basis == "execution":
+        ctx = resolve_execution_coverage_context(run_dirs, dut=dut)
+        resolved_dut = ctx.dut
+        resolved_capability = ctx.capability
+
     target_predicates = set(
-        target_contract_predicates(target=target, include_experimental=include_experimental, seed=seed)
+        target_contract_predicates(target=target, include_experimental=include_experimental, seed=seed,
+                                   capability=resolved_capability)
     )
     observed: set[str] = set()
     run_dir_text: list[str] = []
     for run_dir in run_dirs:
         run_dir = Path(run_dir)
         run_dir_text.append(str(run_dir))
-        for case_path in sorted((run_dir / "cases").glob("*/case.json")):
-            observed.update(contract_predicates_for_case(_read_json(case_path)))
+        if coverage_basis == "execution":
+            observed.update(_observed_execution_bins(run_dir, resolved_dut, _predicates_for_case))
+        else:
+            for case_path in sorted((run_dir / "cases").glob("*/case.json")):
+                observed.update(contract_predicates_for_case(_read_json(case_path)))
 
     covered = observed & target_predicates
     missing = target_predicates - covered
-    coverage_rate = round(len(covered) / len(target_predicates), 6) if target_predicates else 1.0
-    return {
+    coverage_rate = _gap_coverage_rate(
+        len(covered), len(target_predicates), coverage_basis=coverage_basis,
+    )
+    gap = {
         "schema_version": 1,
+        "coverage_basis": coverage_basis,
         "target": target,
         "include_experimental": include_experimental,
         "run_dirs": run_dir_text,
@@ -507,6 +899,10 @@ def predicate_gap_from_runs(
         "predicate_coverage_rate": coverage_rate,
         "top_predicate_gaps": sorted(missing)[:25],
     }
+    if coverage_basis == "execution":
+        gap["dut"] = resolved_dut
+        gap["capability_fingerprint"] = ctx.capability_fingerprint if ctx else None
+    return gap
 
 
 def build_schedule(
@@ -517,12 +913,29 @@ def build_schedule(
     seed: int = 20260628,
     include_experimental: bool = False,
     coverage_mode: str = "semantic",
+    coverage_basis: str = "execution",
+    dut: str | None = None,
 ) -> dict[str, Any]:
     if coverage_mode not in COVERAGE_MODES:
         raise ValueError(f"unsupported coverage mode: {coverage_mode}")
-    run_dirs = [Path(item) for item in run_dirs]
-    semantic_gap = coverage_gap_from_runs(run_dirs, target=target, include_experimental=include_experimental, seed=seed)
+    run_dirs = tuple(Path(item) for item in run_dirs)
+
+    # -- resolve DUT and capability -------------------------------------------
+    ctx: ExecutionCoverageContext | None = None
+    if coverage_basis == "execution":
+        ctx = resolve_execution_coverage_context(run_dirs, dut=dut)
+        resolved_dut = ctx.dut
+        capability = ctx.capability
+    else:
+        resolved_dut = dut
+        capability = None
+
+    semantic_gap = coverage_gap_from_runs(
+        run_dirs, target=target, include_experimental=include_experimental, seed=seed,
+        coverage_basis=coverage_basis, dut=resolved_dut, capability=capability,
+    )
     combo_gap = None
+    predicate_gap = None
     if coverage_mode == "semantic":
         missing = set(semantic_gap["missing_bins"])
     elif coverage_mode == "predicates":
@@ -531,6 +944,9 @@ def build_schedule(
             target=target,
             include_experimental=include_experimental,
             seed=seed,
+            coverage_basis=coverage_basis,
+            dut=resolved_dut,
+            capability=capability,
         )
         missing = set(predicate_gap["missing_predicates"])
     else:
@@ -540,10 +956,14 @@ def build_schedule(
             include_experimental=include_experimental,
             seed=seed,
             coverage_mode=coverage_mode,
+            coverage_basis=coverage_basis,
+            dut=resolved_dut,
+            capability=capability,
         )
         missing = set(combo_gap["missing_combo_bins"])
     selected: list[dict[str, Any]] = []
-    candidates = _target_candidates(target=target, include_experimental=include_experimental, seed=seed)
+    candidates = _target_candidates(target=target, include_experimental=include_experimental, seed=seed,
+                                    capability=capability)
 
     while missing and len(selected) < max_cases:
         best = None
@@ -572,10 +992,29 @@ def build_schedule(
         missing -= best_gain
         selected.append(_schedule_entry(best, best_gain, seed, coverage_mode=coverage_mode))
 
+    # -- qualification summary -----------------------------------------------
+    qualification = {"eligible_results": 0, "excluded_results": 0,
+                     "excluded_by_reason": {}}
+    if coverage_basis == "execution" and resolved_dut:
+        evidence = collect_execution_evidence(run_dirs, dut=resolved_dut)
+        qs = evidence.summary
+        qualification = {
+            "eligible_results": qs.eligible_results,
+            "excluded_results": qs.excluded_results,
+            "excluded_by_reason": dict(qs.excluded_by_reason),
+            "valid_mismatches": qs.valid_mismatches,
+            "total_results": qs.total_results,
+            "missing_results": evidence.missing_results,
+            "orphan_results": evidence.orphan_results,
+        }
+
     schedule = {
         "schema_version": 2,
         "target": target,
         "coverage_mode": coverage_mode,
+        "coverage_basis": coverage_basis,
+        "dut": resolved_dut,
+        "capability_fingerprint": _capability_fingerprint(capability) if capability else "none",
         "seed": seed,
         "include_smepmp": any(str(entry.get("profile") or "").startswith("smepmp") for entry in selected),
         "include_experimental": include_experimental,
@@ -584,6 +1023,7 @@ def build_schedule(
         "total_target_bins": semantic_gap["total_target_bins"],
         "covered_target_bins_before": semantic_gap["covered_target_bins"],
         "missing_target_bins_before": semantic_gap["missing_target_bins"],
+        "qualification": qualification,
         "entries": selected,
     }
     if combo_gap is not None:
@@ -595,7 +1035,7 @@ def build_schedule(
                 "combo_coverage_rate_before": combo_gap["combo_coverage_rate"],
             }
         )
-    if coverage_mode == "predicates":
+    if coverage_mode == "predicates" and predicate_gap is not None:
         schedule.update(
             {
                 "total_target_predicates": predicate_gap["total_target_predicates"],
@@ -616,12 +1056,28 @@ def write_schedule(
     out_dir: Path,
     include_experimental: bool = False,
     coverage_mode: str = "semantic",
+    coverage_basis: str = "execution",
+    dut: str | None = None,
 ) -> Path:
     out_dir = Path(out_dir)
+    run_dirs = tuple(Path(item) for item in run_dirs)
+    # Resolve capability for gap computation
+    ctx: ExecutionCoverageContext | None = None
+    resolved_dut = dut
+    capability = None
+    if coverage_basis == "execution":
+        ctx = resolve_execution_coverage_context(run_dirs, dut=dut)
+        resolved_dut = ctx.dut
+        capability = ctx.capability
+
     if coverage_mode == "semantic":
-        gap = coverage_gap_from_runs(run_dirs, target=target, include_experimental=include_experimental, seed=seed)
+        gap = coverage_gap_from_runs(run_dirs, target=target, include_experimental=include_experimental,
+                                     seed=seed, coverage_basis=coverage_basis,
+                                     dut=resolved_dut, capability=capability)
     elif coverage_mode == "predicates":
-        gap = predicate_gap_from_runs(run_dirs, target=target, include_experimental=include_experimental, seed=seed)
+        gap = predicate_gap_from_runs(run_dirs, target=target, include_experimental=include_experimental,
+                                      seed=seed, coverage_basis=coverage_basis,
+                                      dut=resolved_dut, capability=capability)
     else:
         gap = combination_gap_from_runs(
             run_dirs,
@@ -629,6 +1085,9 @@ def write_schedule(
             include_experimental=include_experimental,
             seed=seed,
             coverage_mode=coverage_mode,
+            coverage_basis=coverage_basis,
+            dut=resolved_dut,
+            capability=capability,
         )
     schedule = build_schedule(
         run_dirs,
@@ -637,11 +1096,41 @@ def write_schedule(
         seed=seed,
         include_experimental=include_experimental,
         coverage_mode=coverage_mode,
+        coverage_basis=coverage_basis,
+        dut=dut,
     )
     _write_json(out_dir / "coverage_gap.json", gap)
     schedule_path = out_dir / "schedule.json"
     _write_json(schedule_path, schedule)
     return schedule_path
+
+
+def _resolve_dut(
+    dut: str | None,
+    capability_map: dict[str, Any],
+    run_dirs: list[Path],
+) -> str:
+    """Resolve DUT name: explicit > auto-infer from single-DUT > error."""
+    if dut is not None:
+        return dut
+    dut_names = list(capability_map.keys())
+    if len(dut_names) == 1:
+        return dut_names[0]
+    if not dut_names:
+        raise ValueError("no DUTs found in capability map; cannot auto-infer DUT")
+    raise ValueError(
+        f"multiple DUTs present ({', '.join(sorted(dut_names))}); "
+        f"pass --dut to select one"
+    )
+
+
+def _resolve_capability_map(run_dirs: list[Path]) -> dict[str, Any] | None:
+    """Load capability map from the first run_dir that has one."""
+    for run_dir in run_dirs:
+        cap_map = load_capability_map(run_dir)
+        if cap_map:
+            return cap_map
+    return None
 
 
 def load_schedule(path: Path) -> dict[str, Any]:
@@ -657,12 +1146,26 @@ def scenarios_from_schedule(path: Path) -> list[tuple[int, PmpScenario]]:
     default_seed = int(schedule.get("seed", 20260628))
     default_include_smepmp = bool(schedule.get("include_smepmp", False))
     for entry in schedule["entries"]:
-        profile = str(entry["profile"])
-        index = int(entry["index"])
-        entry_seed = int(entry.get("seed", default_seed))
-        include_smepmp = bool(entry.get("include_smepmp", default_include_smepmp))
-        generator = ScenarioGenerator(seed=entry_seed, include_smepmp=include_smepmp, profile=profile)
-        scenario = generator.generate_batch(index + 1)[index]
+        if "scenario_spec" in entry:
+            from .scenario_codec import scenario_from_spec, scenario_hash
+
+            spec = entry["scenario_spec"]
+            expected_hash = entry.get("scenario_hash")
+            actual_hash = scenario_hash(spec)
+            if expected_hash is not None and str(expected_hash) != actual_hash:
+                raise ValueError(
+                    f"schedule entry scenario_hash mismatch: expected {expected_hash}, got {actual_hash}"
+                )
+            scenario = scenario_from_spec(spec)
+            index = int(entry.get("index", 0))
+            profile = str(entry.get("profile") or getattr(scenario, "profile", "scenario"))
+        else:
+            profile = str(entry["profile"])
+            index = int(entry["index"])
+            entry_seed = int(entry.get("seed", default_seed))
+            include_smepmp = bool(entry.get("include_smepmp", default_include_smepmp))
+            generator = ScenarioGenerator(seed=entry_seed, include_smepmp=include_smepmp, profile=profile)
+            scenario = generator.generate_one(index)
         scenario = replace(scenario, name=str(entry.get("name") or f"{profile}__{scenario.name}"))
         output.append((index, scenario))
     return output
@@ -673,9 +1176,11 @@ def target_semantic_bins(
     target: str = CORE_STATEFUL_TARGET,
     include_experimental: bool = False,
     seed: int = 20260628,
+    capability: dict[str, Any] | None = None,
 ) -> list[str]:
     bins: set[str] = set()
-    for candidate in _target_candidates(target=target, include_experimental=include_experimental, seed=seed):
+    for candidate in _target_candidates(target=target, include_experimental=include_experimental, seed=seed,
+                                        capability=capability):
         bins.update(candidate["semantic_bins"])
     return sorted(bins)
 
@@ -686,9 +1191,11 @@ def target_combo_bins(
     include_experimental: bool = False,
     seed: int = 20260628,
     coverage_mode: str = "pairwise",
+    capability: dict[str, Any] | None = None,
 ) -> list[str]:
     bins: set[str] = set()
-    for candidate in _target_candidates(target=target, include_experimental=include_experimental, seed=seed):
+    for candidate in _target_candidates(target=target, include_experimental=include_experimental, seed=seed,
+                                        capability=capability):
         bins.update(combo_bins_for_case(candidate, coverage_mode=coverage_mode))
     return sorted(bins)
 
@@ -698,14 +1205,18 @@ def target_contract_predicates(
     target: str = CORE_STATEFUL_TARGET,
     include_experimental: bool = False,
     seed: int = 20260628,
+    capability: dict[str, Any] | None = None,
 ) -> list[str]:
     predicates: set[str] = set()
-    for candidate in _target_candidates(target=target, include_experimental=include_experimental, seed=seed):
+    for candidate in _target_candidates(target=target, include_experimental=include_experimental, seed=seed,
+                                        capability=capability):
         predicates.update(candidate["contract_predicates"])
     return sorted(predicates)
 
 
 def target_profiles(target: str, include_experimental: bool = False) -> tuple[str, ...]:
+    if target == C910_NONPMP_TARGET:
+        return C910_NONPMP_PROFILES
     if target == XIANGSHAN_TARGETED_TARGET:
         return XIANGSHAN_TARGETED_PROFILES
     if target == OOO_MICROARCH_TARGET:
@@ -720,12 +1231,34 @@ def target_profiles(target: str, include_experimental: bool = False) -> tuple[st
     return tuple(profiles)
 
 
-def _target_candidates(*, target: str, include_experimental: bool, seed: int) -> list[dict[str, Any]]:
+def _target_candidates(*, target: str, include_experimental: bool, seed: int,
+                       capability: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if target == C910_NONPMP_TARGET:
+        from .c910_nonpmp_dynamic import catalog_cases as c910_catalog_cases
+
+        return [
+            {
+                "profile": str(case["profile"]),
+                "index": int(case.get("index", index)),
+                "name": str(case["name"]),
+                "semantic_bins": semantic_bins_for_case(case),
+                "combo_bins": combo_bins_for_case(case),
+                "contract_predicates": contract_predicates_for_case(case),
+                "capability_case": case,
+            }
+            for index, case in enumerate(c910_catalog_cases(capability=capability))
+        ]
+
     candidates: list[dict[str, Any]] = []
     for profile in target_profiles(target, include_experimental):
         count = PROFILE_TARGET_COUNTS[profile]
         generator = ScenarioGenerator(seed=seed, include_smepmp=profile.startswith("smepmp"), profile=profile)
         for index, scenario in enumerate(generator.generate_batch(count)):
+            capability_case = _capability_case_for_scenario(scenario)
+            # Filter by capability if provided
+            if capability is not None:
+                if oracle_applicability_for_case(capability_case, capability) != "valid":
+                    continue
             candidates.append(
                 {
                     "profile": profile,
@@ -734,6 +1267,7 @@ def _target_candidates(*, target: str, include_experimental: bool, seed: int) ->
                     "semantic_bins": semantic_bins_for_scenario(scenario),
                     "combo_bins": combo_bins_for_scenario(scenario),
                     "contract_predicates": contract_predicates_for_scenario(scenario),
+                    "capability_case": capability_case,
                 }
             )
     return candidates
@@ -775,7 +1309,7 @@ def _combo_factors(case: dict[str, Any]) -> dict[str, str]:
     _add_factor(factors, "priv", case.get("privilege"))
     _add_factor(factors, "access", case.get("access"))
     _add_factor(factors, "translation", case.get("translation"))
-    _add_factor(factors, "pmp", case.get("pmp_match_mode"))
+    _add_factor(factors, "pmp", derived_pmp_match_mode_for_case(case))
     _add_factor(factors, "pmp_allow", _bool_text(case.get("pmp_allow")) if case.get("pmp_allow") is not None else None)
     _add_factor(factors, "pmp_locked", _bool_text(case.get("pmp_locked")) if case.get("pmp_locked") is not None else None)
     _add_factor(factors, "expected_allowed", _bool_text(case.get("expected_allowed")) if case.get("expected_allowed") is not None else None)
@@ -788,6 +1322,9 @@ def _combo_factors(case: dict[str, Any]) -> dict[str, str]:
     _add_factor(factors, "smepmp_rule", case.get("smepmp_rule"))
     _add_factor(factors, "effective_priv", case.get("effective_privilege"))
     _add_factor(factors, "match", case.get("pmp_match_result"))
+    _add_factor(factors, "page_bank", case.get("page_bank"))
+    _add_factor(factors, "va_bank", case.get("va_bank"))
+    _add_factor(factors, "asid_bank", case.get("asid_bank"))
 
     mseccfg = case.get("mseccfg") or {}
     _add_factor(factors, "mml", _bool_text(mseccfg.get("mml")) if mseccfg else None)

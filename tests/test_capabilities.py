@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from pmpfuzz.bapc import build_bapc_coverage_universe
 from pmpfuzz.__main__ import build_parser, main
 from pmpfuzz.capabilities import (
     DEFAULT_CAPABILITY_SCHEMA_VERSION,
@@ -28,6 +29,43 @@ class CapabilityModelTest(unittest.TestCase):
 
         self.assertEqual(oracle_applicability_for_case(case, capability), "capability_dependent")
 
+    def test_cva6_ptw_stage_cases_are_capability_dependent_without_target_attribution(self):
+        case = {
+            "translation": "sv39",
+            "expected": {"allowed": False, "stage": "page_table_walk", "trap_cause": 1},
+        }
+
+        cva6 = capability_for_dut("cva6-clean", available=True)
+        rocket = capability_for_dut("rocket-clean", available=True)
+
+        self.assertEqual(oracle_applicability_for_case(case, cva6), "capability_dependent")
+        self.assertEqual(oracle_applicability_for_case(case, rocket), "valid")
+
+    def test_cva6_sv39_final_deny_requires_fault_address_observation(self):
+        case = {
+            "translation": "sv39",
+            "expected": {"allowed": False, "stage": "final_access", "trap_cause": 5},
+        }
+
+        cva6 = capability_for_dut("cva6-clean", available=True)
+        rocket = capability_for_dut("rocket-clean", available=True)
+
+        self.assertEqual(oracle_applicability_for_case(case, cva6), "capability_dependent")
+        self.assertEqual(oracle_applicability_for_case(case, rocket), "valid")
+
+    def test_cva6_stateful_reprobe_cases_are_capability_dependent(self):
+        case = {
+            "translation": "sv39",
+            "expected": {"allowed": False, "stage": "stateful_final", "trap_cause": 5},
+            "stateful_sequence": {"final_probe": "repeat", "warmup": True},
+        }
+
+        cva6 = capability_for_dut("cva6-clean", available=True)
+        rocket = capability_for_dut("rocket-clean", available=True)
+
+        self.assertEqual(oracle_applicability_for_case(case, cva6), "capability_dependent")
+        self.assertEqual(oracle_applicability_for_case(case, rocket), "valid")
+
     def test_parser_accepts_probe_dut_command(self):
         parser = build_parser()
 
@@ -41,7 +79,7 @@ class CapabilityModelTest(unittest.TestCase):
     def test_capability_schema_v2_records_smepmp_probe_details(self):
         matrix = capability_matrix(["spike", "rocket-clean"], probe_smepmp=True)
 
-        self.assertEqual(matrix["schema_version"], 2)
+        self.assertEqual(matrix["schema_version"], 3)
         spike = matrix["duts"]["spike"]
         rocket = matrix["duts"]["rocket-clean"]
         self.assertIn("smepmp", spike)
@@ -61,7 +99,7 @@ class CapabilityModelTest(unittest.TestCase):
             (Path(tmp) / "VSimTop.mk").write_text("CXXFLAGS += -DDIFFTEST\n", encoding="ascii")
             xiangshan = capability_for_dut("xiangshan-clean", path=emu, available=True)
 
-        self.assertEqual(spike["schema_version"], DEFAULT_CAPABILITY_SCHEMA_VERSION)
+        self.assertEqual(spike["schema_version"], 3)
         self.assertEqual(spike["finish_protocol"], "tohost")
         self.assertEqual(spike["diagnostic_depth"], "structured_tohost")
         self.assertEqual(spike["oracle_applicability"], "valid")
@@ -90,6 +128,33 @@ class CapabilityModelTest(unittest.TestCase):
             xiangshan = capability_for_dut("xiangshan-clean", path=emu, available=True)
 
         self.assertEqual(xiangshan["oracle_applicability"], "valid")
+
+    def test_capability_views_drive_same_bapc_core_bin_set_across_rocket_boom_xiangshan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            emu = Path(tmp) / "emu"
+            emu.write_text("", encoding="ascii")
+            (Path(tmp) / "VSimTop.mk").write_text("CXXFLAGS += -DDIFFTEST\n", encoding="ascii")
+            xiangshan_cap = capability_for_dut("xiangshan-clean", path=emu, available=True)
+
+        rocket_cap = capability_for_dut("rocket-clean", available=True)
+        boom_cap = capability_for_dut("boom-clean", available=True)
+
+        def build(dut: str, cap: dict, seed: int) -> dict:
+            supported = cap.get("supported_capabilities") or {}
+            return build_bapc_coverage_universe(
+                dut=dut,
+                generator_seed=seed,
+                supports_fault_stage=bool(supported.get("sv39", False)),
+                supports_smepmp=bool(supported.get("smepmp", False)),
+            )
+
+        rocket_universe = build("rocket-clean", rocket_cap, 1)
+        boom_universe = build("boom-clean", boom_cap, 2)
+        xiangshan_universe = build("xiangshan-clean", xiangshan_cap, 3)
+
+        self.assertEqual(rocket_universe["bin_count"], 208)
+        self.assertEqual(rocket_universe["bin_set_sha256"], boom_universe["bin_set_sha256"])
+        self.assertEqual(rocket_universe["bin_set_sha256"], xiangshan_universe["bin_set_sha256"])
 
     def test_case_schema_includes_required_capabilities_and_oracle_applicability(self):
         scenario = ScenarioGenerator(seed=9, include_smepmp=False, profile="sv39-final-pmp").generate_batch(1)[0]
@@ -151,7 +216,7 @@ class CapabilityModelTest(unittest.TestCase):
             write_json(
                 run_dir / "dut_capabilities.json",
                 {
-                    "schema_version": DEFAULT_CAPABILITY_SCHEMA_VERSION,
+                    "schema_version": 3,
                     "duts": {"xiangshan-clean": capability_for_dut("xiangshan-clean", available=True)},
                 },
             )
@@ -207,6 +272,106 @@ class CapabilityModelTest(unittest.TestCase):
         self.assertIn("smepmp_rlb", required_capabilities_for_case(case))
         self.assertFalse(spike["supported_capabilities"]["smepmp_rlb"])
         self.assertEqual(oracle_applicability_for_case(case, spike), "unsupported")
+
+    # ---- New tests for execution-qualified coverage (RED phase additions) ----
+
+    def test_capability_schema_v3_includes_isa(self):
+        cap = capability_for_dut("spike", isa="rv64gc", available=True)
+        self.assertEqual(cap["schema_version"], 3)
+        self.assertIn("isa", cap)
+        self.assertEqual(cap["isa"], "rv64gc")
+
+    def test_spike_rv64gc_smepmp_is_unsupported(self):
+        cap = capability_for_dut("spike", isa="rv64gc", available=True)
+        self.assertFalse(cap["supported_capabilities"]["smepmp"],
+                         "rv64gc Spike must report Smepmp as unsupported")
+
+    def test_spike_rv64gc_smepmp_isa_reports_smepmp_supported(self):
+        cap = capability_for_dut("spike", isa="rv64gc_smepmp", available=True)
+        self.assertTrue(cap["supported_capabilities"]["smepmp"],
+                        "rv64gc_smepmp Spike must report Smepmp as supported")
+
+    def test_capability_matrix_schema_v3(self):
+        matrix = capability_matrix(["spike", "rocket-clean"])
+        self.assertEqual(matrix["schema_version"], 3)
+
+    def test_missing_dut_capabilities_does_not_silently_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            scenario = ScenarioGenerator(seed=1, include_smepmp=False, profile="pmp-boundary").generate_batch(1)[0]
+            case = scenario_to_case_dict(scenario, seed=1, index=0)
+            result = result_to_dict(
+                case=case,
+                dut="spike",
+                status="pass",
+                elapsed_seconds=0.1,
+                returncode=0,
+                log=run_dir / "results" / case["name"] / "case.log",
+                reason=None,
+                observed_phase="completed",
+                observed_event="completion",
+                observation_valid=True,
+                stage_verified=True,
+                oracle_applicability="valid",
+            )
+            write_json(run_dir / "cases" / case["name"] / "case.json", case)
+            write_json(run_dir / "results" / case["name"] / "result.json", result)
+            # No dut_capabilities.json written
+
+            from pmpfuzz.coverage import coverage_from_run
+            cov = coverage_from_run(run_dir)
+
+        exec_cov = cov["execution_coverage"]
+        # Without capability file, all entries should be unavailable
+        self.assertIn("by_dut", exec_cov)
+        for dut_name, entry in exec_cov["by_dut"].items():
+            self.assertFalse(entry.get("available", True),
+                             f"missing capabilities → {dut_name} unavailable")
+            self.assertIn("unavailable_reason", entry)
+
+
+class CapabilityFingerprintTest(unittest.TestCase):
+    """Fix 7: fingerprint is stable for coverage-relevant fields only."""
+
+    def test_fingerprint_ignores_path_and_notes(self):
+        from pmpfuzz.semantic_coverage import _capability_fingerprint
+
+        cap1 = capability_for_dut("spike", path="/foo/spike", isa="rv64gc")
+        cap1["notes"] = ["build v1"]
+        cap2 = capability_for_dut("spike", path="/bar/spike", isa="rv64gc")
+        cap2["notes"] = ["completely different notes"]
+
+        fp1 = _capability_fingerprint(cap1)
+        fp2 = _capability_fingerprint(cap2)
+
+        self.assertEqual(fp1, fp2,
+                         "fingerprint must ignore path and notes differences")
+
+    def test_fingerprint_differs_for_isa_change(self):
+        from pmpfuzz.semantic_coverage import _capability_fingerprint
+
+        cap1 = capability_for_dut("spike", path="/tmp/spike", isa="rv64gc")
+        cap2 = capability_for_dut("spike", path="/tmp/spike", isa="rv64gc_smepmp")
+
+        fp1 = _capability_fingerprint(cap1)
+        fp2 = _capability_fingerprint(cap2)
+
+        self.assertNotEqual(fp1, fp2,
+                            "fingerprint must differ for different ISA")
+
+    def test_fingerprint_differs_for_capability_change(self):
+        from pmpfuzz.semantic_coverage import _capability_fingerprint
+
+        cap1 = capability_for_dut("spike", path="/tmp/spike", isa="rv64gc")
+        cap1["supported_capabilities"]["smepmp"] = False
+        cap2 = capability_for_dut("spike", path="/tmp/spike", isa="rv64gc")
+        cap2["supported_capabilities"]["smepmp"] = True
+
+        fp1 = _capability_fingerprint(cap1)
+        fp2 = _capability_fingerprint(cap2)
+
+        self.assertNotEqual(fp1, fp2,
+                            "fingerprint must differ for different supported_capabilities")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ import unittest
 
 import pmpfuzz.emitter as emitter_module
 from pmpfuzz.emitter import AssemblyEmitter
+from pmpfuzz.hpm import manifest_for_dut
 from pmpfuzz.scenario import MEM_BASE, ScenarioGenerator
 from pmpfuzz.mmu import PageTableEntry, Sv39Mapping, TranslationMode
 from pmpfuzz.pmp import Access, AddressMode, PmpEntry, Privilege
@@ -10,6 +11,22 @@ from pmpfuzz.scenario import AccessProbe, PmpScenario
 
 
 class AssemblyEmitterTest(unittest.TestCase):
+    @staticmethod
+    def _tlb_stale_pte_variant(privilege: Privilege) -> PmpScenario:
+        for scenario in ScenarioGenerator(seed=73, include_smepmp=False, profile="tlb-stale-pte").generate_batch(8):
+            sequence = scenario.stateful_sequence or {}
+            if (
+                scenario.translation == TranslationMode.SV39
+                and scenario.privilege == privilege
+                and scenario.probe.access == Access.LOAD
+                and scenario.pmp_match_mode == "pte-deny-leaf"
+                and sequence.get("mutation") == "pte-deny-leaf"
+                and sequence.get("fence") == "with-sfence"
+                and sequence.get("final_probe") == "repeat"
+            ):
+                return scenario
+        raise AssertionError(f"missing tlb-stale-pte test scenario for privilege={privilege.value}")
+
     def test_emitter_reports_observations_without_importing_oracle_decisions(self):
         source = inspect.getsource(emitter_module)
 
@@ -197,8 +214,15 @@ class AssemblyEmitterTest(unittest.TestCase):
         asm = AssemblyEmitter().emit(scenario)
         target_offset = scenario.probe.physical_address - MEM_BASE
 
-        self.assertIn(f"    .org 0x{target_offset:x}\ntarget_region:\n    la t0, observation_phase", asm)
-        self.assertIn("    li t1, 2\n    sw t1, 0(t0)\n    li a0, 0x51\n    ecall", asm)
+        self.assertIn(f"    .org 0x{target_offset:x}\ntarget_region:\n    ecall", asm)
+        self.assertNotIn("target_region:\n    la t0, observation_phase", asm)
+
+    def test_structured_completion_uses_fixed_completed_phase_payload(self):
+        scenario = ScenarioGenerator(seed=20260629, include_smepmp=False, profile="pmp-boundary").generate_batch(19)[18]
+
+        asm = AssemblyEmitter().emit(scenario)
+
+        self.assertIn("report_completion:\n    li a0, 0x34000000", asm)
 
     def test_xiangshan_goodtrap_backend_uses_xstrap_words_not_ebreak(self):
         scenario = ScenarioGenerator(seed=20260628, include_smepmp=False, profile="legacy-data").generate_batch(3)[2]
@@ -235,6 +259,59 @@ class AssemblyEmitterTest(unittest.TestCase):
         self.assertIn("sd t1, 0(t0)", with_fence_asm)
         self.assertIn("sfence.vma", with_fence_asm)
         self.assertIn("no_fence_experimental:", no_fence_asm)
+
+    def test_cva6_compact_lowering_reuses_entry3_for_stale_pte_u_and_s_variants(self):
+        emitter = AssemblyEmitter()
+        for privilege in (Privilege.U, Privilege.S):
+            scenario = self._tlb_stale_pte_variant(privilege)
+            with self.subTest(privilege=privilege.value):
+                asm = emitter.emit(scenario, lowering_profile="cva6-sv39-tlb-stale-pte-compact")
+                metadata = emitter.lowering_metadata(scenario, lowering_profile="cva6-sv39-tlb-stale-pte-compact")
+
+                self.assertIn("li t0, 0x20003fff", asm)
+                self.assertIn("csrw pmpaddr3, t0", asm)
+                self.assertIn("li t0, 0x191d9b9d", asm)
+                self.assertNotIn("csrw pmpaddr4, t0", asm)
+                self.assertNotIn("csrw pmpaddr5, t0", asm)
+
+                self.assertEqual(metadata["lowering_profile"], "cva6-sv39-tlb-stale-pte-compact")
+                self.assertEqual(len(metadata["effective_entries"]), 4)
+                self.assertEqual(metadata["effective_entries"][3]["index"], 3)
+                self.assertEqual(metadata["effective_entries"][3]["pmpaddr"], "0x20003fff")
+                self.assertEqual(metadata["effective_entries"][3]["region_start"], "0x80000000")
+                self.assertEqual(metadata["effective_entries"][3]["region_end_exclusive"], "0x80020000")
+
+    def test_compact_lowering_rejects_non_target_scenarios_fail_closed(self):
+        scenario = ScenarioGenerator(seed=71, include_smepmp=False, profile="pmp-side-effect").generate_batch(count=1)[0]
+
+        with self.assertRaises(ValueError):
+            AssemblyEmitter().emit(scenario, lowering_profile="cva6-sv39-tlb-stale-pte-compact")
+
+    def test_stateful_stale_default_layout_remains_unchanged_without_lowering_profile(self):
+        scenario = self._tlb_stale_pte_variant(Privilege.U)
+
+        asm = AssemblyEmitter().emit(scenario)
+
+        self.assertIn("csrw pmpaddr4, t0", asm)
+        self.assertIn("csrw pmpaddr5, t0", asm)
+
+    def test_emitter_optionally_includes_hpm_uart_snapshot_collector(self):
+        scenario = ScenarioGenerator(seed=11, include_smepmp=False, profile="pmp-boundary").generate_batch(1)[0]
+
+        plain = AssemblyEmitter().emit(scenario)
+        with_hpm = AssemblyEmitter().emit(scenario, hpm_manifest=manifest_for_dut("rocket-clean"))
+
+        self.assertNotIn("PMFUZZ_HPM", plain)
+        self.assertIn("PMFUZZ_HPM phase=", with_hpm)
+        self.assertIn("hpm_uart_putc:", with_hpm)
+        self.assertIn("hpm_snapshot_before:", with_hpm)
+        self.assertIn("csrw 0x323", with_hpm)
+        self.assertIn("csrr t0, 0xb03", with_hpm)
+        self.assertIn("hpm_uart_puts:\n    addi sp, sp, -16", with_hpm)
+        self.assertIn("    mv s0, a0", with_hpm)
+        self.assertIn("    li s1, 60", with_hpm)
+        self.assertNotIn("hpm_uart_puts:\n    mv t1, a0", with_hpm)
+        self.assertNotIn("    li t1, 60\nhpm_uart_puthex64_loop:", with_hpm)
 
 
 if __name__ == "__main__":

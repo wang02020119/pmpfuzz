@@ -1,0 +1,69 @@
+# PMPFuzz compact evaluation matrix
+# Engineering/coverage only. See docs/PMPFUZZ_COMPACT_EVALUATION_DESIGN.md.
+schema_version: "2.0"
+
+common:
+  duts: [rocket-clean, boom-clean, xiangshan-clean, cva6-clean]
+  mandatory_duts: [rocket-clean, boom-clean, xiangshan-clean]
+  conditionally_excludable_duts: [cva6-clean]
+  pilot_seeds: [1, 2, 3]
+  formal_seeds: [101, 102, 103, 104, 105, 106, 107, 108, 109, 110]
+  bootstrap_size: 32
+  round_size: 32
+  per_case_timeout_seconds: 10
+  wall_clock_cap_minutes: 30
+  stop_on_candidate_pool_exhaustion: true
+  coverage_basis: execution-qualified
+  primary_coverage_mode: semantic
+  collect_secondary_coverage_modes: [pairwise, security-triples, predicates]
+  analyze_nonpass: false
+
+experiments:
+  E1-COVERAGE-FEEDBACK:
+    enabled: true
+    description: "Coverage effectiveness and feedback ablation"
+    methods: [pmpfuzz]
+    variants: [random, bb, bb-wb]
+    duts: [rocket-clean, boom-clean, xiangshan-clean, cva6-clean]
+    mandatory_duts: [rocket-clean, boom-clean, xiangshan-clean]
+    paired_bootstrap: true
+    same_instrumented_binary: true
+    outputs:
+      - normalized/coverage_timeseries.csv
+      - normalized/security_event_timeseries.csv
+      - aggregate/coverage_threshold_times.csv
+      - aggregate/coverage_auc.csv
+      - aggregate/overhead.csv
+
+  E2-BASELINE:
+    enabled: true
+    description: "Common DUT event coverage against external baseline"
+    methods: [pmpfuzz-bb-wb, cascade]
+    optional_methods: [riscv-dv]
+    duts: [rocket-clean, boom-clean, xiangshan-clean, cva6-clean]
+    mandatory_duts: [rocket-clean, boom-clean, xiangshan-clean]
+    comparison_metric: normalized-common-dut-events
+    pmpfuzz_specific_baseline_fields: null
+    outputs:
+      - normalized/campaigns.csv
+      - normalized/security_event_timeseries.csv
+      - aggregate/coverage_auc.csv
+      - aggregate/overhead.csv
+
+  E3-PORTABILITY:
+    enabled: false
+    status: DESIGNED_ONLY
+    description: "Cross-DUT portability and engineering overhead"
+    rtl_duts: [rocket-clean, boom-clean, cva6-clean, xiangshan-clean]
+    blackbox_hardware: [u74, c910]
+    rtl_seeds: [11, 22, 33, 44, 55]
+    hardware_seeds: [11, 22, 33]
+    run_requires_new_user_authorization: true
+
+validation:
+  require_error_count_zero: true
+  require_source_sha: true
+  require_dut_binary_sha256: true
+  require_capability_fingerprint: true
+  require_artifact_hashes: true
+  forbid_paper_modification: true

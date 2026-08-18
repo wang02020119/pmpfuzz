@@ -10,8 +10,14 @@ from dataclasses import replace
 from pathlib import Path
 
 from .capabilities import capability_for_dut, capability_matrix, oracle_applicability_for_result
+from .c910_nonpmp import write_bootstrap_run
+from .c910_nonpmp_dynamic import (
+    default_pilot_case_names,
+    write_dynamic_manifest,
+    write_dynamic_run,
+)
 from .coverage import write_coverage
-from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_XIANGSHAN_EMU, XIANGSHAN_VANILLA_ROOT, make_dut
+from .dut import DEFAULT_CHIPYARD_DIR, DEFAULT_CLEAN_CHIPYARD_DIR, DEFAULT_RISCV, DEFAULT_XIANGSHAN_EMU, XIANGSHAN_VANILLA_ROOT, make_dut
 from .dut_coverage import write_dut_coverage, write_dut_coverage_matrix
 from .emitter import AssemblyEmitter
 from .feedback import write_feedback
@@ -22,6 +28,7 @@ from .scenario import ScenarioGenerator
 from .schema import read_json, result_to_dict, scenario_to_case_dict, write_aggregate, write_json
 from .semantic_coverage import CORE_STATEFUL_TARGET, scenarios_from_schedule, write_schedule
 from .source_probe import write_source_probe_instrumentation, write_source_probe_manifest
+from .timeline import TimelineRecorder, timeline_on_complete_factory
 from .triage import triage_run, write_report
 from .whitebox import write_whitebox_signals
 
@@ -81,6 +88,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dut-bin", type=Path, default=None)
     run.add_argument("--simlen", type=int, default=100000)
     run.add_argument("--whitebox-artifacts", action="store_true")
+    run.add_argument("--record-timeline", action="store_true",
+                     help="Record execution-qualified coverage timeline as JSONL")
+    run.add_argument("--campaign-id", default=None,
+                     help="Campaign identifier for timeline recording")
+    run.add_argument("--variant", default=None,
+                     help="Experiment variant label (e.g. random, guided, bb, bb-wb)")
+    run.add_argument("--hpm-manifest", type=Path, default=None)
+    run.add_argument("--bapc-core-version", choices=["v2", "v3", "v4"], default=None)
 
     repro = subparsers.add_parser("repro", help="reproduce one generated case on one or more DUTs")
     repro.add_argument("--case", type=Path, required=True)
@@ -98,6 +113,47 @@ def build_parser() -> argparse.ArgumentParser:
 
     coverage = subparsers.add_parser("coverage", help="write coverage bins for a campaign")
     coverage.add_argument("--run-dir", type=Path, required=True)
+
+    c910_nonpmp_analyze = subparsers.add_parser(
+        "c910-nonpmp-analyze",
+        help="parse a fixed-probe C910 UART log into a coverage-qualified bootstrap run",
+    )
+    c910_nonpmp_analyze.add_argument("--uart-log", type=Path, required=True)
+    c910_nonpmp_analyze.add_argument("--out", type=Path, required=True)
+
+    c910_nonpmp_dynamic_manifest = subparsers.add_parser(
+        "c910-nonpmp-dynamic-manifest",
+        help="write a dynamic C910 non-PMP round manifest and optional generated C source",
+    )
+    c910_nonpmp_dynamic_manifest.add_argument("--out-json", type=Path, required=True)
+    c910_nonpmp_dynamic_manifest.add_argument("--out-c", type=Path, default=None)
+    c910_nonpmp_dynamic_manifest.add_argument("--campaign-id", required=True)
+    c910_nonpmp_dynamic_manifest.add_argument("--round-id", required=True)
+    c910_nonpmp_dynamic_manifest.add_argument("--timebase-hz", type=int, default=3_000_000)
+    c910_nonpmp_dynamic_manifest.add_argument(
+        "--selection-source",
+        default="bootstrap",
+        choices=["bootstrap", "blackbox", "manual"],
+    )
+    c910_nonpmp_dynamic_manifest.add_argument(
+        "--case",
+        action="append",
+        default=[],
+        help="selected case name; repeat the flag to select multiple cases",
+    )
+    c910_nonpmp_dynamic_manifest.add_argument(
+        "--pilot-bootstrap",
+        action="store_true",
+        help="use the built-in 8-case dynamic pilot subset when --case is omitted",
+    )
+
+    c910_nonpmp_dynamic_analyze = subparsers.add_parser(
+        "c910-nonpmp-dynamic-analyze",
+        help="parse a manifest-selected C910 UART log into a dynamic pilot run",
+    )
+    c910_nonpmp_dynamic_analyze.add_argument("--uart-log", type=Path, required=True)
+    c910_nonpmp_dynamic_analyze.add_argument("--manifest", type=Path, required=True)
+    c910_nonpmp_dynamic_analyze.add_argument("--out", type=Path, required=True)
 
     dut_coverage = subparsers.add_parser("dut-coverage", help="write observed whitebox DUT coverage for a campaign")
     dut_coverage.add_argument("--run-dir", type=Path, required=True)
@@ -119,6 +175,9 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.add_argument("--out", type=Path, required=True)
     schedule.add_argument("--include-experimental", action="store_true")
     schedule.add_argument("--coverage-mode", choices=["semantic", "pairwise", "security-triples", "predicates"], default="semantic")
+    schedule.add_argument("--coverage-basis", choices=["execution", "manifest"], default="execution",
+                          help="execution: use execution-qualified coverage (default); manifest: use generated case.json only")
+    schedule.add_argument("--dut", default=None, help="DUT name for execution coverage (required if the run contains multiple DUTs)")
 
     feedback = subparsers.add_parser("feedback", help="build the next behavior feedback-guided campaign")
     feedback.add_argument("--from-runs", required=True, help="comma-separated run or repro directories")
@@ -147,6 +206,7 @@ def _add_generation_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--seed", type=int, default=20260628)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--no-smepmp", action="store_true")
+    parser.add_argument("--generator-variant", choices=["full", "syntax"], default="full")
     parser.add_argument("--indices", default=None, help="comma-separated scenario indices to generate/run")
     parser.add_argument("--schedule", type=Path, default=None, help="semantic schedule.json to generate/run exactly")
 
@@ -181,6 +241,12 @@ def main(argv: list[str] | None = None) -> int:
         out = write_coverage(args.run_dir)
         print(f"coverage={out}")
         return 0
+    if args.command == "c910-nonpmp-analyze":
+        return _cmd_c910_nonpmp_analyze(args)
+    if args.command == "c910-nonpmp-dynamic-manifest":
+        return _cmd_c910_nonpmp_dynamic_manifest(args)
+    if args.command == "c910-nonpmp-dynamic-analyze":
+        return _cmd_c910_nonpmp_dynamic_analyze(args)
     if args.command == "dut-coverage":
         out = write_dut_coverage(args.run_dir, out_dir=args.out, artifact_dir=args.artifact_dir)
         print(f"dut-coverage={out}")
@@ -198,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
             out_dir=args.out,
             include_experimental=args.include_experimental,
             coverage_mode=args.coverage_mode,
+            coverage_basis=args.coverage_basis,
+            dut=args.dut,
         )
         print(f"schedule={schedule_path}")
         return 0
@@ -234,7 +302,7 @@ def _cmd_env_check(args: argparse.Namespace) -> int:
         (
             "riscv-gcc",
             shutil.which("riscv64-unknown-elf-gcc") is not None
-            or Path("/home/dubhe/wjs/boom_host_deploy/opt-riscv/bin/riscv64-unknown-elf-gcc").exists(),
+            or (DEFAULT_RISCV / "bin" / "riscv64-unknown-elf-gcc").exists(),
             "riscv64-unknown-elf-gcc",
         ),
         ("chipyard", chipyard_dir.exists(), str(chipyard_dir)),
@@ -299,6 +367,42 @@ def _cmd_probe_source(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_c910_nonpmp_analyze(args: argparse.Namespace) -> int:
+    payload = write_bootstrap_run(uart_log=args.uart_log, out_dir=args.out)
+    print(f"coverage={payload['coverage']} report={payload['report']} run={payload['run_dir']}")
+    return 0
+
+
+def _cmd_c910_nonpmp_dynamic_manifest(args: argparse.Namespace) -> int:
+    case_names = list(args.case)
+    if not case_names:
+        case_names = default_pilot_case_names() if args.pilot_bootstrap else []
+    if not case_names:
+        raise ValueError("select at least one --case or pass --pilot-bootstrap")
+    manifest = write_dynamic_manifest(
+        out_json=args.out_json,
+        out_c=args.out_c,
+        case_names=case_names,
+        campaign_id=args.campaign_id,
+        round_id=args.round_id,
+        selection_source=args.selection_source,
+        timebase_hz=args.timebase_hz,
+    )
+    c_path = f" generated_c={args.out_c}" if args.out_c is not None else ""
+    print(f"manifest={args.out_json}{c_path} case_count={manifest['case_count']} sha256={manifest['sha256']}")
+    return 0
+
+
+def _cmd_c910_nonpmp_dynamic_analyze(args: argparse.Namespace) -> int:
+    payload = write_dynamic_run(
+        uart_log=args.uart_log,
+        manifest_path=args.manifest,
+        out_dir=args.out,
+    )
+    print(f"coverage={payload['coverage']} report={payload['report']} run={payload['run_dir']}")
+    return 0
+
+
 def _cmd_source_probe_instrument(args: argparse.Namespace) -> int:
     duts = [item.strip() for item in args.dut.split(",") if item.strip()]
     roots = _source_probe_roots(args, duts)
@@ -354,6 +458,7 @@ def _runtime_smepmp_probe(args: argparse.Namespace, dut_name: str, capability: d
         simlen=50000,
         per_case_timeout_seconds=30,
         include_smepmp=True,
+        bapc_core_version="v2",
     )
     try:
         results = run_campaign(config)
@@ -413,12 +518,26 @@ def _cmd_gen(args: argparse.Namespace) -> int:
         case_dir = cases_dir / scenario.name
         case_dir.mkdir(parents=True, exist_ok=True)
         (case_dir / f"{scenario.name}.S").write_text(emitter.emit(scenario, backend=args.backend), encoding="ascii")
-        write_json(case_dir / "case.json", scenario_to_case_dict(scenario, seed=args.seed, index=index))
+        write_json(
+            case_dir / "case.json",
+            scenario_to_case_dict(
+                scenario,
+                seed=args.seed,
+                index=index,
+                generator_variant=args.generator_variant,
+                generation_seed=args.seed,
+                scenario_index=index,
+                mutation_operator="root",
+            ),
+        )
     print(f"generated={len(scenarios)} out={cases_dir}")
     return 0
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    if not args.bapc_core_version:
+        raise ValueError("pmpfuzz run requires --bapc-core-version")
+    hpm_manifest = read_json(args.hpm_manifest) if args.hpm_manifest else None
     config = RunnerConfig(
         profile=args.profile,
         profiles=tuple(_profiles_from_args(args)),
@@ -438,8 +557,45 @@ def _cmd_run(args: argparse.Namespace) -> int:
         indices=_parse_indices(args.indices),
         schedule=args.schedule,
         whitebox_artifacts=args.whitebox_artifacts,
+        record_timeline=args.record_timeline,
+        campaign_id=args.campaign_id,
+        variant=args.variant,
+        generator_variant=args.generator_variant,
+        hpm_manifest=hpm_manifest,
+        bapc_core_version=args.bapc_core_version,
     )
-    results = run_campaign(config)
+
+    on_complete = None
+    recorder = None
+    if args.record_timeline:
+        # Initialize timeline recorder.
+        campaign_id = args.campaign_id or f"{config.dut}__{config.profile}__seed-{config.seed}"
+        variant = args.variant or "unknown"
+        metrics_dir = config.out / "metrics"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+
+        recorder = TimelineRecorder(
+            run_dir=config.out,
+            campaign_id=campaign_id,
+            variant=variant,
+            dut=config.dut,
+            seed=config.seed,
+        )
+        # Populate target bins BEFORE running any cases (probe capability now)
+        _populate_timeline_targets(recorder, config)
+        recorder.write_metadata(
+            source_sha=_git_head_sha(),
+            time_budget_seconds=config.time_budget_seconds,
+            jobs=config.jobs,
+            per_case_timeout_seconds=config.per_case_timeout_seconds,
+            hostname=os.uname().nodename if hasattr(os, "uname") else None,
+        )
+        on_complete = timeline_on_complete_factory(
+            recorder, enable_whitebox=args.whitebox_artifacts,
+        )
+
+    results = run_campaign(config, on_complete=on_complete)
+
     if args.whitebox_artifacts:
         signal_path, dut_coverage_path = _write_observed_whitebox_outputs(config.out)
         print(f"whitebox-signals={signal_path} dut-coverage={dut_coverage_path}")
@@ -452,7 +608,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_repro(args: argparse.Namespace) -> int:
-    case_dir, case, source = _load_case(args.case)
+    case_dir, case = _load_case(args.case)
     out = args.out.resolve()
     out_cases = out / "cases" / case["name"]
     out_results = out / "results"
@@ -460,45 +616,67 @@ def _cmd_repro(args: argparse.Namespace) -> int:
     out_results.mkdir(parents=True, exist_ok=True)
     write_json(out_cases / "case.json", case)
 
+    # Resolve dut list and ISA before the DUT loop
+    dut_names = [item.strip() for item in args.dut.split(",") if item.strip()]
+    isa = args.isa or ("rv64gc" if args.no_smepmp else "rv64gc_smepmp")
+
+    # Write run.json for repro
+    write_json(
+        out / "run.json",
+        {
+            "mode": "repro",
+            "source_case": str(case_dir),
+            "duts": dut_names,
+            "isa": isa,
+            "no_smepmp": args.no_smepmp,
+        },
+    )
+
+    # Write dut_capabilities.json for all DUTs
+    repro_capabilities = {}
+    for dut_name in dut_names:
+        chipyard_dir = args.chipyard_dir or (
+            DEFAULT_CLEAN_CHIPYARD_DIR if dut_name in CLEAN_CHIPYARD_DUTS else DEFAULT_CHIPYARD_DIR
+        )
+        if dut_name == "spike":
+            repro_capabilities[dut_name] = capability_for_dut(
+                dut_name, path=args.spike, isa=isa,
+            )
+        elif args.dut_bin:
+            repro_capabilities[dut_name] = capability_for_dut(
+                dut_name, path=args.dut_bin, isa=isa,
+            )
+        else:
+            repro_capabilities[dut_name] = capability_for_dut(
+                dut_name, isa=isa,
+            )
+    write_json(
+        out / "dut_capabilities.json",
+        {
+            "schema_version": 3,
+            "duts": repro_capabilities,
+        },
+    )
+
     root = Path(__file__).resolve().parents[1]
     compile_script = root / "scripts" / "compile_one.sh"
 
     any_failed = False
-    for dut_name in [item.strip() for item in args.dut.split(",") if item.strip()]:
+    for dut_name in dut_names:
         result_dir = out_results / f"{case['name']}_{dut_name}"
         result_dir.mkdir(parents=True, exist_ok=True)
         asm = out_cases / f"{case['name']}.{dut_name}.S"
         elf = out_cases / f"{case['name']}.{dut_name}.elf"
         log = result_dir / f"{case['name']}.{dut_name}.log"
-        if source["mode"] == "generated_case":
-            asm.write_text(_repro_assembly_for_dut(case, dut_name), encoding="ascii")
-            compile_run = subprocess.run(
-                ["sh", str(compile_script), str(asm), str(elf)],
-                cwd=root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                check=False,
-            )
-        elif source["mode"] == "standalone_asm":
-            shutil.copy2(source["asm"], asm)
-            compile_run = subprocess.run(
-                ["sh", str(compile_script), str(asm), str(elf)],
-                cwd=root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                check=False,
-            )
-        elif source["mode"] == "standalone_elf":
-            shutil.copy2(source["elf"], elf)
-            compile_run = subprocess.CompletedProcess(
-                args=["copy-standalone-elf"],
-                returncode=0,
-                stdout="",
-            )
-        else:
-            raise ValueError(f"unsupported repro source mode: {source['mode']}")
+        asm.write_text(_repro_assembly_for_dut(case, dut_name), encoding="ascii")
+        compile_run = subprocess.run(
+            ["sh", str(compile_script), str(asm), str(elf)],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
         if compile_run.returncode != 0:
             log.write_text(compile_run.stdout, encoding="ascii", errors="replace")
             write_json(
@@ -523,7 +701,7 @@ def _cmd_repro(args: argparse.Namespace) -> int:
         dut = make_dut(
             dut=dut_name,
             spike=args.spike,
-            isa=args.isa or ("rv64gc" if args.no_smepmp else "rv64gc_smepmp"),
+            isa=isa,
             chipyard_dir=chipyard_dir,
             dut_bin=args.dut_bin,
             simlen=args.simlen,
@@ -549,11 +727,7 @@ def _cmd_repro(args: argparse.Namespace) -> int:
             reason = judgment.reason
             observation_valid = judgment.observation_valid
             stage_verified = judgment.stage_verified
-        capability = (
-            capability_for_dut(dut_name, path=args.dut_bin)
-            if args.dut_bin and dut_name == "xiangshan-clean"
-            else capability_for_dut(dut_name)
-        )
+        capability = repro_capabilities[dut_name]
         applicability = oracle_applicability_for_result(
             case,
             capability,
@@ -610,11 +784,28 @@ def _repro_assembly_for_dut(case: dict, dut_name: str) -> str:
 
 
 def _scenario_from_case(case: dict):
-    seed = int(case.get("seed", 1))
-    index = int(case.get("index", 0))
-    profile = str(case["profile"])
-    generator = ScenarioGenerator(seed=seed, include_smepmp=_case_uses_smepmp(case), profile=profile)
-    scenario = generator.generate_batch(index + 1)[index]
+    if "scenario_spec" in case:
+        from .scenario_codec import scenario_from_spec, scenario_hash
+
+        spec = case["scenario_spec"]
+        expected_hash = case.get("scenario_hash")
+        actual_hash = scenario_hash(spec)
+        if expected_hash is not None and str(expected_hash) != actual_hash:
+            raise ValueError(
+                f"case scenario_hash mismatch: expected {expected_hash}, got {actual_hash}"
+            )
+        scenario = scenario_from_spec(spec)
+    else:
+        seed = int(case.get("seed", 1))
+        index = int(case.get("index", 0))
+        profile = str(case["profile"])
+        generator = ScenarioGenerator(
+            seed=seed,
+            include_smepmp=_case_uses_smepmp(case),
+            profile=profile,
+            generator_variant=str(case.get("generator_variant") or "full"),
+        )
+        scenario = generator.generate_one(index)
     return replace(
         scenario,
         name=str(case["name"]),
@@ -647,7 +838,12 @@ def _selected_scenarios(args: argparse.Namespace):
     multi_profile = len(profiles) > 1
     out = []
     for profile in profiles:
-        generator = ScenarioGenerator(seed=args.seed, include_smepmp=not args.no_smepmp, profile=profile)
+        generator = ScenarioGenerator(
+            seed=args.seed,
+            include_smepmp=not args.no_smepmp,
+            profile=profile,
+            generator_variant=args.generator_variant,
+        )
         scenarios = generator.generate_batch(_effective_count(args.count, args.indices))
         for index, scenario in enumerate(scenarios):
             if args.indices and index not in selected:
@@ -692,72 +888,65 @@ def _cva6_simulator_exists(chipyard_dir: Path) -> bool:
     return any(path.exists() for path in _cva6_simulator_candidates(chipyard_dir))
 
 
-def _load_case(case_path: Path) -> tuple[Path, dict, dict[str, object]]:
+def _load_case(case_path: Path) -> tuple[Path, dict]:
     if case_path.is_dir():
         case_dir = case_path
-        case_json = case_dir / "case.json"
-        if case_json.exists():
-            return case_dir, read_json(case_json), {"mode": "generated_case"}
-        return _load_standalone_case(case_dir)
+        return case_dir, read_json(case_dir / "case.json")
     if case_path.name == "case.json":
-        return case_path.parent, read_json(case_path), {"mode": "generated_case"}
-    if case_path.suffix in {".S", ".elf"}:
-        return _load_standalone_case(case_path)
-    raise ValueError("--case must point to a generated case directory, case.json, .S, or .elf")
+        return case_path.parent, read_json(case_path)
+    raise ValueError("--case must point to a generated case directory or case.json")
 
 
-def _load_standalone_case(case_path: Path) -> tuple[Path, dict, dict[str, object]]:
-    if case_path.is_dir():
-        preferred_asm = case_path / f"{case_path.name}.S"
-        preferred_elf = case_path / f"{case_path.name}.elf"
-        if preferred_asm.exists():
-            return case_path, _standalone_case_dict(case_path.name, preferred_asm, preferred_elf), {
-                "mode": "standalone_asm",
-                "asm": preferred_asm,
-                "elf": preferred_elf if preferred_elf.exists() else None,
-            }
-        if preferred_elf.exists():
-            return case_path, _standalone_case_dict(case_path.name, None, preferred_elf), {
-                "mode": "standalone_elf",
-                "asm": None,
-                "elf": preferred_elf,
-            }
-        raise ValueError(
-            f"standalone case directory {case_path} must contain {case_path.name}.S or {case_path.name}.elf",
+def _populate_timeline_targets(recorder, config: RunnerConfig) -> None:
+    """Populate target bin sets from DUT capability after campaign setup."""
+    from .capabilities import capability_for_dut
+    from .coverage import compute_coverage_targets
+    from .semantic_coverage import CORE_STATEFUL_TARGET
+
+    if config.dut == "spike":
+        capability = capability_for_dut(
+            config.dut,
+            path=config.spike,
+            isa=config.isa,
         )
-    case_dir = case_path.parent
-    if case_path.suffix == ".S":
-        sibling_elf = case_dir / f"{case_path.stem}.elf"
-        return case_dir, _standalone_case_dict(case_path.stem, case_path, sibling_elf), {
-            "mode": "standalone_asm",
-            "asm": case_path,
-            "elf": sibling_elf if sibling_elf.exists() else None,
-        }
-    return case_dir, _standalone_case_dict(case_path.stem, None, case_path), {
-        "mode": "standalone_elf",
-        "asm": None,
-        "elf": case_path,
-    }
+    elif config.dut_bin:
+        capability = capability_for_dut(
+            config.dut,
+            path=config.dut_bin,
+            isa=config.isa,
+        )
+    else:
+        capability = capability_for_dut(
+            config.dut,
+            isa=config.isa,
+        )
+
+    targets = compute_coverage_targets(
+        target=CORE_STATEFUL_TARGET,
+        capability=capability,
+        include_experimental=False,
+        seed=config.seed,
+    )
+    recorder.target_semantic = targets["semantic"]["target_bins"]
+    recorder.target_pairwise = targets["pairwise"]["target_bins"]
+    recorder.target_security_triples = targets["security_triples"]["target_bins"]
+    recorder.target_predicates = targets["predicates"]["target_bins"]
 
 
-def _standalone_case_dict(name: str, asm: Path | None, elf: Path | None) -> dict[str, object]:
-    return {
-        "seed": "standalone",
-        "index": 0,
-        "name": name,
-        "profile": "standalone-poc",
-        "expected": {
-            "allowed": True,
-            "trap_cause": None,
-            "stage": "none",
-        },
-        "required_capabilities": [],
-        "oracle_applicability": "valid",
-        "standalone": {
-            "asm": str(asm) if asm is not None else None,
-            "elf": str(elf) if elf is not None else None,
-        },
-    }
+def _git_head_sha() -> str | None:
+    """Return the current git HEAD commit SHA or None."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=False,
+            cwd=Path(__file__).resolve().parents[1],
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
 
 
 if __name__ == "__main__":

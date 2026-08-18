@@ -90,7 +90,7 @@ class XiangShanTargetedProfileTest(unittest.TestCase):
         self.assertIn("stateful_report_trap:", asm)
 
     def test_xiangshan_targeted_script_runs_only_targeted_duts_by_default(self):
-        script = Path("scripts/run_xiangshan_targeted_campaign.sh")
+        script = Path("scripts/smoke/run_xiangshan_targeted_campaign.sh")
 
         self.assertTrue(script.exists())
         text = script.read_text(encoding="ascii")

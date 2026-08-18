@@ -16,26 +16,46 @@ from .diagnostics import (
     decode_tohost_payload,
     failed_tohost_from_log,
 )
+from .xiangshan_emu_diag import xiangshan_diag_env_for_image
 
 
-DEFAULT_CHIPYARD_DIR = Path("/home/dubhe/wjs/boom_host_deploy/cascade-chipyard")
-DEFAULT_CLEAN_CHIPYARD_DIR = Path("/home/dubhe/wjs/pmp-duts/chipyard-1.14.0")
-DEFAULT_VERILATOR_BIN_DIR = Path("/home/dubhe/wjs/toolchains/eda/bin")
-DEFAULT_RISCV = Path("/home/dubhe/wjs/boom_host_deploy/opt-riscv")
-DEFAULT_JAVA_HOME = Path("/home/dubhe/.sdkman/candidates/java/11.0.30-tem")
-DEFAULT_ROCKET_VERILATOR = Path("/home/dubhe/wjs/pmp-fuzz-stage1/scripts/verilator_rocket_wrapper.sh")
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_WORKSPACE_ROOT = Path(
+    os.environ.get("PMPFUZZ_WORKSPACE", str(Path.home() / "pmpfuzz-workspace"))
+).expanduser()
+DEFAULT_CHIPYARD_DIR = Path(
+    os.environ.get("PMPFUZZ_CASCADE_CHIPYARD_DIR", str(_WORKSPACE_ROOT / "cascade-chipyard"))
+).expanduser()
+DEFAULT_CLEAN_CHIPYARD_DIR = Path(
+    os.environ.get("CHIPYARD_DIR", str(_WORKSPACE_ROOT / "chipyard"))
+).expanduser()
+DEFAULT_VERILATOR_BIN_DIR = Path(
+    os.environ.get("VERILATOR_BIN_DIR", str(_WORKSPACE_ROOT / "toolchains" / "eda" / "bin"))
+).expanduser()
+DEFAULT_RISCV = Path(
+    os.environ.get("RISCV", str(_WORKSPACE_ROOT / "toolchains" / "riscv"))
+).expanduser()
+DEFAULT_JAVA_HOME = Path(
+    os.environ.get("JAVA_HOME", str(Path.home() / ".sdkman" / "candidates" / "java" / "current"))
+).expanduser()
+DEFAULT_ROCKET_VERILATOR = _PROJECT_ROOT / "scripts" / "build" / "verilator_rocket_wrapper.sh"
 DEFAULT_CVA6_VERILATOR_BIN_DIR = Path(
-    "/home/dubhe/wjs/cascade_cpu_fuzzing/mount/cascade_xiangshan_adapt/tools/verilator-5.032/bin"
-)
-DEFAULT_CVA6_VERILATOR = Path("/home/dubhe/wjs/pmp-fuzz-stage1/scripts/verilator_cva6_wrapper.sh")
-XIANGSHAN_VANILLA_ROOT = Path("/home/dubhe/wjs/xiangshan_vanilla")
+    os.environ.get("CVA6_VERILATOR_BIN_DIR", str(DEFAULT_VERILATOR_BIN_DIR))
+).expanduser()
+DEFAULT_CVA6_VERILATOR = _PROJECT_ROOT / "scripts" / "build" / "verilator_cva6_wrapper.sh"
+XIANGSHAN_VANILLA_ROOT = Path(
+    os.environ.get("XIANGSHAN_DIR", str(_WORKSPACE_ROOT / "xiangshan"))
+).expanduser()
 XIANGSHAN_GOODTRAP_EMU = XIANGSHAN_VANILLA_ROOT / "build/verilator-compile/emu"
 XIANGSHAN_NATIVE_EMU = XIANGSHAN_VANILLA_ROOT / "build/native-tlminimal/verilator-compile/emu"
 XIANGSHAN_NATIVE_DEBUG_EMU = XIANGSHAN_VANILLA_ROOT / "build/native-tlminimal-debug/verilator-compile/emu"
 XIANGSHAN_NATIVE_FAST_EMU = XIANGSHAN_VANILLA_ROOT / "build/native-tlminimal-fast/verilator-compile/emu"
 LEGACY_XIANGSHAN_EMU = Path(
-    "/home/dubhe/wjs/cascade_xiangshan_adapt/XiangShan/build/native-tlminimal/verilator-compile/emu"
-)
+    os.environ.get(
+        "PMPFUZZ_LEGACY_XIANGSHAN_EMU",
+        str(_WORKSPACE_ROOT / "cascade-xiangshan" / "build" / "native-tlminimal" / "verilator-compile" / "emu"),
+    )
+).expanduser()
 DEFAULT_XIANGSHAN_EMU = XIANGSHAN_GOODTRAP_EMU
 DEFAULT_CASCADE_ROCKET = (
     DEFAULT_CHIPYARD_DIR
@@ -173,6 +193,7 @@ class ParsedDutLog:
     observed_stage: str | None = None
     observed_ptw_level: str | None = None
     observed_fault_address: int | None = None
+    observed_probe_vaddr: int | None = None
 
 
 @dataclass(frozen=True)
@@ -192,6 +213,9 @@ class DutRunResult:
     observed_stage: str | None = None
     observed_ptw_level: str | None = None
     observed_fault_address: int | None = None
+    observed_probe_vaddr: int | None = None
+    observed_mepc_tag: int | None = None
+    observed_mtval_fingerprint: int | None = None
 
 
 class SpikeDut:
@@ -230,6 +254,7 @@ class SpikeDut:
             observed_stage=parsed.observed_stage,
             observed_ptw_level=parsed.observed_ptw_level,
             observed_fault_address=parsed.observed_fault_address,
+            observed_probe_vaddr=parsed.observed_probe_vaddr,
             failure_class=parsed.failure_class,
             log=str(log_path),
             reason=parsed.reason,
@@ -335,51 +360,7 @@ class ChipyardDirectDut:
             observed_stage=parsed.observed_stage,
             observed_ptw_level=parsed.observed_ptw_level,
             observed_fault_address=parsed.observed_fault_address,
-            log=str(log_path),
-            reason=parsed.reason,
-        )
-
-
-class VarianeDirectDut:
-    def __init__(self, *, dut_name: str, simulator_binary: Path) -> None:
-        self.name = dut_name
-        self.simulator_binary = simulator_binary
-
-    def command_for(self, elf: Path) -> list[str]:
-        return [_posix_arg(self.simulator_binary), _posix_arg(elf)]
-
-    def run(self, elf: Path, *, timeout_seconds: int, log_path: Path) -> DutRunResult:
-        start = time.monotonic()
-        timed_out, returncode, stdout = _run_command_to_log(
-            self.command_for(elf),
-            cwd=self.simulator_binary.parent,
-            timeout_seconds=timeout_seconds,
-            log_path=log_path,
-        )
-        if timed_out:
-            return DutRunResult(
-                dut=self.name,
-                status="timeout",
-                elapsed_seconds=time.monotonic() - start,
-                log=str(log_path),
-                failure_class="timeout",
-                reason="variane simulator timeout",
-            )
-        parsed = parse_chipyard_log(stdout, returncode or 0)
-        return DutRunResult(
-            dut=self.name,
-            status=parsed.status,
-            elapsed_seconds=time.monotonic() - start,
-            returncode=returncode,
-            observed_code=parsed.observed_code,
-            failure_class=parsed.failure_class,
-            observed_mcause=parsed.observed_mcause,
-            observed_mtval=parsed.observed_mtval,
-            observed_tohost=parsed.observed_tohost,
-            observation=parsed.observation,
-            observed_stage=parsed.observed_stage,
-            observed_ptw_level=parsed.observed_ptw_level,
-            observed_fault_address=parsed.observed_fault_address,
+            observed_probe_vaddr=parsed.observed_probe_vaddr,
             log=str(log_path),
             reason=parsed.reason,
         )
@@ -470,6 +451,7 @@ class ChipyardMakeDut:
             observed_stage=parsed.observed_stage,
             observed_ptw_level=parsed.observed_ptw_level,
             observed_fault_address=parsed.observed_fault_address,
+            observed_probe_vaddr=parsed.observed_probe_vaddr,
             log=str(log_path),
             reason=parsed.reason,
         )
@@ -521,6 +503,7 @@ class CascadeRocketDut:
             observed_stage=parsed.observed_stage,
             observed_ptw_level=parsed.observed_ptw_level,
             observed_fault_address=parsed.observed_fault_address,
+            observed_probe_vaddr=parsed.observed_probe_vaddr,
             log=str(log_path),
             reason=parsed.reason,
         )
@@ -554,10 +537,16 @@ class XiangShanDut:
 
     def run(self, elf: Path, *, timeout_seconds: int, log_path: Path) -> DutRunResult:
         start = time.monotonic()
+        env = None
+        diag_env = xiangshan_diag_env_for_image(elf)
+        if diag_env:
+            env = os.environ.copy()
+            env.update(diag_env)
         timed_out, returncode, stdout = _run_command_to_log(
             self.command_for(elf, artifact_prefix=log_path.with_suffix("")),
             timeout_seconds=timeout_seconds,
             log_path=log_path,
+            env=env,
         )
         if timed_out:
             return DutRunResult(
@@ -583,6 +572,7 @@ class XiangShanDut:
             observed_stage=parsed.observed_stage,
             observed_ptw_level=parsed.observed_ptw_level,
             observed_fault_address=parsed.observed_fault_address,
+            observed_probe_vaddr=parsed.observed_probe_vaddr,
             log=str(log_path),
             reason=parsed.reason,
         )
@@ -597,7 +587,7 @@ def make_dut(
     dut_bin: Path | None = None,
     simlen: int = 100000,
     whitebox_artifacts: bool = False,
-) -> SpikeDut | ChipyardDirectDut | VarianeDirectDut | ChipyardMakeDut | CascadeRocketDut | XiangShanDut:
+) -> SpikeDut | ChipyardDirectDut | ChipyardMakeDut | CascadeRocketDut | XiangShanDut:
     if dut == "spike":
         return SpikeDut(spike=spike, isa=isa)
     if dut == "rocket":
@@ -614,6 +604,15 @@ def make_dut(
             whitebox_artifacts=whitebox_artifacts,
         )
     if dut == "rocket-clean":
+        if dut_bin is not None:
+            return ChipyardDirectDut(
+                dut_name="rocket-clean",
+                chipyard_dir=chipyard_dir,
+                config="RocketConfig",
+                simulator_names=("simulator-chipyard.harness-RocketConfig",),
+                simulator_binary=dut_bin,
+                whitebox_artifacts=whitebox_artifacts,
+            )
         return ChipyardMakeDut(
             dut_name="rocket-clean",
             chipyard_dir=chipyard_dir,
@@ -624,6 +623,15 @@ def make_dut(
             whitebox_artifacts=whitebox_artifacts,
         )
     if dut == "boom-clean":
+        if dut_bin is not None:
+            return ChipyardDirectDut(
+                dut_name="boom-clean",
+                chipyard_dir=chipyard_dir,
+                config="SmallBoomV3Config",
+                simulator_names=("simulator-chipyard.harness-SmallBoomV3Config",),
+                simulator_binary=dut_bin,
+                whitebox_artifacts=whitebox_artifacts,
+            )
         return ChipyardMakeDut(
             dut_name="boom-clean",
             chipyard_dir=chipyard_dir,
@@ -634,11 +642,6 @@ def make_dut(
             whitebox_artifacts=whitebox_artifacts,
         )
     if dut in {"cva6", "cva6-clean"}:
-        if dut_bin is not None and dut_bin.name == "Variane_testharness":
-            return VarianeDirectDut(
-                dut_name=dut,
-                simulator_binary=dut_bin,
-            )
         return ChipyardDirectDut(
             dut_name=dut,
             chipyard_dir=chipyard_dir,
@@ -777,6 +780,13 @@ def parse_chipyard_log(text: str, returncode: int) -> ParsedDutLog:
             observed_mtval=decoded.observed_mtval if decoded else None,
             observed_tohost=code,
         )
+    if "*** FAILED ***" in text:
+        return ParsedDutLog(
+            "fail",
+            None,
+            "chipyard reported explicit fail marker",
+            failure_class=classify_log_failure(text, returncode),
+        )
     if returncode != 0:
         return ParsedDutLog(
             "infra_failure",
@@ -784,7 +794,7 @@ def parse_chipyard_log(text: str, returncode: int) -> ParsedDutLog:
             f"chipyard simulator returned {returncode}",
             failure_class=classify_log_failure(text, returncode),
         )
-    if "*** PASSED ***" in text or "*** SUCCESS ***" in text:
+    if "*** PASSED ***" in text:
         return ParsedDutLog("pass", PASS_TOHOST, "chipyard reported explicit pass marker")
     return ParsedDutLog(
         "infra_failure",
@@ -897,7 +907,7 @@ def _parsed_observation(
     *,
     reason: str,
 ) -> ParsedDutLog:
-    stage, level, address = _source_probe_fault(text)
+    stage, level, address, probe_vaddr = _source_probe_fault(text)
     return ParsedDutLog(
         "observed",
         observed_tohost,
@@ -908,29 +918,185 @@ def _parsed_observation(
         observed_stage=stage,
         observed_ptw_level=level,
         observed_fault_address=address,
+        observed_probe_vaddr=probe_vaddr,
     )
 
 
-def _source_probe_fault(text: str) -> tuple[str | None, str | None, int | None]:
-    candidates: list[dict[str, str]] = []
+def _source_probe_fault(text: str) -> tuple[str | None, str | None, int | None, int | None]:
+    fields_by_line: list[dict[str, str]] = []
     for line in text.splitlines():
         if "PMFUZZ_PROBE" not in line:
             continue
         fields = dict(re.findall(r"([A-Za-z_][A-Za-z0-9_]*)=([^\s]+)", line))
-        if fields.get("exception") == "1":
-            candidates.append(fields)
-    if not candidates:
-        return None, None, None
-    fields = candidates[-1]
-    address_text = fields.get("paddr") or fields.get("addr")
-    try:
-        address = int(address_text, 0) if address_text is not None else None
-    except ValueError:
+        if fields:
+            fields_by_line.append(fields)
+    if not fields_by_line:
+        return None, None, None, None
+    authoritative_fault = _authoritative_source_probe_fault(fields_by_line)
+    if authoritative_fault[0] is not None:
+        return authoritative_fault
+    ptw_fault_indexes = [index for index, fields in enumerate(fields_by_line) if _probe_has_ptw_fault_markers(fields)]
+    if not ptw_fault_indexes:
+        ptw_fault_indexes = [index for index, fields in enumerate(fields_by_line) if _probe_indicates_ptw_fault(fields)]
+    if ptw_fault_indexes:
+        level = None
         address = None
+        probe_vaddr = None
+        fault_window = fields_by_line[: ptw_fault_indexes[-1] + 1]
+        for fields in reversed(fault_window):
+            if _normalized_probe_stage(fields) != "ptw":
+                continue
+            level = level or _normalized_probe_level(fields)
+            address = address if address is not None else _probe_address(fields)
+            probe_vaddr = probe_vaddr if probe_vaddr is not None else _probe_virtual_address(fields)
+            if level is not None and address is not None and probe_vaddr is not None:
+                break
+        return "ptw", level, address, probe_vaddr
+    for fields in reversed(fields_by_line):
+        if not _probe_indicates_final_fault(fields):
+            continue
+        return (
+            _normalized_probe_stage(fields) or "final",
+            _normalized_probe_level(fields),
+            _probe_address(fields),
+            _probe_virtual_address(fields),
+        )
+    return None, None, None, None
+
+
+def _authoritative_source_probe_fault(
+    fields_by_line: list[dict[str, str]],
+) -> tuple[str | None, str | None, int | None, int | None]:
+    for fields in reversed(fields_by_line):
+        if not _probe_stage_is_authoritative(fields):
+            continue
+        if _probe_nonzero_flag(fields.get("ae_ptw")) or fields.get("exception") == "1":
+            return (
+                "ptw",
+                _normalized_probe_level(fields),
+                _probe_address(fields),
+                _probe_virtual_address(fields),
+            )
+        if _probe_nonzero_flag(fields.get("ae_final")):
+            return (
+                "final",
+                _normalized_probe_level(fields),
+                _probe_address(fields),
+                _probe_virtual_address(fields),
+            )
+    return None, None, None, None
+
+
+def _normalized_probe_stage(fields: dict[str, str]) -> str | None:
     stage = fields.get("stage")
-    if stage is None and "ptw" in fields.get("probe", "").lower():
-        stage = "ptw"
-    return stage, fields.get("level"), address
+    if stage:
+        lowered = stage.lower()
+        if lowered == "tlb":
+            return "ptw" if _probe_has_ptw_fault_markers(fields) else "tlb"
+        return lowered
+    if "ptw" in fields.get("probe", "").lower():
+        return "ptw"
+    return None
+
+
+def _normalized_probe_level(fields: dict[str, str]) -> str | None:
+    level = fields.get("level")
+    if level is None:
+        return None
+    if re.fullmatch(r"[Ll]\d+", level):
+        return level.upper()
+    probe = fields.get("probe")
+    if probe not in {"rocket_ptw_access_exception", "boom_ptw_response_ae", "cva6_ptw_exception"}:
+        return level
+    try:
+        numeric_level = int(level, 0)
+    except ValueError:
+        return level
+    if 0 <= numeric_level <= 2:
+        return f"L{2 - numeric_level}"
+    return level
+
+
+def _probe_address(fields: dict[str, str]) -> int | None:
+    if not _probe_address_is_authoritative(fields):
+        return None
+    address_text = (
+        fields.get("paddr")
+        or fields.get("addr")
+        or fields.get("fault_addr")
+        or fields.get("physical_address")
+    )
+    try:
+        return int(address_text, 0) if address_text is not None else None
+    except ValueError:
+        return None
+
+
+def _probe_virtual_address(fields: dict[str, str]) -> int | None:
+    if fields.get("probe") != "cva6_ptw_exception":
+        return None
+    address_text = fields.get("vaddr") or fields.get("virtual_address")
+    try:
+        return int(address_text, 0) if address_text is not None else None
+    except ValueError:
+        return None
+
+
+def _probe_address_is_authoritative(fields: dict[str, str]) -> bool:
+    if fields.get("evidence") == "non_authoritative":
+        return False
+    probe = fields.get("probe")
+    if probe in {"boom_ptw_response_ae", "boom_ptw_request"}:
+        return False
+    return True
+
+
+def _probe_stage_is_authoritative(fields: dict[str, str]) -> bool:
+    if fields.get("authoritative") == "1":
+        return True
+    return fields.get("probe") in {"rocket_ptw_access_exception", "cva6_ptw_exception"}
+
+
+def _probe_nonzero_flag(value: str | None) -> bool:
+    if value is None:
+        return False
+    lowered = value.lower()
+    if lowered in {"true", "yes"}:
+        return True
+    try:
+        return int(value, 0) != 0
+    except ValueError:
+        return False
+
+
+def _probe_indicates_ptw_fault(fields: dict[str, str]) -> bool:
+    stage = _normalized_probe_stage(fields)
+    if _probe_has_ptw_fault_markers(fields):
+        return True
+    if stage == "ptw" and fields.get("allow") == "0":
+        return True
+    return False
+
+
+def _probe_indicates_final_fault(fields: dict[str, str]) -> bool:
+    stage = _normalized_probe_stage(fields)
+    if stage != "final":
+        return False
+    if _probe_nonzero_flag(fields.get("ae_final")):
+        return True
+    if fields.get("exception") == "1":
+        return True
+    return fields.get("allow") == "0"
+
+
+def _probe_has_ptw_fault_markers(fields: dict[str, str]) -> bool:
+    if fields.get("exception") == "1" and str(fields.get("stage") or "").lower() != "final":
+        return True
+    if _probe_nonzero_flag(fields.get("ae_ptw")):
+        return True
+    if _probe_nonzero_flag(fields.get("ptw_ae")):
+        return True
+    return False
 
 
 def _xiangshan_trap_pc(text: str, kind: str) -> str | None:

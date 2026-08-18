@@ -189,6 +189,7 @@ class SecurityWhiteboxSignalsTest(unittest.TestCase):
         self.assertEqual(signal["kind"], "source_probe")
         self.assertEqual(signal["dut"], "boom-clean")
         self.assertEqual(signal["features"]["source_probe_reported_dut"], "rocket-clean")
+        self.assertEqual(signal["features"]["source_probe_effective_dut"], "boom-clean")
         self.assertEqual(signal["features"]["source_probe_dut"], "boom-clean")
 
     def test_specific_tlb_perf_counter_ranks_above_generic_access_counter(self):

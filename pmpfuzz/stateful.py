@@ -128,10 +128,6 @@ def validate_stateful_contract(scenario: PmpScenario) -> tuple[bool, str]:
     warmup = bool(sequence.get("warmup"))
     if mutation == "pte-deny-leaf" and scenario.translation != TranslationMode.SV39:
         return False, "pte-deny-leaf requires Sv39 translation"
-    if scenario.probe.access == Access.STORE:
-        store_valid, store_reason = _validate_stateful_store_probe(scenario, sequence)
-        if not store_valid:
-            return False, store_reason
     if not warmup:
         return True, ""
     warmup_access_raw = sequence.get("warmup_access")
@@ -145,34 +141,6 @@ def validate_stateful_contract(scenario: PmpScenario) -> tuple[bool, str]:
     if not initial.allowed:
         return False, "warmup requires an initially allowed probe before mutation"
     return True, ""
-
-
-def _validate_stateful_store_probe(
-    scenario: PmpScenario,
-    sequence: dict[str, object],
-) -> tuple[bool, str]:
-    if scenario.probe.size != 4:
-        return False, "stateful store probe must be a naturally aligned 4-byte single memory operation"
-    if scenario.probe.physical_address % scenario.probe.size != 0:
-        return False, "stateful store probe must be naturally aligned in physical address"
-    if scenario.probe.virtual_address is not None and scenario.probe.virtual_address % scenario.probe.size != 0:
-        return False, "stateful store probe must be naturally aligned in virtual address"
-
-    sentinel = sequence.get("sentinel") or {}
-    sentinel_physical = _parse_address((sentinel.get("physical_address") if isinstance(sentinel, dict) else None))
-    if sentinel_physical is None:
-        return False, "stateful store probe requires sentinel physical address metadata"
-    if scenario.probe.physical_address != sentinel_physical:
-        return False, "stateful store probe must target the sentinel physical address"
-    return True, ""
-
-
-def _parse_address(value: object) -> int | None:
-    if isinstance(value, str):
-        return int(value, 16)
-    if type(value) is int:
-        return value
-    return None
 
 
 def _pmp_mutation_payload(
